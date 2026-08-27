@@ -676,6 +676,22 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return pick(inRange.length ? inRange : pool);
   }
 
+  // ----- Supporting cast: a team's overall grade is one number, but "how good is the roster
+  // around the QB specifically" is really at least two separable things -- the offensive line and
+  // the skill-position weapons -- and a good team can absolutely have a bad one of either (the
+  // "great team, terrible left tackle" case). Independently noisy against team strength (not just
+  // a copy of it) so this is a real distinct signal, not a redundant display of the same number.
+  function rollSupportingCastGrade(teamStrength){
+    return clamp(Math.round(teamStrength + randInt(-18,18)), 20, 99);
+  }
+  function castLetterGrade(value){
+    if(value>=93) return "A+"; if(value>=87) return "A"; if(value>=82) return "A-";
+    if(value>=77) return "B+"; if(value>=72) return "B"; if(value>=67) return "B-";
+    if(value>=62) return "C+"; if(value>=55) return "C"; if(value>=48) return "C-";
+    if(value>=40) return "D+"; if(value>=32) return "D"; if(value>=24) return "D-";
+    return "F";
+  }
+
   function passerRating(comp, att, yards, td, int){
     if(att<=0) return 0;
     const a = clamp(((comp/att)-0.3)*5, 0, 2.375);
@@ -1503,6 +1519,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       draftTeamId: team.id,
       leagueStrength,
       teamStrength: leagueStrength[team.id],
+      oline: rollSupportingCastGrade(leagueStrength[team.id]),
+      weapons: rollSupportingCastGrade(leagueStrength[team.id]),
       teamScheme,
       gmRelationship: 50,
       fanSupport: 50,
@@ -2710,15 +2728,21 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const dYpa = (dYpaRaw*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
     const dTd = (dTdRaw*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
     const dInt = (dIntRaw*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
-    const comp = clamp(league.comp + dComp*(dComp>=0?cal.comp.up:cal.comp.down), cal.comp.lo, cal.comp.hi);
-    const ypa = clamp(league.ypa + dYpa*(dYpa>=0?cal.ypa.up:cal.ypa.down), cal.ypa.lo, cal.ypa.hi);
+    // Weapons is a small, independent nudge on top of the QB's own accuracy/arm attributes --
+    // better skill-position talent means more YAC and more room for error, but it can't turn a bad
+    // arm into a good one, so this stays a modest post-hoc addition rather than folded into the
+    // main dComp/dYpa blend above.
+    const weaponsNudge = (career.weapons-65);
+    const comp = clamp(league.comp + dComp*(dComp>=0?cal.comp.up:cal.comp.down) + weaponsNudge*0.0006, cal.comp.lo, cal.comp.hi);
+    const ypa = clamp(league.ypa + dYpa*(dYpa>=0?cal.ypa.up:cal.ypa.down) + weaponsNudge*0.008, cal.ypa.lo, cal.ypa.hi);
     const tdRate = clamp(league.tdRate + dTd*(dTd>=0?cal.td.up:cal.td.down), cal.td.lo, cal.td.hi);
     const intRate = clamp(league.intRate - dInt*(dInt>=0?cal.int.up:cal.int.down), cal.int.lo, cal.int.hi);
     let attPerGame = clamp((league.attPerGame - (eff.MOB-neutral.MOB)*0.05 + dOverall*0.06 + randInt(-2,2)) * roleShare, 4, 48);
-    // Sack rate leans on pocket presence (individual) and team quality (o-line) -- a good pocket
-    // passer on a good team gets sacked less than league-average, a statue on a bad line gets
-    // sacked a lot more.
-    const sackRate = clamp(0.075 - (eff.PKT-neutral.PKT)*0.0012 - (career.teamStrength-65)*0.0004, 0.015, 0.16);
+    // Sack rate leans on pocket presence (individual) and the O-line grade specifically -- not
+    // generic team strength, since a good team can absolutely have a bad line (see the Supporting
+    // Cast system) -- a good pocket passer behind a good line gets sacked less than league-average,
+    // a statue behind a bad one gets sacked a lot more.
+    const sackRate = clamp(0.075 - (eff.PKT-neutral.PKT)*0.0012 - (career.oline-65)*0.0006, 0.015, 0.16);
 
     const perfMult = 1 - perfPenalty*0.01;
     const regSeason = simulateRegularSeasonGames({
@@ -2813,6 +2837,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const teamDeclinePull = Math.round(contenderDeclinePull(career.teamStrength));
     career.teamStrength = clamp(career.teamStrength + teamNoise + teamSkillNudge - teamDeclinePull, 20, 97);
     career.leagueStrength[career.teamId] = career.teamStrength;
+    // Supporting cast drifts on its own light noise -- most of its real movement comes from the
+    // "oline"/"starleaves" ORG_EVENTS above, this just keeps it from being permanently frozen
+    // between events.
+    career.oline = clamp(career.oline + randInt(-2,2), 20, 99);
+    career.weapons = clamp(career.weapons + randInt(-2,2), 20, 99);
 
     career.totals.games += gamesPlayed; career.totals.comp += completions; career.totals.att += attempts;
     career.totals.yards += yards; career.totals.td += td; career.totals.int += interceptions; career.totals.sacks += sacks;
@@ -2989,7 +3018,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       flavor:()=>"The coach who believed in him is out after a rough stretch. The new regime doesn't owe him anything." },
     { id:"coachextended", title:"His Coach Gets Extended", repDelta:0, strengthDelta:[3,8], gmDelta:[2,6], setFlag:"_orgStability",
       flavor:()=>"Ownership hands his coach a contract extension. Stability, for once, instead of another system change." },
-    { id:"starleaves", title:"Top Weapon Walks in Free Agency", repDelta:0, strengthDelta:[-12,-5], setFlag:null,
+    { id:"starleaves", title:"Top Weapon Walks in Free Agency", repDelta:0, strengthDelta:[-12,-5], target:"weapons", setFlag:null,
       flavor:()=>"The best receiver on the roster signs elsewhere for the money. The offense has to be rebuilt around what's left." },
     { id:"fotrust", title:"Front Office Hands Him the Keys", repDelta:[3,6], strengthDelta:[0,0], gmDelta:[6,12], setFlag:"_leverageBoost", cutShield:true,
       flavor:()=>"Management makes it official in the press: this is his team now, for better or worse. It won't hurt at the negotiating table." },
@@ -2999,7 +3028,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       flavor:()=>"She goes viral dragging him on her show. Nothing illegal, nothing the league can touch — but it's everywhere, and none of it is flattering." },
     { id:"newgm", title:"New GM Takes Over", repDelta:0, strengthDelta:[-8,10], setFlag:null, resetGM:true, schemeChangeChance:0.35,
       flavor:()=>"A front-office shakeup. Could be a fresh voice with a real plan, could be a rebuild with no real place for him — nobody in the building knows yet either. Whatever relationship existed with the old GM doesn't carry over." },
-    { id:"oline", title:"O-Line Overhaul in Free Agency", repDelta:0, strengthDelta:[4,11], setFlag:"_orgStability",
+    { id:"oline", title:"O-Line Overhaul in Free Agency", repDelta:0, strengthDelta:[4,11], target:"oline", setFlag:"_orgStability",
       flavor:()=>"The front office actually spends real money up front this offseason, and it shows up in the pocket immediately." },
     { id:"scandal_org", title:"Ownership Distracted by Off-field Controversy", repDelta:0, strengthDelta:[-9,-2], gmDelta:[-5,-1], setFlag:"_orgTurmoil",
       flavor:()=>"The owner's name is in the headlines for reasons that have nothing to do with football, and the whole building feels it." },
@@ -3376,8 +3405,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     let strengthDelta = 0;
     if(ev.strengthDelta && (ev.strengthDelta[0]!==0 || ev.strengthDelta[1]!==0)){
       strengthDelta = randInt(ev.strengthDelta[0], ev.strengthDelta[1]);
-      career.teamStrength = clamp(career.teamStrength + strengthDelta, 20, 97);
-      career.leagueStrength[career.teamId] = career.teamStrength;
+      // Most org events move the whole team; "oline"/"starleaves" specifically target the
+      // Supporting Cast grades instead, since those are a distinct signal from overall team quality.
+      if(ev.target==="oline") career.oline = clamp(career.oline + strengthDelta, 20, 99);
+      else if(ev.target==="weapons") career.weapons = clamp(career.weapons + strengthDelta, 20, 99);
+      else {
+        career.teamStrength = clamp(career.teamStrength + strengthDelta, 20, 97);
+        career.leagueStrength[career.teamId] = career.teamStrength;
+      }
     }
     // GM relations: most org events either nudge the existing relationship (gmDelta) or, for a
     // literal front-office change (resetGM, i.e. "newgm"), wipe the slate — a brand-new GM has no
@@ -3408,7 +3443,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const good = netGood && !netBad;
     const effectParts = [];
     if(repDelta) effectParts.push(`Reputation ${fmtDelta(repDelta)}`);
-    if(strengthDelta) effectParts.push(`Team grade ${fmtDelta(strengthDelta)}`);
+    if(strengthDelta) effectParts.push(`${ev.target==="oline"?"O-Line grade":ev.target==="weapons"?"Weapons grade":"Team grade"} ${fmtDelta(strengthDelta)}`);
     if(gmDelta) effectParts.push(`GM relations ${fmtDelta(gmDelta)}`);
     if(!effectParts.length) effectParts.push("No direct stat change — narrative only.");
     content.innerHTML = eraWrap(decadeForYear(career.year), `
@@ -3590,6 +3625,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(signBtn) signBtn.addEventListener("click", ()=>{
       career.transactions.push(`${career.year}: Released by the ${oldTeam}, signed by the ${teamNameAt(offerTeam.id,career.year)} on a minimum deal.`);
       career.teamId = offerTeam.id; career.teamStrength = career.leagueStrength[offerTeam.id]; career.seasonsWithTeam = 0;
+      career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
       career.contract = { apy: offerApy, years: 1, tier: "minimum" };
       career.badStreak = 0;
       checkInjuryThenPlay();
@@ -3634,6 +3670,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       career.teamId = newTeam.id;
       career.teamStrength = career.leagueStrength[newTeam.id] ?? 45;
       career.leagueStrength[newTeam.id] = career.teamStrength;
+      career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
       career.seasonsWithTeam = 0;
       tradeCheck();
     });
@@ -3658,6 +3695,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const newTeamName = teamNameAt(team.id, career.year);
     career.transactions.push(`${career.year}: Traded from the ${oldTeam} to the ${newTeamName}.`);
     career.teamId = team.id; career.teamStrength = career.leagueStrength[team.id]; career.seasonsWithTeam = 0;
+    career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
     const content = document.getElementById("careerContent");
     content.innerHTML = eraWrap(decadeForYear(career.year), `
         <div class="ev-eyebrow">Trade · ${career.year}</div>
@@ -3712,6 +3750,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const newTeamName = teamNameAt(team.id, career.year);
       career.transactions.push(`${career.year}: Requested a trade — dealt from the ${oldTeam} to the ${newTeamName}.`);
       career.teamId = team.id; career.teamStrength = career.leagueStrength[team.id]; career.seasonsWithTeam = 0;
+      career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
       content.innerHTML = eraWrap(decade, `
         <div class="ev-eyebrow">${career.year} · Trade Request</div>
         <h3>Request granted — dealt to the ${newTeamName}.</h3>
@@ -3781,6 +3820,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         apy: Math.round(baseApy*repMult*gmMult*leverage*comeback*(0.95+Math.random()*0.2)),
         years: tier==="elite"?5:tier==="good"?4:tier==="average"?2:1,
         patience: randInt(55,85), pushCount:0, withdrawn:false,
+        // the home team is the CURRENT roster, not a preview -- show what he actually already plays behind.
+        oline: career.oline, weapons: career.weapons,
       });
     }
     for(const t of candidates){
@@ -3791,11 +3832,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const role = needRank>rank ? "starter" : needRank===rank ? "starter" : "competition";
       const tierForApy = role==="competition" ? (tier==="minimum"?"minimum":"backup") : (tier==="minimum"?"minimum":tier);
       const baseApy = veteranAPY(decade, tierForApy);
+      // Rolled once here and carried on the offer object itself, not re-rolled at signing time --
+      // what you see in the offer ("chase the bag, but you'd play behind a C-grade line") is
+      // exactly what you get if you take it, not a surprise after the fact.
+      const teamStrengthForOffer = career.leagueStrength[t.id] ?? 60;
       offers.push({
         teamId: t.id, role, isHome:false,
         apy: Math.round(baseApy*repMult*leverage*comeback*(0.88+Math.random()*0.3)),
         years: role==="competition" ? 1 : (tier==="elite"?4:tier==="good"?3:tier==="average"?2:1),
         patience: randInt(35,70) - (role==="competition"?10:0), pushCount:0, withdrawn:false,
+        oline: rollSupportingCastGrade(teamStrengthForOffer), weapons: rollSupportingCastGrade(teamStrengthForOffer),
       });
     }
     // one rare agent-driven swing, independent of how negotiations go
@@ -3832,6 +3878,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <div class="fa-offer-head"><b>${teamName}</b><span class="fa-role">${roleLabel}</span></div>
         <div class="fa-offer-terms tabular">${fmtMoney(o.apy)}/yr · ${o.years} yr${o.years===1?"":"s"}</div>
         <div class="fa-offer-grade">Team grade <b class="tabular">${grade}</b> <span class="fa-grade-tag">${gradeTag}</span></div>
+        <div class="fa-offer-cast">O-Line <b>${castLetterGrade(o.oline)}</b> &nbsp;·&nbsp; Weapons <b>${castLetterGrade(o.weapons)}</b></div>
         ${agentNote}
         <div class="event-choices">
           <button class="choice-btn fa-accept" data-i="${i}"><div class="cb-title">Accept</div></button>
@@ -3900,6 +3947,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       career.transactions.push(`${career.year}: Signed with the ${teamName} (${fmtMoney(o.apy)}/yr).`);
       career.teamId = o.teamId;
       career.teamStrength = career.leagueStrength[o.teamId];
+      career.oline = o.oline; career.weapons = o.weapons;
       career.seasonsWithTeam = 0;
     }
     const tier = o.role==="competition" ? "backup" : (meta.tier==="minimum"?"minimum":meta.tier);
@@ -3943,7 +3991,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const league = LEAGUE[decade];
     const dur = eraEffective(career.age, decade).DUR;
     const injMult = (ERA_ATTR_MULT[decade]||{}).injury || 1;
-    const injuryChance = clamp((0.26 - (dur-60)*0.006) * injMult, 0.05, 0.5);
+    // A bad O-line means more hits taken, not just more sacks -- durability is still the dominant
+    // term (this is a real but secondary risk factor, the "play behind a bad line" downside).
+    const olineRisk = 1 - (career.oline-65)*0.003;
+    const injuryChance = clamp((0.26 - (dur-60)*0.006) * injMult * olineRisk, 0.05, 0.55);
     if(!career._injuryResolved && Math.random()<injuryChance){
       // the week is rolled once, here, and threaded through to resolveInjuryChoice so the
       // "games missed" total it reports can never exceed how many games are actually left on
@@ -4488,6 +4539,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <div class="fo-row">
           <div class="fo-row-head"><span class="fo-row-label">Career Outlook</span><span class="fo-row-value tabular">${durTag}</span></div>
           <div class="fo-row-sub">Durability ${build.DUR} — the body should hold up through roughly age ${ageCap}${yearsLeft>0 ? ` (about ${yearsLeft} more season${yearsLeft===1?"":"s"} at current age, injuries permitting)` : " — this could be the last one"}.</div>
+        </div>
+        <div class="fo-row">
+          <div class="fo-row-head"><span class="fo-row-label">Supporting Cast</span><span class="fo-row-value tabular">O-Line ${castLetterGrade(career.oline)} · Weapons ${castLetterGrade(career.weapons)}</span></div>
+          <div class="fo-row-sub">${career.oline<48 ? "A shaky line means more hits taken and a real bump to injury risk. " : career.oline>=82 ? "One of the best lines in the league — extra time in the pocket every week. " : ""}${career.weapons<48 ? "Thin at the skill positions — every rep gets a little harder to complete." : career.weapons>=82 ? "A genuinely stacked group of targets makes every throw a little easier." : ""}</div>
         </div>
         ${scheme ? `<div class="fo-scheme-line">Running <b>${scheme.name}</b> — ${schemeFavorText(schemeId) || "no strong lean"}. <span class="fo-scheme-link" data-goto-scheme="1">See details →</span></div>` : ""}
       </div>`;
@@ -5711,11 +5766,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const dYpa = (((effYpa-neutralYpa)*primeMult)*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
     const dTd = (((effTd-neutralTd)*primeMult)*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
     const dInt = (((effInt-neutralInt)*primeMult)*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
-    const comp = clamp(league.comp + dComp*(dComp>=0?cal.comp.up:cal.comp.down), cal.comp.lo, cal.comp.hi);
-    const ypa = clamp(league.ypa + dYpa*(dYpa>=0?cal.ypa.up:cal.ypa.down), cal.ypa.lo, cal.ypa.hi);
+    const weaponsNudge = (career.weapons-65);
+    const comp = clamp(league.comp + dComp*(dComp>=0?cal.comp.up:cal.comp.down) + weaponsNudge*0.0006, cal.comp.lo, cal.comp.hi);
+    const ypa = clamp(league.ypa + dYpa*(dYpa>=0?cal.ypa.up:cal.ypa.down) + weaponsNudge*0.008, cal.ypa.lo, cal.ypa.hi);
     const tdRate = clamp(league.tdRate + dTd*(dTd>=0?cal.td.up:cal.td.down), cal.td.lo, cal.td.hi);
     const intRate = clamp(league.intRate - dInt*(dInt>=0?cal.int.up:cal.int.down), cal.int.lo, cal.int.hi);
-    const sackRate = clamp(0.075 - (eff.PKT-neutral.PKT)*0.0012 - (career.teamStrength-65)*0.0004, 0.015, 0.16);
+    const sackRate = clamp(0.075 - (eff.PKT-neutral.PKT)*0.0012 - (career.oline-65)*0.0006, 0.015, 0.16);
 
     const roleShareRange = career.contract.tier==="minimum" ? [0.1,0.6] : career.contract.tier==="backup" ? [0.3,0.85] : [1,1];
     const roleShare = (roleShareRange[0]+roleShareRange[1])/2;

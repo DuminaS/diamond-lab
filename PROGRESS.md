@@ -128,10 +128,39 @@ per-item root causes below, all confirmed as real, verifiable gaps, not just vib
    texture/visibility (a genuinely tough or genuinely soft individual matchup) and being the
    necessary foundation for items 3-5 above, not a difficulty lever by itself.
 
-   **Not done this round** (explicitly deferred, user-prioritized next): a clickable rival-QB
-   profile page, and A-F supporting-cast grades (O-line/weapons) affecting completion%/injury risk.
-   Neither touches the systems shipped here, but both build naturally on top of `leagueRivals` now
-   actually mattering during games.
+6. **Rival QB profile page — shipped.** Clicking any opposing QB's name (Schedule tab, both playoff
+   round box templates, League tab standings) opens a profile card: career stats (yards, TD, INT,
+   rating, record, games), MVP/All-Pro/Pro Bowl badges, and `rivalCareerFunFacts(rival)` — all
+   derived from data the rival already carries (best season, draft-classmate status, whether he
+   succeeded a retired predecessor, whether he's still without a Pro Bowl this deep into his career)
+   rather than a hand-authored joke pool to maintain. One genuine easter egg: since rivals are named
+   via the same `randomFullName()` the player's own prospects use, a rival can land on one of the
+   existing Key & Peele `EASTER_EGG_NAMES` gags, called out as its own fun fact when it happens.
+   New `findRivalById(id)` (unlike `rivalForTeam`, also finds *retired* rivals, so a profile opened
+   from an old season's log still resolves) and `opponentQbId`/`_oppQbId` fields threaded alongside
+   the existing name/overall fields at all 4 places an opponent QB is generated. One delegated click
+   listener on `#careerContent`, attached ONCE at init (not inside `renderSeasonCard`, since that
+   function's container element is never recreated between seasons — attaching there every render
+   would silently stack up a duplicate listener per season) — covers every `[data-rival-id]` link
+   regardless of which tab panel it's in, since `switchDashTab` only toggles visibility.
+
+7. **Supporting cast grades (O-Line/Weapons) — shipped.** New `career.oline`/`career.weapons`
+   (20-99, own independent noise against team strength via `rollSupportingCastGrade` — a good team
+   can absolutely have a bad line, that's the point), displayed as A-F letter grades
+   (`castLetterGrade`) in the season card's front-office widget and on every free-agency offer card
+   — the "chase the bag vs. play behind a bad line" tradeoff is now something you can actually see
+   before signing, not just a vibe. Mechanically wired in: sack rate now reads `career.oline`
+   instead of generic team strength (a good team could always have had a bad line; now it can
+   actually show up as one), a small `weapons`-linked nudge on completion%/YPA, and an O-line-linked
+   injury-risk multiplier (a bad line means more hits taken, not just more sacks) — both mirrored in
+   the Admin Calc tab's preview formula, same sync convention as `STAT_SENSITIVITY`/`STAT_BLEND`.
+   FA offers roll a preview `oline`/`weapons` once per offer and carry it on the offer object itself
+   (`signFreeAgentOffer` uses the STORED value, never re-rolls) — what you see in the offer is
+   exactly what you get if you sign it. The existing `oline`/`starleaves` `ORG_EVENTS` entries (which
+   already existed, previously just bumped generic team strength) now carry a `target` field routing
+   their delta to the correct specific stat instead. All 5 sites where the player joins a new team
+   (waiver signing, expansion draft, trade, granted trade request, free-agent signing) roll fresh
+   values for the new roster; light ±2/season noise keeps both stats from going static between events.
 
 Verified end-to-end via Playwright (not just diagnostics) across a real 8-season playthrough: zero
 page errors, opponent QB correctly shown every season in the Schedule tab, League News feed
@@ -208,6 +237,8 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `LEAGUE_NEWS_EVENTS` / `rollLeagueNews(year)` / `buildLeagueNewsFeedHTML()` / `career.leagueNewsLog` (Round 5) — league-wide narrative events for OTHER teams' grade changes (the `LeagueNewsFeed` ask), parallel to `ORG_EVENTS` which remains exclusively for the player's own team. Rendered in the League tab under "Around the League." Reuses the existing `.feed-wrap`/`.feed-line` CSS from the transaction log rather than new classes.
 - `orgEventsFor()` (Round 5) — wraps `ORG_EVENTS`, filtering out `coachfired` whenever the just-completed season won a ring. Always call this instead of rolling `ORG_EVENTS` directly; there are two call sites (`lifeEventCheck`, `secondaryLifeEventCheck`), both already updated.
 - `hofVerdict()`'s `TIERS[0].minRingsRoute` (Round 5) — First-Ballot Hall of Famer now has two independent accolade gates: the original `minProBowls:3`, or `minRingsRoute:3` (3+ rings alone also qualifies). Any future tier added to `TIERS` should decide deliberately whether it wants a `minRingsRoute` of its own rather than assuming only the Pro Bowl count gates it.
+- `findRivalById(id)` / `openRivalProfile(rivalId)` / `buildRivalProfileHTML(rival)` / `rivalCareerFunFacts(rival)` (Round 5) — the rival QB profile page. `findRivalById` (unlike `rivalForTeam`) also matches retired rivals, since a profile opened from an old season's log should resolve to who actually played that game. Every place an opponent QB is generated/displayed carries a matching `...QbId`/`_oppQbId` field alongside name/overall specifically so this can look them up later. The single delegated `[data-rival-id]` click listener lives in the one-time Init block, NOT inside `renderSeasonCard` — `#careerContent` itself is never recreated between seasons (only its innerHTML), so attaching a fresh listener there every render would silently stack duplicates. Any future clickable element added inside a season card that needs the same "works in any tab, any season" behavior should follow this pattern, not add its own per-render listener.
+- `career.oline` / `career.weapons` / `rollSupportingCastGrade(teamStrength)` / `castLetterGrade(value)` (Round 5) — the Supporting Cast system, 20-99 with their own independent noise against team strength (a good team can have a bad line). Reset at all 5 sites the player joins a new team (waiver sign, expansion draft, trade, granted trade request, FA sign); FA offers roll a preview once and store it ON the offer object (`o.oline`/`o.weapons`) so `signFreeAgentOffer` uses the exact value shown, never a fresh re-roll. `ORG_EVENTS` entries can carry a `target:"oline"`/`target:"weapons"` field (only `oline`/`starleaves` currently do) to route their `strengthDelta` at a specific supporting-cast stat instead of generic `career.teamStrength` — `renderOrgEvent` checks this before falling back to the team-wide default. Feeds `sackRate` (oline) and a small completion%/YPA nudge (weapons) in `generateSeason()`, mirrored in the Admin Calc preview per the `STAT_SENSITIVITY` sync convention below.
 - `STAT_SENSITIVITY = 0.32` (Round 4, was `0.5` from Round 2) / `STAT_BLEND = 0.18` (Round 2, unchanged) — the two stacked stat-production compression dials in `generateSeason()`, mirrored in `computeMetricBreakdown()` for the Admin Calc preview. Keep these two functions' values in sync if either is tuned again.
 - `computeSeasonAwardRows(season)` — shared by `buildLeagueTabHTML` and `buildAwardCeremonyHTML`, one source of truth for "every QB's season this year."
 - `resolveSeasonMVP(season, year)` / `resolveSeasonAllProAndProBowl(season, year)` — the league-wide award decision points, both called once per season from `generateSeason` right after `simulateRivalSeasons`. Same pattern: score+eligibility computed per-QB in `evaluateSeasonAwards`, compared league-wide once everyone's season is locked in.
