@@ -322,6 +322,14 @@
   .pb-card.is-locked .pb-card-tier{ color:var(--ink-muted); }
   .pb-card-hint{ font-size:0.66rem; color:var(--ink-muted); line-height:1.35; }
 
+  /* ===== Team tab ===== */
+  .team-grade-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:0.8rem; margin-top:0.9rem; }
+  .team-grade-card{ border:1px solid var(--line); border-radius:12px; padding:0.8rem 0.9rem; background:rgba(255,255,255,0.015); }
+  .tg-label{ font-size:0.72rem; color:var(--ink-muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:700; }
+  .tg-value{ font-family:var(--display); font-size:1.5rem; font-weight:800; color:var(--gold); margin-top:0.2rem; }
+  .tg-num{ font-size:0.85rem; color:var(--ink-muted); font-weight:600; }
+  .tg-impact{ font-size:0.7rem; color:var(--ink-muted); line-height:1.4; margin-top:0.35rem; }
+
   /* Shared with the Baseball Card's close button (.card-close, see below) */
   .be-close{ background:none; border:none; color:var(--ink-muted); font-size:1.5rem; cursor:pointer; line-height:1; padding:0 0.3rem; }
   .be-close:hover{ color:var(--ink); }

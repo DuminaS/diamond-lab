@@ -361,13 +361,17 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // waiverCheck) doubles as a development modifier here too: a stable coaching staff actually
     // helps a young player develop; a front-office shake-up disrupts it, for the one season it hits.
     const orgMult = career._orgStability ? 1.15 : career._orgTurmoil ? 0.75 : 1;
+    // Persistent team-quality dial (Round 9), distinct from the transient org-event flags above --
+    // a genuinely good coaching staff develops talent faster every season, not just the one year an
+    // ORG_EVENT fires; a bad one is a permanent drag. Independent multiplier, stacks with orgMult.
+    const coachingMult = clamp(0.85 + ((career.coaching ?? 60)/100)*0.3, 0.85, 1.15);
     const changed = [];
     ATTR_KEYS.forEach(k=>{
       if(k==="DUR") return;
       const group = ATTR_BY_KEY[k].group;
       const base = curveVal(DEVELOPMENT_CURVES[group] || DEVELOPMENT_CURVES.mental, career.age);
       const variance = 0.85 + Math.random()*0.3;
-      let delta = base * career.devSpeed * experienceFactor * orgMult * variance;
+      let delta = base * career.devSpeed * experienceFactor * orgMult * coachingMult * variance;
       career.devCarry[k] = (career.devCarry[k]||0) + delta;
       const whole = Math.trunc(career.devCarry[k]);
       if(whole===0) return;
@@ -2111,6 +2115,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       teamStrength: leagueStrength[team.id],
       oline: rollSupportingCastGrade(leagueStrength[team.id]),
       weapons: rollSupportingCastGrade(leagueStrength[team.id]),
+      defense: rollSupportingCastGrade(leagueStrength[team.id]),
+      coaching: rollSupportingCastGrade(leagueStrength[team.id]),
+      gmGrade: rollSupportingCastGrade(leagueStrength[team.id]),
       wearAndTear: 0,
       relationship: null,
       achievements: { unlocked:{} },
@@ -2299,12 +2306,23 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     }
     return { pts, tds, fgs };
   }
-  function simulateGameScore(offOverall, defOverall){
+  // myDefense (career.defense, 20-99, same independently-noisy scale as oline/weapons) is optional
+  // so rival-vs-rival math elsewhere that has no such concept keeps working unchanged -- when
+  // given, it blends into how many points the OPPONENT scores (80% offOverall / 20% myDefense),
+  // decoupling "how good is my defense" from "how good is my own QB" the way real football works:
+  // a great defense meaningfully helps, without overshadowing the QB-skill mechanic the whole game
+  // is built around. Diagnostically swept before landing on 20%: an initial 65% weight produced a
+  // 51-POINT win-rate swing (20 vs 99 defense) for a mediocre QB -- larger than the QB's own full
+  // skill range (Round 4's QB_INFLUENCE calibration) -- so the defense grade was overpowering the
+  // player's own performance. At 20% weight the same swing is ~14 points: a real, felt effect that
+  // stays clearly secondary to the QB's own play.
+  function simulateGameScore(offOverall, defOverall, myDefense){
+    const oppFacingGrade = myDefense!=null ? (offOverall*0.8 + myDefense*0.2) : offOverall;
     const quarters = [];
     let myTotal=0, oppTotal=0, myTds=0, myFgs=0, oppTds=0, oppFgs=0;
     for(let q=1;q<=4;q++){
       const myQ = scoreForQuarter(offOverall, defOverall);
-      const oppQ = scoreForQuarter(defOverall, offOverall);
+      const oppQ = scoreForQuarter(defOverall, oppFacingGrade);
       myTotal+=myQ.pts; oppTotal+=oppQ.pts;
       myTds+=myQ.tds; myFgs+=myQ.fgs; oppTds+=oppQ.tds; oppFgs+=oppQ.fgs;
       quarters.push({ q, myQ: myQ.pts, oppQ: oppQ.pts, myTotal, oppTotal });
@@ -2407,7 +2425,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const oppGrade = oppId===career.teamId ? career.teamStrength : (career.leagueStrength[oppId] ?? 60);
       const oppRival = rivalForTeam(oppId);
       const oppOffense = opponentOffenseGrade(oppId, QB_INFLUENCE_REGULAR);
-      const scoreSim = simulateGameScore(myOff, oppOffense);
+      const scoreSim = simulateGameScore(myOff, oppOffense, career.defense);
       const won = scoreSim.won;
       if(won) wins++;
       bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
@@ -2793,7 +2811,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const oppRival = rivalForTeam(opp.id);
         const oppOffense = opponentOffenseGrade(opp.id, QB_INFLUENCE_PLAYOFF);
         const myOff = playoffOffenseGrade(myOffFn(), season);
-        const game = simulateGameScore(myOff, oppOffense);
+        const game = simulateGameScore(myOff, oppOffense, career.defense);
         rounds.push({
           round: roundLabel, opponent: teamNameAt(opp.id, career.year), mySeed: player.seed, oppSeed: opp.seed,
           myScore: game.myTotal, oppScore: game.oppTotal, won: game.won, quarters: game.quarters,
@@ -2860,7 +2878,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const oppRival = rivalForTeam(opp.id);
         const oppOffense = opponentOffenseGrade(opp.id, QB_INFLUENCE_PLAYOFF);
         const myOff = playoffOffenseGrade(myOffFn(), season);
-        const game = simulateGameScore(myOff, oppOffense);
+        const game = simulateGameScore(myOff, oppOffense, career.defense);
         const round = {
           round: roundLabel, opponent: teamNameAt(opp.id, career.year), mySeed: player.seed, oppSeed: opp.seed,
           myScore: game.myTotal, oppScore: game.oppTotal, won: game.won, quarters: game.quarters,
@@ -2923,7 +2941,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const oppRival = rivalForTeam(otherChampId);
     const oppOffense = opponentOffenseGrade(otherChampId, QB_INFLUENCE_PLAYOFF);
     const myOff = playoffOffenseGrade(playoffs._effOverall, season);
-    const game = simulateGameScore(myOff, oppOffense);
+    const game = simulateGameScore(myOff, oppOffense, career.defense);
     const sbRound = {
       round:"Super Bowl", opponent: teamNameAt(otherChampId, career.year),
       myScore: game.myTotal, oppScore: game.oppTotal, won: game.won,
@@ -4841,6 +4859,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const gmRelief = clamp(((career.gmRelationship ?? 50)-50)*0.0032, -0.14, 0.14);
     const fanRelief = clamp(((career.fanSupport ?? 50)-50)*0.0026, -0.11, 0.11);
     const popRelief = clamp(((career.leaguePopularity ?? 50)-50)*0.0014, -0.06, 0.06);
+    // Front-office COMPETENCE (Round 9), distinct from gmRelief (how much the GM likes YOU) -- a
+    // sharp front office is more patient and strategic about a roster decision; an incompetent one
+    // panics faster, independent of personal rapport.
+    const gmSkillRelief = clamp(((career.gmGrade ?? 60)-60)*0.002, -0.08, 0.08);
     // A one-season shield after the org just publicly anointed him (named captain, made the vocal
     // leader of a turnaround, handed the keys by the front office) so that vote of confidence and
     // a roster cut don't land in the same offseason and read as whiplash -- addresses the exact
@@ -4848,7 +4870,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const captainShield = career._cutShieldSeasons>0 ? 0.09 : 0;
     if(career._cutShieldSeasons>0) career._cutShieldSeasons--;
     const cutChance = clamp((badThreshold-effOverall)*0.025 + career.badStreak*0.06 + ageRisk + repRisk + turmoilRisk
-      - stabilityRelief - gmRelief - fanRelief - popRelief - captainShield, 0.02, 0.75);
+      - stabilityRelief - gmRelief - gmSkillRelief - fanRelief - popRelief - captainShield, 0.02, 0.75);
     if(career.seasonNumber>=3 && Math.random()<cutChance){ renderWaivedEvent(effOverall, decade); return; }
     expansionDraftCheck();
   }
@@ -4888,6 +4910,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       career.transactions.push(`${career.year}: Released by the ${oldTeam}, signed by the ${teamNameAt(offerTeam.id,career.year)} on a minimum deal.`);
       career.teamId = offerTeam.id; career.teamStrength = career.leagueStrength[offerTeam.id]; career.seasonsWithTeam = 0;
       career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
+      career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
       career.contract = { apy: offerApy, years: 1, tier: "minimum" };
       career.badStreak = 0;
       checkInjuryThenPlay();
@@ -4933,6 +4956,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       career.teamStrength = career.leagueStrength[newTeam.id] ?? 45;
       career.leagueStrength[newTeam.id] = career.teamStrength;
       career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
+      career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
       career.seasonsWithTeam = 0;
       tradeCheck();
     });
@@ -4958,6 +4982,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.transactions.push(`${career.year}: Traded from the ${oldTeam} to the ${newTeamName}.`);
     career.teamId = team.id; career.teamStrength = career.leagueStrength[team.id]; career.seasonsWithTeam = 0;
     career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
+    career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
     const content = document.getElementById("careerContent");
     content.innerHTML = eraWrap(decadeForYear(career.year), `
         <div class="ev-eyebrow">Trade · ${career.year}</div>
@@ -5013,6 +5038,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       career.transactions.push(`${career.year}: Requested a trade — dealt from the ${oldTeam} to the ${newTeamName}.`);
       career.teamId = team.id; career.teamStrength = career.leagueStrength[team.id]; career.seasonsWithTeam = 0;
       career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
+      career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
       content.innerHTML = eraWrap(decade, `
         <div class="ev-eyebrow">${career.year} · Trade Request</div>
         <h3>Request granted — dealt to the ${newTeamName}.</h3>
@@ -5072,6 +5098,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // a GM who's had bad blood with him lowballs the re-sign offer; a GM who trusts him doesn't.
     // Only applies to the home/re-sign offer -- every other team's GM is an unknown quantity.
     const gmMult = clamp(0.82 + ((career.gmRelationship ?? 50)/100)*0.34, 0.75, 1.22);
+    // Separate from relationship (how much they like YOU): front-office COMPETENCE, applied on top --
+    // a skilled front office pays market rate regardless of personal rapport; an incompetent one is
+    // erratic even toward a player it likes.
+    const homeGmSkillMult = clamp(0.9 + ((career.gmGrade ?? 60)/100)*0.2, 0.85, 1.1);
     const candidates = shuffle(teamsAvailable(career.year).filter(t=>t.id!==oldTeamId));
     const offers = [];
     // re-sign option with the old team, unless he was just cut loose for cause (contract voided)
@@ -5079,11 +5109,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const baseApy = veteranAPY(decade, tier==="minimum"?"minimum":tier);
       offers.push({
         teamId: oldTeamId, role: "starter", isHome: true,
-        apy: Math.round(baseApy*repMult*gmMult*leverage*comeback*(0.95+Math.random()*0.2)),
+        apy: Math.round(baseApy*repMult*gmMult*homeGmSkillMult*leverage*comeback*(0.95+Math.random()*0.2)),
         years: tier==="elite"?5:tier==="good"?4:tier==="average"?2:1,
         patience: randInt(55,85), pushCount:0, withdrawn:false,
         // the home team is the CURRENT roster, not a preview -- show what he actually already plays behind.
-        oline: career.oline, weapons: career.weapons,
+        oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade,
       });
     }
     for(const t of candidates){
@@ -5098,12 +5128,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       // what you see in the offer ("chase the bag, but you'd play behind a C-grade line") is
       // exactly what you get if you take it, not a surprise after the fact.
       const teamStrengthForOffer = career.leagueStrength[t.id] ?? 60;
+      const gmGradeForOffer = rollSupportingCastGrade(teamStrengthForOffer);
+      // A sharp front office pays close to fair value; a bad one is erratic -- sometimes a lowball,
+      // sometimes (comedically) an overpay for a player they'll regret. Independent of repMult/
+      // leverage, which are about the PLAYER's own standing, not this team's competence.
+      const awayGmMult = clamp(0.85 + (gmGradeForOffer/100)*0.3 + (Math.random()-0.5)*0.1, 0.78, 1.2);
       offers.push({
         teamId: t.id, role, isHome:false,
-        apy: Math.round(baseApy*repMult*leverage*comeback*(0.88+Math.random()*0.3)),
+        apy: Math.round(baseApy*repMult*leverage*comeback*awayGmMult*(0.88+Math.random()*0.3)),
         years: role==="competition" ? 1 : (tier==="elite"?4:tier==="good"?3:tier==="average"?2:1),
         patience: randInt(35,70) - (role==="competition"?10:0), pushCount:0, withdrawn:false,
         oline: rollSupportingCastGrade(teamStrengthForOffer), weapons: rollSupportingCastGrade(teamStrengthForOffer),
+        defense: rollSupportingCastGrade(teamStrengthForOffer), coaching: rollSupportingCastGrade(teamStrengthForOffer), gmGrade: gmGradeForOffer,
       });
     }
     // one rare agent-driven swing, independent of how negotiations go
@@ -5210,6 +5246,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       career.teamId = o.teamId;
       career.teamStrength = career.leagueStrength[o.teamId];
       career.oline = o.oline; career.weapons = o.weapons;
+      career.defense = o.defense; career.coaching = o.coaching; career.gmGrade = o.gmGrade;
       career.seasonsWithTeam = 0;
     }
     const tier = o.role==="competition" ? "backup" : (meta.tier==="minimum"?"minimum":meta.tier);
@@ -5701,6 +5738,61 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     `;
   }
 
+  /* ----- Team tab: the five supporting-cast/organization grades in one place, each with a plain-
+     language note on the REAL mechanical effect it has (not flavor text — every one of these
+     actually feeds a real formula elsewhere: oline->sack rate, weapons->completion%/YPA,
+     defense->opponent scoring in simulateGameScore, coaching->developAttributes' per-season growth
+     rate, gmGrade->FA contract offers and waiverCheck's cut-risk). Plus the team's own depth chart
+     (QB1/2/3), reusing the same rivalEffTalent/contract fields the rival profile card already
+     shows. */
+  function buildTeamTabHTML(){
+    const grades = [
+      { label:"Offensive Line", value: career.oline,
+        impact:"Sack rate and injury risk — a shaky line means more hits taken; an elite one buys extra time in the pocket." },
+      { label:"Weapons", value: career.weapons,
+        impact:"Completion % and yards per attempt — better targets make every throw a little easier to complete, and a little more likely to go the distance." },
+      { label:"Defense", value: career.defense,
+        impact:"How many points opponents score, independent of your own offense — a great defense can carry the team to wins your own stat line alone wouldn't explain." },
+      { label:"Coaching", value: career.coaching,
+        impact:"Attribute development speed, every single season — a strong staff genuinely develops talent faster; a bad one is a permanent drag on growth." },
+      { label:"Front Office", value: career.gmGrade,
+        impact:"Contract offer size and how patient the organization is through a rough stretch — a sharp front office pays fair value and doesn't panic; an incompetent one is erratic either way." },
+    ];
+    const gradeCards = grades.map(g=>`<div class="team-grade-card">
+        <div class="tg-label">${g.label}</div>
+        <div class="tg-value tabular">${castLetterGrade(g.value)} <span class="tg-num">(${g.value})</span></div>
+        <div class="tg-impact">${g.impact}</div>
+      </div>`).join("");
+
+    const chart = (career.leagueDepthCharts||{})[career.teamId];
+    const incumbent = career.isBackup ? rivalForTeam(career.teamId) : null;
+    const depthRow = (slot, name, overall, age, tier, mine)=>`<tr${mine?' class="me"':""}><td>${slot}</td><td>${name}</td><td class="tabular">${overall}</td><td class="tabular">${age}</td><td>${svgEscape(tier)}</td></tr>`;
+    const depthRows = [];
+    depthRows.push(incumbent
+      ? depthRow("QB1", svgEscape(incumbent.name), rivalEffTalent(incumbent), incumbent.age, incumbent.contract.tier, false)
+      : depthRow("QB1", svgEscape(career.name)+" (you)", Math.round(computeEffOverall(career.age, decadeForYear(career.year))), career.age, career.contract.tier, true));
+    if(career.isBackup) depthRows.push(depthRow("QB2", svgEscape(career.name)+" (you)", Math.round(computeEffOverall(career.age, decadeForYear(career.year))), career.age, career.contract.tier, true));
+    else if(chart) depthRows.push(depthRow("QB2", svgEscape(chart.qb2.name), rivalEffTalent(chart.qb2), chart.qb2.age, chart.qb2.contract.tier, false));
+    if(chart) depthRows.push(depthRow("QB3", svgEscape(chart.qb3.name), rivalEffTalent(chart.qb3), chart.qb3.age, chart.qb3.contract.tier, false));
+
+    const schemeId = career.teamScheme ? career.teamScheme[career.teamId] : null;
+    const scheme = SCHEMES.find(s=>s.id===schemeId);
+    const teamGrade = Math.round(career.teamStrength);
+
+    return `<div class="calc-refnote">${svgEscape(teamNameAt(career.teamId, career.year))} — Team Grade <b>${teamGrade}</b> (${svgEscape(gradeFor(clamp(teamGrade,0,98)).flavor)}). The five grades below are each independently noisy against team grade — a good team can still have a bad line, and vice versa — and each has a real, direct effect on your own numbers, not just flavor.</div>
+      <div class="team-grade-grid">${gradeCards}</div>
+      <div class="section-label" style="margin-top:1.4rem;">Depth Chart</div>
+      <div class="table-wrap">
+        <table class="career-table">
+          <thead><tr><th>Slot</th><th>Name</th><th class="tabular">Overall</th><th class="tabular">Age</th><th>Contract</th></tr></thead>
+          <tbody>${depthRows.join("")}</tbody>
+        </table>
+      </div>
+      ${career.isBackup ? `<div class="calc-refnote" style="margin-top:0.6rem;">You're competing for the starting job — see the Season tab's front-office widget for how that's going.</div>` : ""}
+      ${scheme ? `<div class="calc-refnote" style="margin-top:0.6rem;">Running <b>${svgEscape(scheme.name)}</b> — see the Scheme tab for the full attribute breakdown.</div>` : ""}
+    `;
+  }
+
   // ----- Attributes tab (item #10): a player-facing view of the twelve ratings mid-career --
   // draft-day value, current (development-adjusted) value, and what's actually driving THIS
   // season's production once age, era, and scheme are all applied. Reuses the same
@@ -6029,6 +6121,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
               <button type="button" class="dash-tab" data-tab="trends">Career Trends</button>
               <button type="button" class="dash-tab" data-tab="attributes">Attributes</button>
               <button type="button" class="dash-tab" data-tab="scheme">Scheme</button>
+              <button type="button" class="dash-tab" data-tab="team">Team</button>
               <button type="button" class="dash-tab" data-tab="badges">Achievements</button>
               <button type="button" class="dash-tab" data-tab="log">Log</button>
             </div>
@@ -6065,6 +6158,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <div class="dash-tabpanel" id="tabpanel-trends">${buildTrendsTabHTML()}</div>
           <div class="dash-tabpanel" id="tabpanel-attributes">${buildAttributesTabHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-scheme">${buildSchemeTabHTML()}</div>
+          <div class="dash-tabpanel" id="tabpanel-team">${buildTeamTabHTML()}</div>
           <div class="dash-tabpanel" id="tabpanel-badges">${buildAchievementsTabHTML()}</div>
           <div class="dash-tabpanel" id="tabpanel-log">${buildEventLogFeedHTML()}</div>
         </div>
