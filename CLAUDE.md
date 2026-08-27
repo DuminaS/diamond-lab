@@ -6,16 +6,33 @@ when you need the detailed "why" behind a specific mechanic, formula, or bug fix
 
 ## What this is
 
-A single-file HTML/CSS/JS QB-career simulator ("Gridiron Lab") — build a quarterback, take him
-through the Combine, then simulate a full career: draft night, seasons, playoffs, awards, trades,
-injuries, retirement, a Hall of Fame verdict. Everything — markup, styles, game logic — lives in
-`index.html`, wrapped in one big IIFE. There is currently no build step, no framework, no backend:
-open `index.html` in a browser and it runs.
+A QB-career simulator ("Gridiron Lab") — build a quarterback, take him through the Combine, then
+simulate a full career: draft night, seasons, playoffs, awards, trades, injuries, retirement, a Hall
+of Fame verdict. Game logic, UI rendering, and styles all still live in one big IIFE — that hasn't
+changed — but as of the Vite/Capacitor migration (see below) that IIFE is `src/main.js`, styles are
+`src/style.css`, and the root `index.html` is a slim Vite entry shell (markup only, no game logic).
+The original monolithic `index.html` (everything in one file) is preserved in git history if you
+ever need to diff against it.
 
 It started life as, and is still also published as, a Claude Artifact (a hosted single-file HTML
-page on claude.ai). That published copy and this local copy are two independent snapshots of the
-same file — nothing here automatically syncs to it. If you're continuing development locally, treat
-`index.html` in this folder as the new source of truth going forward.
+page on claude.ai). That published copy and this local copy are now two genuinely different things
+— the Artifact is still one flat file, while this local copy is a real Vite + Capacitor project.
+Nothing here automatically syncs to it; treat this local project as the new source of truth going
+forward, and expect to manually re-flatten (`src/style.css` + `src/main.js` + root `index.html`
+markup back into one file) if you ever want to republish an Artifact snapshot.
+
+### Build / run
+
+- `npm install`, then `npm run dev` for a live-reload dev server, `npm run build` for a production
+  build to `dist/`, `npm run preview` to serve that build locally.
+- `npm run android` builds, runs `cap sync android`, and opens the native Android project (`android/`)
+  in Android Studio. **Requires Android Studio (bundles a JDK) and the Android SDK to actually build
+  or run the app** — as of the migration, neither was installed on the dev machine; installing
+  Android Studio is a prerequisite before any native build/run/emulator step can be verified.
+- App id `com.gridironlab.app`, app name "Gridiron Lab" — set via `capacitor.config.json` and in
+  `android/app/build.gradle` / `android/app/src/main/res/values/strings.xml` if it ever needs to change.
+- iOS is intentionally not set up yet (deliberate call: this dev machine is Windows, and Xcode/iOS
+  builds require macOS — Android ships first, iOS revisited later via a Mac or a cloud Mac CI service).
 
 ## Before you touch anything: read PROGRESS.md
 
@@ -37,8 +54,9 @@ these notes call out as load-bearing.
 - **Test before publish/commit.** The prior (Cowork) environment used jsdom to load the file
   headlessly, injected a `window.__debug` accessor object into throwaway copies only (never the real
   file) to reach internal functions/state for testing, and ran a ~16-family regression suite plus
-  new targeted tests for whatever just changed. If you set up an equivalent local test harness,
-  preserve that norm: debug hooks belong in disposable copies, not in `index.html`.
+  new targeted tests for whatever just changed. That norm carries forward unchanged even though the
+  file moved: debug hooks belong in disposable copies of `src/main.js`, never in the real one.
+  `jsdom` is already a devDependency for exactly this.
 - **Diagnose before changing a numeric dial.** When something feels off (too easy, too hard, a stat
   looks wrong), reproduce it with a synthetic build first if possible, and say plainly if an exact
   user-reported number couldn't be reproduced rather than silently guessing — see the PROGRESS.md
@@ -54,12 +72,61 @@ difficulty pass, a scheduling/awards/naming pass, and a difficulty + team-qualit
 overhaul. No open bugs or half-finished work as of this export — the last thing shipped was the
 Round 4 development boom/bust system, tested and published.
 
-## Turning this into "an app"
+## Turning this into "an app" — decided, in progress
 
-Nothing here has been decided yet on that front — this file exists so a fresh Claude Code session
-has the full history to work from once you're ready to figure out what "app" means for this project
-(a proper built web app, something installable, a backend for real accounts/leaderboards, etc.).
-When you're ready to plan that, it's worth explicitly discussing scope before Claude Code starts
-moving code around: whether to keep this as a single file a while longer, when to introduce a build
-step and split it into modules, and whether/when a backend is actually needed versus staying
-browser-local.
+Direction (decided, not open for re-litigation without a reason): native app store distribution via
+Capacitor wrapping the web build, **Android first** (this dev machine is Windows — iOS needs a Mac
+or cloud CI, revisit later), monetization via a **rewarded-ad "watch an ad for a bonus reroll"**
+mechanic, **mock ad SDK for now** (swap in a real one like AdMob once the platform is proven),
+**staying browser-local** (localStorage) rather than standing up a backend until there's an actual
+need for cross-device saves, leaderboards, or server-side ad-reward verification.
+
+Also decided: **ship a website too** (same Vite build — no separate codebase), which doubles as the
+free path to iOS playtesting. PWA (manifest + service worker) means any host serving `dist/` is
+both "the website" and an installable, auto-updating home-screen app on iOS/Android without needing
+the App Store or TestFlight. TestFlight/Play-internal-testing are still the plan for the eventual
+real native builds, not for playtesting today.
+
+Progress so far:
+1. ✅ Vite scaffold — `index.html` split into `src/style.css` + `src/main.js` (still one IIFE, not
+   yet modularized) + a slim root `index.html` shell. Verified via a jsdom smoke test that the split
+   changed nothing at runtime (all data tables load, key DOM elements present, no exceptions).
+2. ✅ Capacitor + Android project scaffolded (`android/`, `capacitor.config.json`, app id
+   `com.gridironlab.app`). **Not yet build/run-verified** — Android Studio is now installed on the
+   dev machine but a real emulator/device run hasn't been done yet.
+3. ✅ PWA support (`vite-plugin-pwa`, `vite.config.js`, icons in `public/` generated from
+   `icons-src/icon.svg`, a placeholder gold-on-charcoal "GL" monogram — swap for real branding
+   whenever art exists). `npm run build` output is a deployable, installable website; not yet
+   deployed to a live host (pick one: Cloudflare Pages / Netlify / GitHub Pages, all free).
+4. ⬜ Not yet started: splitting `src/main.js` into real modules (data/constants, pure sim logic,
+   persistence, UI-render, app bootstrap) — do this incrementally, chunk by chunk, verified against
+   the jsdom regression norm after each chunk, not as one big-bang rewrite. `PROGRESS.md`'s "Key
+   architecture notes" section still names the load-bearing functions/invariants to preserve.
+5. ⬜ Not yet started: real save/resume for an in-progress career (today only the best-combine-score
+   and last-build-profile persist; a career is memory-only and is lost if the app is backgrounded/
+   killed by the OS — a bigger deal on mobile than it was on desktop web).
+6. ✅ Mock rewarded-ad flow shipped: `src/ads/rewardedAd.js` exports `showRewardedAd({rewardLabel})`,
+   a promise resolving `true`/`false` after a 30s countdown modal (`#rewardedAdOverlay`, `.ad-card` —
+   skip = false/no reward, claim only enabls once the timer hits 0 = true). Wired to a new
+   `cs.bonusRespinLeft` / `cs.adWatchesUsed` pair (capped at `MAX_AD_RESPINS_PER_COMBINE = 3`) that's
+   a SHARED pool spendable on either existing respin button once its own free use is gone — no new
+   game mechanic, just a top-up on the existing `cs.respinEraLeft`/`respinPlayersLeft` scarcity. New
+   "Watch Ad for Bonus Reroll" button next to the two respin buttons. Swapping in a real ad SDK later
+   means only rewriting `rewardedAd.js`'s internals — every call site just awaits the same promise.
+
+### Testing-methodology addendum: jsdom can't be trusted for interactive flows here
+
+Discovered while verifying the ad-reroll feature: `main.js`'s existing jsdom-load smoke-test pattern
+(inject the built bundle into a jsdom document via a manually created `<script>`, per PROGRESS.md's
+established norm) is fine for a load-only smoke check, but produced **flaky, false-positive bugs**
+once the test started `.click()`-ing through a multi-step interactive flow with `resources: "usable"`
+set (needed so jsdom doesn't warn on the favicon/manifest links) — `cs.order` intermittently read
+back as an empty array inside an event-listener callback that never touches `cs.order`, purely a
+jsdom artifact (near-certainly the async 404 resource-fetch attempts for the missing CSS/service-
+worker files interleaving unpredictably with synchronous script execution). Confirmed real behavior
+is correct by re-running the identical interaction sequence with **Playwright + real headless
+Chromium** against `vite preview` instead — 13/13 checks passed, matching the original Cowork
+environment's own norm of using Playwright for anything beyond a load check (see PROGRESS.md). Rule
+going forward: jsdom injection is fine for "did it load without throwing," but any test that clicks
+through a multi-step flow (combine rounds, overlays, timers) should use Playwright against a real
+dev/preview server, not jsdom — don't re-chase a jsdom-only reproduction next time this happens.

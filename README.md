@@ -4,7 +4,8 @@ This folder is a complete, self-contained snapshot of the game plus the full dev
 packaged so a local Claude Code session picks up right where the Cowork session left off. Three
 files matter:
 
-- `index.html` — the game itself. Open it directly in any browser and it runs, no server needed.
+- `src/main.js` / `src/style.css` — the game itself (markup lives in the root `index.html` shell).
+  This is now a Vite project — see "Previewing the game while you work" below for how to run it.
 - `CLAUDE.md` — auto-loaded by Claude Code on startup; a short orientation plus pointers.
 - `PROGRESS.md` — the full round-by-round development log: every decision, formula, and bug fix.
 
@@ -58,10 +59,40 @@ walk you through this interactively if you just ask it.
 
 ## 6. Previewing the game while you work
 
-Since it's one static HTML file, you can just open it directly in a browser (double-click it, or
-drag it into a browser window) after any edit. If you'd rather have it auto-reload on save, the VS
-Code extension "Live Server" gives you that with one click ("Go Live" in the bottom status bar)
-once installed — not required, just a convenience.
+This is now a Vite project (Node.js required — see step 3). From a terminal in this folder:
+
+```
+npm install
+npm run dev
+```
+
+That starts a dev server with auto-reload on save (the terminal prints the local URL to open,
+typically `http://localhost:5173`). `npm run build` produces a production build in `dist/`;
+`npm run preview` serves that build locally to sanity-check it before shipping.
+
+## 7. The website (and iOS playtesting)
+
+`npm run build` produces `dist/` — a complete, installable **PWA** (manifest + service worker via
+`vite-plugin-pwa`, auto-updating). Deploy `dist/` to any static host (Cloudflare Pages, Netlify, and
+GitHub Pages all have generous free tiers and can auto-deploy from this git repo on every push) and
+that URL **is** the website. On iOS, a tester visits the URL in Safari and taps Share → "Add to Home
+Screen" to get a home-screen icon that behaves like an app and auto-updates whenever you redeploy —
+no App Store, no TestFlight, no Mac needed. Same deal on Android via Chrome's "Install app" prompt.
+
+## 8. Building the Android app
+
+This project is wrapped with [Capacitor](https://capacitorjs.com) for native Android distribution
+(`android/` folder, app id `com.gridironlab.app`). To build or run the native app you'll need
+**Android Studio** installed (it bundles the JDK; install the Android SDK through it too) —
+download from https://developer.android.com/studio. Once installed:
+
+```
+npm run android
+```
+
+This builds the web app, syncs it into the native project, and opens `android/` in Android Studio,
+where you can run it on an emulator or a connected device. iOS isn't set up yet — that needs a Mac
+(Xcode only runs on macOS).
 
 ## What to tell Claude Code first
 
