@@ -363,6 +363,20 @@
   .be-preview-name{ font-weight:800; }
   .be-preview-desc{ font-size:0.72rem; color:var(--ink-muted); max-width:220px; }
 
+  /* ===== Exportable Baseball Card ===== */
+  .baseball-card-overlay{ display:none; position:fixed; inset:0; background:rgba(6,10,8,0.8); z-index:216; align-items:center; justify-content:center; padding:1.25rem; overflow-y:auto; }
+  .baseball-card-overlay.open{ display:flex; }
+  .card-scene{ display:flex; flex-direction:column; align-items:center; gap:1rem; position:relative; width:100%; max-width:340px; margin:auto; }
+  .card-close{ position:absolute; top:-2.6rem; right:0; }
+  .card-flip{ width:100%; aspect-ratio:400/560; position:relative; perspective:1400px; cursor:pointer; }
+  .card-flip .card-face{ position:absolute; inset:0; backface-visibility:hidden; border-radius:20px; overflow:hidden; box-shadow:0 16px 44px rgba(0,0,0,0.55); transition:transform 0.6s cubic-bezier(.4,.2,.2,1); transform:rotateY(0deg); }
+  .card-flip .card-face svg{ width:100%; height:100%; display:block; }
+  .card-flip .card-face.card-back{ transform:rotateY(180deg); }
+  .card-flip.flipped .card-face.card-front{ transform:rotateY(-180deg); }
+  .card-flip.flipped .card-face.card-back{ transform:rotateY(0deg); }
+  .card-actions{ display:flex; gap:0.7rem; flex-wrap:wrap; justify-content:center; }
+  .card-export-status{ font-size:0.75rem; color:var(--ink-muted); min-height:1.1em; }
+
   /* Sim-historical-best badge: distinct from .record-badge above -- that one flags a REAL-world
      NFL record, this one flags the best THIS PLAYTHROUGH'S own simulated league has produced, so
      it gets its own color (a cool blue instead of gold) to read as a clearly different kind of claim. */

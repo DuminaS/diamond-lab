@@ -332,6 +332,61 @@ per-item root causes below, all confirmed as real, verifiable gaps, not just vib
     office widget's new equipped-badge strip; removing an equipped badge correctly empties the slot
     again. Zero page errors.
 
+12. **Exportable Baseball Card: a flippable trading-card visual per completed career (shipped).**
+    Built entirely as inline SVG (`buildCardFaceSVG(entry, side)`, two "0 0 400 560" faces) rather
+    than HTML/CSS specifically so the exact same markup serves both the on-screen flip view AND the
+    PNG export — no html2canvas or any other library, same "no chart library, just plain SVG
+    strings" convention as the radar chart/sparkline/bracket renderers. Deliberately does NOT show a
+    season-by-season list (explicit ask: "not every season... small clean boxes so it doesn't feel
+    crowded"). Front face: name, college/draft class, team history (deduped consecutive team
+    names), a big "Peak Overall" circle (`Math.max` over `seasonLog[].overall`, NOT the career-
+    ending overall), a trophy line (MVP/All-Pro/Pro Bowl counts, omitted if zero), verdict tier, and
+    a clean 3x2 stat-box grid (Seasons/Rings/Pass Yards/Pass TD/INT/Rating). Back face: up to 3
+    equipped Playstyle Badges (frame shape + icon, reusing `BADGE_ICONS` from the badges system),
+    draft pedigree (`career.transactions[0]`, already human-readable), a one-line "how it ended"
+    (`cardExitLine(exitReason)`), and — the deliberately fun/non-obvious addition — an "Off the
+    Field" line surfacing `career.relationship` at the moment the career ended (e.g. "Married to
+    Wren Delacroix, the pop star."), tying the Round 5 lifepath/relationship system into the card
+    rather than treating it as pure flavor text nobody sees again. Card RARITY (border color +
+    corner label: COMMON/UNCOMMON/RARE/LEGENDARY/HOLO) is keyed off HOF verdict tier via
+    `CARD_RARITY`, so a First-Ballot Hall of Famer's card visibly reads as a "hit" the moment it's
+    opened, before reading a single stat.
+
+    New fields on the Trophy Room entry object (`saveTrophyRoomEntry` in `finishCareer()`):
+    `peakOverall`, `teams`, `equippedBadges` (array of `{key, tier}` — perf badges freeze their
+    final-reached tier, legend badges store `tier:null` since they're not tiered), `draftLine`,
+    `relationshipLine`. All are read defensively (`entry.field || fallback`) everywhere the card
+    renders, since every Trophy Room entry saved before this round lacks them entirely — verified
+    this doesn't crash or print "undefined" for an old-shaped entry. Reachable from two places: a
+    new "View Trading Card" button on the HOF/retirement screen (uses `lastFinishedCareerEntry`, a
+    snapshot of the trophy-room entry `finishCareer()` just built and saved, kept in a module-level
+    variable purely so this button doesn't need to re-derive it from `career` after the screen's
+    already showing) and a new "Card" button per Trophy Room row (looks the entry back up by `id`
+    from `loadTrophyRoom()`) — both open the same `openBaseballCard(entry)`, one shared code path.
+
+    **Flip**: `.card-flip` with `perspective` on the container and `backface-visibility:hidden` on
+    each face — clicking the card OR a "Flip card" button toggles `.flipped`, a pure CSS 3D
+    transform, no JS animation loop.
+    **Export**: `exportBaseballCard(entry)` builds one combined SVG (front stacked above back),
+    base64-encodes it into a `data:image/svg+xml` URI, loads that into an off-screen `Image`, draws
+    it onto a 2x-scaled `<canvas>`, then triggers a real file download via a temporary `<a download>`
+    pointed at the canvas's `toDataURL("image/png")` — wrapped in try/catch with a plain-language
+    fallback message, since this SVG-in-canvas technique is solid in Chromium (the primary target,
+    per the Android-first decision) but not guaranteed on every engine. Known, accepted trade-off:
+    because the exported SVG is re-parsed in an isolated (non-page) context, it can't resolve the
+    app's CSS custom properties or guarantee the Google Fonts are loaded there — every card color is
+    therefore a literal hex (`CARD_HEX`), never `var(--gold)` etc., and the font-family lists a
+    generic fallback first so the export degrades gracefully instead of silently failing.
+
+    Verified via Playwright: a seeded Trophy Room entry (with badges, a relationship line, multiple
+    teams) opens correctly, front shows name/peak-overall/HOLO rarity/rings, flipping reveals both
+    equipped badges by name, the draft line, the exit line, and the relationship fun fact; an
+    old-shaped entry missing every new field still opens cleanly with sensible fallbacks and no
+    "undefined" anywhere; export completes and reports "Saved." (no canvas/security error); and a
+    REAL career forced through the age cap correctly wires `lastFinishedCareerEntry` so "View
+    Trading Card" on the HOF screen shows that just-finished career's real data. Zero page errors
+    across all passes.
+
 Verified end-to-end via Playwright (not just diagnostics) across a real 8-season playthrough: zero
 page errors, opponent QB correctly shown every season in the Schedule tab, League News feed
 populated (23 entries by season 8), team-strength spread stayed realistic (range of 75 points across
@@ -425,3 +480,4 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `loadLastBuildProfile()` / `saveLastBuildProfile(picks)` / `renderLastBuildStrip()` / `loadLastBuildIntoCombine()` — the local-profile system, storage key `gridironlab.lastbuild`.
 - `TROPHY_ROOM_KEY` / `loadTrophyRoom()` / `saveTrophyRoomEntry(entry)` / `buildTrophyRoomTableHTML(sortKey)` / `TROPHY_ROOM_SORTERS` (Round 5) — the cross-career leaderboard, storage key `gridironlab.trophyroom`, separate from the single-slot `gridironlab.activeCareer`/best-career save. `saveTrophyRoomEntry` is called exactly once, from `finishCareer()`, and is the ONLY writer — any future career-ending path should go through `finishCareer()` rather than writing a trophy-room entry directly, so the cap/truncation logic (`TROPHY_ROOM_CAP=60`, oldest dropped first) stays centralized. Record highlighting (`.tr-record`) is deliberately computed via `maxOf(key)` over the FULL stored list every render, independent of `sortKey` — never derive "is this a record" from position in the current sort, since the current sort is rarely by the column being highlighted.
 - `PERF_BADGES` / `LEGEND_BADGES` / `recomputeBadges(eff)` / `checkLegendBadges()` / `career.badges` (Round 5) — the Playstyle Badges system. `recomputeBadges` is the ONLY writer of `perfTier`, called from `generateSeason()` BEFORE `developAttributes()` runs (uses this season's attributes, not next season's); `checkLegendBadges` is the ONLY writer of `legendUnlocked`, called from both `finalizePlayoffOutcome()` and `finishCareer()` and is safe to call from both since it only ever flips false→true, never re-checks a badge already earned. Any future badge added to either array should follow the existing shape (`score`/`check` as a pure function of `career`/`build`/`eff`/`recent`, no side effects) so `recomputeBadges`/`checkLegendBadges` stay the single source of truth. `badgeStatusFor(key)`/`badgeFrameHTML(def,st)`/`badgeIconSVG(icon)` are shared by the Badges tab, the equip-picker overlay, and the front-office widget's equipped strip — extend these, don't duplicate badge-rendering logic at a new call site. Attribute-driven `score` functions must run raw `weighted(eff,{...})` through `scoreCurve(...,45,92)` before blending (see the Round 5 log entry's calibration note) — skipping that rescale is what let a mediocre flat-70 build hit Gold for free the first time this was written.
+- `buildCardFaceSVG(entry, side)` / `openBaseballCard(entry)` / `exportBaseballCard(entry)` / `CARD_HEX` / `CARD_RARITY` (Round 5) — the Exportable Baseball Card. Takes a Trophy-Room-entry-SHAPED object, not `career` directly, so it works identically whether the source is `lastFinishedCareerEntry` (the career that just ended) or a historical row loaded back out of `loadTrophyRoom()` by id — never pass `career` in directly, build/extend the entry object instead. Every color inside a card face MUST be a literal hex from `CARD_HEX`, never a CSS `var(--...)` — the export path re-parses the SVG string in an isolated context that has no access to the page's custom properties, so a `var()` there would silently render as nothing. Any new field added to a card face should be read as `entry.field || fallback`, since real Trophy Room rows saved before this shipped (or any future round that forgets to set a new field) will be missing it — the "old entry" Playwright pass exists specifically to catch a future field added without a fallback.

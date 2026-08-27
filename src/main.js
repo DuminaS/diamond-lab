@@ -1015,14 +1015,223 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         ${cell(e.td, e.td===maxTd)}
         ${cell(e.rating, e.rating===maxRating, v=>v.toFixed(1))}
         ${cell(e.earnings, e.earnings===maxEarnings, v=>fmtMoney(v))}
+        <td><button type="button" class="btn-ghost-inline" data-card-id="${e.id}">Card</button></td>
       </tr>`).join("");
     return `<div class="table-wrap">
         <table class="league-table">
-          <thead><tr><th>QB</th><th>Verdict</th><th class="tabular">Seasons</th><th class="tabular">Rings</th><th class="tabular">Pass Yds</th><th class="tabular">TD</th><th class="tabular">Rating</th><th class="tabular">Earnings</th></tr></thead>
+          <thead><tr><th>QB</th><th>Verdict</th><th class="tabular">Seasons</th><th class="tabular">Rings</th><th class="tabular">Pass Yds</th><th class="tabular">TD</th><th class="tabular">Rating</th><th class="tabular">Earnings</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
       <div class="calc-refnote" style="margin-top:0.6rem;">Gold cells mark this browser's all-time record in that column. ${list.length} career${list.length===1?"":"s"} logged (last ${TROPHY_ROOM_CAP} kept).</div>`;
+  }
+
+  /* ================= Exportable Baseball Card =================
+     A flippable trading-card visual for one completed career (Trophy Room entry shape --
+     see saveTrophyRoomEntry above). Built ENTIRELY as inline SVG (front and back faces, each a
+     self-contained "0 0 400 560" viewBox string) rather than HTML/CSS, specifically so the exact
+     same markup can be (a) dropped into the DOM for the on-screen flip view and (b) serialized
+     straight into a data:image/svg+xml URI for the PNG export -- no html2canvas or any other
+     library involved, same "no chart library, just plain SVG strings" convention as the radar
+     chart / sparkline / bracket renderers above. Because the export path re-parses this markup
+     in an isolated (non-page) SVG context, it can't resolve the app's CSS custom properties
+     (var(--gold) etc.) or guarantee the Google Fonts are loaded there -- so every color below is a
+     literal hex (see CARD_HEX), and font-family lists a system fallback first for the export to
+     degrade gracefully; the on-screen version still looks identical since it's the same string. */
+  const CARD_HEX = { gold:"#D4AF37", goldStrong:"#E8C860", ink:"#ECF2EC", inkMuted:"#8CA096",
+    surface:"#1A2622", surfaceRaised:"#202F29", bg:"#12181B", leather:"#B08D2E", line:"rgba(236,242,236,0.18)" };
+  const CARD_FONT_DISPLAY = "Oswald, Arial Narrow, Impact, sans-serif";
+  const CARD_FONT_BODY = "Libre Franklin, -apple-system, Segoe UI, sans-serif";
+  const CARD_RARITY = {
+    "Out of the League": { border:"#5b564f", label:"COMMON" },
+    "Camp Arm": { border:"#5b564f", label:"COMMON" },
+    "Journeyman": { border:"#8a8377", label:"COMMON" },
+    "Longtime Starter": { border:"#B08D2E", label:"UNCOMMON" },
+    "Hall of Very Good": { border:"#c9cdd6", label:"RARE" },
+    "Hall of Famer": { border:"#D4AF37", label:"LEGENDARY" },
+    "First-Ballot Hall of Famer": { border:"#E8C860", label:"HOLO" },
+  };
+  function cardRarityFor(verdict){ return CARD_RARITY[verdict] || CARD_RARITY["Journeyman"]; }
+  const CARD_EXIT_LINES = {
+    waived: "Released — and the phone never rang again.",
+    age: "Played until his body wouldn't let him anymore.",
+    banned: "Banned from the league.",
+    injury: "Forced out by injury.",
+    retired: "Walked away on his own terms.",
+  };
+  function cardExitLine(exitReason){ return CARD_EXIT_LINES[exitReason] || "Career complete."; }
+
+  function cardIconSVG(iconKey, x, y, size, color){
+    return `<svg x="${x}" y="${y}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${BADGE_ICONS[iconKey]||BADGE_ICONS.star}</svg>`;
+  }
+  // Approximates the on-screen tier frame shapes (circle/hexagon/octagon/starburst/diamond) as
+  // fixed SVG polygons in a local 64x64 box, so a card badge reads as the same shape family as the
+  // Badges tab without needing exact coordinate parity.
+  function cardBadgeGlyphSVG(def, tier, cx, cy){
+    const shapes = {
+      1: { tag:"circle", attrs:`cx="32" cy="32" r="30"`, fill:"#c99a6b" },
+      2: { tag:"polygon", attrs:`points="16,3 48,3 61,32 48,61 16,61 3,32"`, fill:"#c9cdd6" },
+      3: { tag:"polygon", attrs:`points="32,2 50,10 61,26 58,46 43,60 21,60 6,46 3,26 14,10"`, fill:CARD_HEX.goldStrong },
+      4: { tag:"polygon", attrs:`points="32,1 40,22 62,22 44,36 51,58 32,45 13,58 20,36 2,22 24,22"`, fill:"#fff3c4" },
+      legend: { tag:"polygon", attrs:`points="32,1 63,32 32,63 1,32"`, fill:"#fff3c4" },
+    };
+    const shape = shapes[tier] || shapes.legend;
+    const shapeEl = shape.tag==="circle" ? `<circle ${shape.attrs} fill="${shape.fill}"/>` : `<polygon ${shape.attrs} fill="${shape.fill}"/>`;
+    return `<g transform="translate(${cx-32},${cy-32})">${shapeEl}${cardIconSVG(def.icon, 14, 14, 36, "#1c1a17")}</g>`;
+  }
+
+  function cardCenteredText(x, y, text, opts={}){
+    const { size=16, weight=600, color=CARD_HEX.ink, font=CARD_FONT_BODY, letterSpacing=0, anchor="middle" } = opts;
+    return `<text x="${x}" y="${y}" text-anchor="${anchor}" font-family="${font}" font-size="${size}" font-weight="${weight}" fill="${color}"${letterSpacing?` letter-spacing="${letterSpacing}"`:""}>${svgEscape(text)}</text>`;
+  }
+  function cardTruncate(text, max){ return text.length>max ? text.slice(0,max-1)+"…" : text; }
+
+  function buildCardFaceSVG(entry, side){
+    const rarity = cardRarityFor(entry.verdict);
+    const glow = rarity.label==="HOLO" || rarity.label==="LEGENDARY";
+    const nameSize = entry.name.length>18 ? 26 : entry.name.length>13 ? 30 : 34;
+    const bg = `<defs>
+        <linearGradient id="cardBg-${side}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${CARD_HEX.surfaceRaised}"/>
+          <stop offset="100%" stop-color="${CARD_HEX.bg}"/>
+        </linearGradient>
+      </defs>
+      <rect x="4" y="4" width="392" height="552" rx="20" fill="url(#cardBg-${side})" stroke="${rarity.border}" stroke-width="${glow?5:3}"/>
+      ${glow ? `<rect x="9" y="9" width="382" height="542" rx="16" fill="none" stroke="${rarity.border}" stroke-width="1" opacity="0.5"/>` : ""}
+      <rect x="300" y="20" width="84" height="22" rx="11" fill="rgba(0,0,0,0.35)" stroke="${rarity.border}" stroke-width="1"/>
+      ${cardCenteredText(342, 35, rarity.label, {size:11, weight:800, color:rarity.border, font:CARD_FONT_DISPLAY, letterSpacing:1, anchor:"middle"})}`;
+
+    if(side==="front"){
+      const teamsLine = cardTruncate(entry.teams && entry.teams.length ? entry.teams.join(" → ") : "—", 44);
+      const trophyBits = [];
+      if(entry.mvps) trophyBits.push(`${entry.mvps}x MVP`);
+      if(entry.allPros) trophyBits.push(`${entry.allPros}x All-Pro`);
+      if(entry.proBowls) trophyBits.push(`${entry.proBowls}x Pro Bowl`);
+      const trophyLine = trophyBits.length ? trophyBits.join("  ·  ") : "No accolades logged";
+      const statBoxes = [
+        ["SEASONS", entry.seasons],
+        ["RINGS", entry.rings],
+        ["PASS YDS", entry.yards.toLocaleString()],
+        ["PASS TD", entry.td],
+        ["INT", entry.int],
+        ["RATING", entry.rating.toFixed(1)],
+      ];
+      const gridX = 40, gridY = 366, boxW = 106, boxH = 66, gapX = 8, gapY = 8;
+      const statHtml = statBoxes.map((s,i)=>{
+        const col = i%3, row = Math.floor(i/3);
+        const x = gridX + col*(boxW+gapX), y = gridY + row*(boxH+gapY);
+        return `<rect x="${x}" y="${y}" width="${boxW}" height="${boxH}" rx="8" fill="rgba(255,255,255,0.04)" stroke="${CARD_HEX.line}" stroke-width="1"/>
+          ${cardCenteredText(x+boxW/2, y+24, String(s[0]), {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:0.5})}
+          ${cardCenteredText(x+boxW/2, y+50, String(s[1]), {size:20, weight:800, color:CARD_HEX.ink, font:CARD_FONT_DISPLAY})}`;
+      }).join("");
+      return `<svg viewBox="0 0 400 560" xmlns="http://www.w3.org/2000/svg">
+          ${bg}
+          ${cardCenteredText(200, 82, cardTruncate(entry.name,22), {size:nameSize, weight:800, font:CARD_FONT_DISPLAY, letterSpacing:0.5})}
+          ${cardCenteredText(200, 106, `${entry.college||"—"} · Class of ${entry.draftYear}`, {size:13, color:CARD_HEX.inkMuted})}
+          ${cardCenteredText(200, 128, teamsLine, {size:12, color:CARD_HEX.goldStrong})}
+          <circle cx="200" cy="210" r="58" fill="rgba(212,175,55,0.08)" stroke="${CARD_HEX.gold}" stroke-width="2.5"/>
+          ${cardCenteredText(200, 202, "PEAK OVERALL", {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:1})}
+          ${cardCenteredText(200, 238, String(entry.peakOverall||Math.round(entry.rating)), {size:42, weight:800, color:CARD_HEX.gold, font:CARD_FONT_DISPLAY})}
+          ${cardCenteredText(200, 296, entry.verdict, {size:14, weight:700, color:CARD_HEX.ink, font:CARD_FONT_DISPLAY})}
+          ${cardCenteredText(200, 318, trophyLine, {size:11, color:CARD_HEX.inkMuted})}
+          ${statHtml}
+          ${cardCenteredText(200, 540, "GRIDIRON LAB", {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:2})}
+        </svg>`;
+    }
+
+    // ----- back face -----
+    const badges = (entry.equippedBadges||[]);
+    const badgeDefs = badges.map(b=>{
+      const def = allBadgeDefs().find(d=>d.key===b.key);
+      return def ? { def, tier: def.category==="legend" ? "legend" : (b.tier||1) } : null;
+    }).filter(Boolean);
+    const badgeSlotsHtml = [0,1,2].map(i=>{
+      const cx = 108 + i*92, cy = 150;
+      const b = badgeDefs[i];
+      if(!b) return `<circle cx="${cx}" cy="${cy}" r="30" fill="none" stroke="${CARD_HEX.line}" stroke-width="2" stroke-dasharray="4 4"/>`;
+      return `${cardBadgeGlyphSVG(b.def, b.tier, cx, cy)}${cardCenteredText(cx, cy+50, b.def.name, {size:9, weight:700, color:CARD_HEX.ink})}`;
+    }).join("");
+    let y = 240;
+    const infoLines = [];
+    infoLines.push(["DRAFTED", entry.draftLine ? entry.draftLine.replace(/^\d{4}:\s*/,"") : "Undrafted"]);
+    infoLines.push(["HOW IT ENDED", cardExitLine(entry.exitReason)]);
+    if(entry.relationshipLine) infoLines.push(["OFF THE FIELD", entry.relationshipLine]);
+    const infoHtml = infoLines.map(([label, text])=>{
+      const html = `${cardCenteredText(200, y, label, {size:10, weight:700, color:CARD_HEX.goldStrong, font:CARD_FONT_DISPLAY, letterSpacing:1})}
+        ${cardCenteredText(200, y+20, cardTruncate(text,52), {size:13, color:CARD_HEX.ink})}`;
+      y += 56;
+      return html;
+    }).join("");
+    return `<svg viewBox="0 0 400 560" xmlns="http://www.w3.org/2000/svg">
+        ${bg}
+        ${cardCenteredText(200, 60, "CAREER FILE", {size:14, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:2})}
+        ${cardCenteredText(200, 205, "EQUIPPED BADGES", {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:1})}
+        ${badgeSlotsHtml}
+        ${infoHtml}
+        ${cardCenteredText(200, 540, `${entry.name} — ${entry.decade}`, {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:1})}
+      </svg>`;
+  }
+
+  function openBaseballCard(entry){
+    const overlay = document.getElementById("baseballCardOverlay");
+    if(!overlay || !entry) return;
+    overlay.innerHTML = `<div class="card-scene">
+        <button type="button" class="be-close card-close" id="cardCloseBtn" aria-label="Close">×</button>
+        <div class="card-flip" id="cardFlip">
+          <div class="card-face card-front">${buildCardFaceSVG(entry,"front")}</div>
+          <div class="card-face card-back">${buildCardFaceSVG(entry,"back")}</div>
+        </div>
+        <div class="card-actions">
+          <button type="button" class="btn btn-ghost" id="cardFlipBtn">Flip card</button>
+          <button type="button" class="btn btn-leather" id="cardExportBtn">Save as image</button>
+        </div>
+        <div class="card-export-status" id="cardExportStatus"></div>
+      </div>`;
+    overlay.classList.add("open");
+    overlay.setAttribute("aria-hidden","false");
+    const flipEl = overlay.querySelector("#cardFlip");
+    overlay.querySelector("#cardCloseBtn").addEventListener("click", closeBaseballCard);
+    overlay.querySelector("#cardFlipBtn").addEventListener("click", ()=> flipEl.classList.toggle("flipped"));
+    flipEl.addEventListener("click", ()=> flipEl.classList.toggle("flipped"));
+    overlay.querySelector("#cardExportBtn").addEventListener("click", (e)=>{ e.stopPropagation(); exportBaseballCard(entry); });
+  }
+  function closeBaseballCard(){
+    const overlay = document.getElementById("baseballCardOverlay");
+    if(!overlay) return;
+    overlay.classList.remove("open");
+    overlay.setAttribute("aria-hidden","true");
+    overlay.innerHTML = "";
+  }
+  function exportBaseballCard(entry){
+    const status = document.getElementById("cardExportStatus");
+    const front = buildCardFaceSVG(entry,"front");
+    const back = buildCardFaceSVG(entry,"back");
+    const combined = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="1140" viewBox="0 0 400 1140">
+        <rect width="400" height="1140" fill="${CARD_HEX.bg}"/>
+        <g>${front}</g>
+        <g transform="translate(0,580)">${back}</g>
+      </svg>`;
+    try{
+      const svgDataUri = "data:image/svg+xml;charset=utf-8;base64," + btoa(unescape(encodeURIComponent(combined)));
+      const img = new Image();
+      img.onload = ()=>{
+        const scale = 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = 400*scale; canvas.height = 1140*scale;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const pngUrl = canvas.toDataURL("image/png");
+        const a = document.createElement("a");
+        a.href = pngUrl;
+        a.download = `${entry.name.replace(/[^a-z0-9]+/gi,"_")}_card.png`;
+        document.body.appendChild(a); a.click(); a.remove();
+        if(status) status.textContent = "Saved.";
+      };
+      img.onerror = ()=>{ if(status) status.textContent = "Couldn't export an image in this browser — try a different browser."; };
+      img.src = svgDataUri;
+    }catch(e){
+      if(status) status.textContent = "Couldn't export an image in this browser — try a different browser.";
+    }
   }
 
   // ----- Local build profile: the practical version of "player accounts" on a platform with no
@@ -1566,6 +1775,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
   /* ================= Career state ================= */
   let career = null;
+  let lastFinishedCareerEntry = null; // trophy-room-entry-shaped snapshot of the career just finished, for "View Trading Card" on the HOF screen
 
   /* ----- contracts & money ----- */
   const CONTRACT_SCALE = {
@@ -6241,7 +6451,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     document.getElementById("hofNarrative").innerHTML = narrative.map((p,i)=> `<p${i===narrative.length-1?' class="legacy"':''}>${p}</p>`).join("");
 
     const t = career.totals;
-    saveTrophyRoomEntry({
+    const cardTeams = [];
+    career.seasonLog.forEach(s=>{ if(cardTeams[cardTeams.length-1]!==s.teamName) cardTeams.push(s.teamName); });
+    const trophyEntry = {
       id: `${Date.now()}_${Math.round(Math.random()*1e6)}`,
       name: career.name, college: career.college,
       hometownCity: career.hometown.city, hometownState: career.hometown.state,
@@ -6251,8 +6463,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       rushYards: t.rushYards, rushTd: t.rushTd, proBowls: t.proBowls, allPros: t.allPros,
       mvps: t.mvps, rings: t.rings, earnings: t.earnings,
       rating: passerRating(t.comp, t.att, t.yards, t.td, t.int),
+      peakOverall: Math.max(0, ...career.seasonLog.map(s=>s.overall||0)),
+      teams: cardTeams,
+      equippedBadges: (career.badges && career.badges.equipped ? career.badges.equipped.filter(Boolean).map(key=>({
+        key, tier: LEGEND_BADGES.some(b=>b.key===key) ? null : (career.badges.perfTier[key]||1),
+      })) : []),
+      draftLine: career.transactions[0] || null,
+      relationshipLine: career.relationship
+        ? `${career.relationship.status==="married"?"Married to":"Dating"} ${career.relationship.partnerName}, the ${career.relationship.partnerType}.`
+        : null,
       completedAt: Date.now(),
-    });
+    };
+    saveTrophyRoomEntry(trophyEntry);
+    lastFinishedCareerEntry = trophyEntry;
     const careerRecBy = {}; checkCareerRecords(t).forEach(r=> careerRecBy[r.key]=r);
     document.getElementById("totalsGrid").innerHTML = [
       ["Seasons", career.seasonLog.length],
@@ -6285,6 +6508,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
     showScreen("careerSummary");
   }
+
+  document.getElementById("viewCardBtn").addEventListener("click", ()=>{
+    if(lastFinishedCareerEntry) openBaseballCard(lastFinishedCareerEntry);
+  });
 
   document.getElementById("shareCareerBtn").addEventListener("click", ()=>{
     const verdict = hofVerdict();
@@ -6954,5 +7181,14 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
       document.querySelectorAll("#trophyRoomSortRow .tr-sort-btn").forEach(b=> b.classList.toggle("active", b===btn));
       renderTrophyRoomScreen();
     });
+  });
+  // #trophyRoomTable itself is never recreated (only its innerHTML, on every sort click), so one
+  // delegated listener here -- not inside buildTrophyRoomTableHTML -- is enough for every row ever
+  // rendered into it, same pattern as the careerContent listener above.
+  document.getElementById("trophyRoomTable").addEventListener("click", (e)=>{
+    const btn = e.target.closest("[data-card-id]");
+    if(!btn) return;
+    const entry = loadTrophyRoom().find(x=>x.id===btn.dataset.cardId);
+    if(entry) openBaseballCard(entry);
   });
 })();
