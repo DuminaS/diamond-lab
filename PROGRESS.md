@@ -270,6 +270,68 @@ per-item root causes below, all confirmed as real, verifiable gaps, not just vib
     fields present, and confirmed the Trophy Room screen displays that real entry by name. Zero page
     errors across all three passes.
 
+11. **Playstyle Badges: 24 collectible badges across two categories, with a 3-slot equip UI (shipped).**
+    Two kinds, both keyed by a stable string in the new `PERF_BADGES`/`LEGEND_BADGES` arrays:
+    - **Performance badges** (14: Gunslinger, Field General, Iron Man, Comeback Kid, Human Highlight
+      Reel, Dual Threat, Efficiency King, Untouchable, Workhorse, Franchise Cornerstone, Ball
+      Security, System Fit, Playoff Performer, Ageless Wonder) are tiered Bronze/Silver/Gold/
+      Platinum and RECOMPUTED every season — they rise and fall like Overall does, never a
+      permanent unlock. `recomputeBadges(eff)` is the only writer of `career.badges.perfTier`,
+      called once per season from `generateSeason()` right after totals are locked in and BEFORE
+      `developAttributes()` mutates `build` for next season, so a badge's tier reflects the
+      attributes that actually produced THAT season's play. Each badge's `score(eff, recent)`
+      blends this-season's effective attributes with a trailing 3-season window of real stat
+      output (yards/att, INT rate, sack rate, rushing production, passer rating, etc. depending on
+      the badge) — never attributes alone, so a badge can't be "won" purely by a good dice roll at
+      the Combine.
+    - **Legend badges** (10: Hollywood Ending, Against All Odds, Phoenix Rising, Iron Will, The
+      Unanimous, Old Man Winter, Loyal to the Death, Late Bloomer, Storybook Career, Scar Tissue —
+      the "unicorn of the league" tier, UI label "Legend") are one-time PERMANENT unlocks tied to
+      rare, specific career moments, several of them deliberately keyed off systems that don't move
+      Overall at all: Hollywood Ending needs a same-season ring AND marriage (reads
+      `career.relationship.startYear===career.year` off the Round 5 relationship-arc state machine);
+      Storybook Career needs 3+ `legendary`-flagged `career.lifeEventLog` entries (the same flag
+      RARE_EVENTS already sets); Phoenix Rising scans `season.devArcEvent` history for a bust
+      followed later by a breakout. `checkLegendBadges()` is the only writer of
+      `career.badges.legendUnlocked`, and only ever flips false→true — called from
+      `finalizePlayoffOutcome()` (so the just-finished season's ring/awards are already final) AND
+      from `finishCareer()` (so a career-ending-only condition like Loyal to the Death, which needs
+      `career.exitReason==="retired"`, can still fire on the last possible tick).
+
+    **Equip system**: `career.badges.equipped` holds up to `BADGE_EQUIP_CAP=3` badge keys — purely
+    cosmetic, a showcase of playstyle, deliberately changes no stat or odds. A new "Badges" dash-tab
+    (`buildBadgesTabHTML()`) shows the 3 slots plus the full 24-badge roster, locked cards showing a
+    vague hint (`def.hint`) instead of the exact numeric threshold. Clicking a slot
+    (`data-slot-index`, delegated through the same one-time `#careerContent` click listener that
+    already handles `data-rival-id`) opens `#badgeEquipOverlay` — a scrollable list of all 24 badges
+    on one side (locked ones greyed out and unclickable, a badge already equipped in another slot
+    marked and unclickable too) and the slot preview on the other; selecting an unlocked badge fills
+    the preview with a `pb-fill-anim` pop-in animation. Badge tier is shown via frame SHAPE, not just
+    color, so it reads at a glance even before checking the label: circle (Bronze) → hexagon
+    (Silver) → octagon (Gold, with a soft glow) → 8-point starburst (Platinum, stronger glow) →
+    diamond (Legend, animated shimmer). All 24 icons are hand-authored inline SVG glyphs
+    (`BADGE_ICONS`/`badgeIconSVG`) in the same stroke-based style as the rest of the game's charts —
+    no image assets.
+
+    **Calibration**: tier cutoffs are `score>=85/68/48/28` → Platinum/Gold/Silver/Bronze. A first
+    pass left every attribute-pure badge (Gunslinger, Field General, Comeback Kid, Ball Security,
+    System Fit, Untouchable, Dual Threat's attribute half) using a raw `weighted(eff,{...})` value
+    directly as the 0-100 score — since attributes sit in a ~45-92 practical range, this let ANY
+    flat-70 build hit Gold on 2 badges just for existing, no specialization required. Fixed (pure-
+    math sweep, no game code needed — see `badge_calib.mjs`-style diagnostic) by rescaling every
+    attribute-pure component through `scoreCurve(weighted(eff,{...}), 45, 92)` before blending: a
+    weak flat-50 build now sits mostly Locked/Bronze, a flat-70 generalist sits Silver, a genuine
+    specialist (e.g. elite ARM/DAC/IMP, everything else mediocre) maxes Platinum in Gunslinger while
+    staying Locked in Field General — confirmed via a synthetic sweep across 5 representative
+    profiles per badge before committing.
+
+    Verified via Playwright against a real dev build, one real season played through: Badges tab
+    renders exactly 3 slots and all 24 cards (14 perf + 10 legend) with a realistic locked/unlocked
+    mix after a single season; the equip picker lists all 24, refuses to equip a locked badge,
+    equips an unlocked one with the fill animation and updates both the slot label and the front-
+    office widget's new equipped-badge strip; removing an equipped badge correctly empties the slot
+    again. Zero page errors.
+
 Verified end-to-end via Playwright (not just diagnostics) across a real 8-season playthrough: zero
 page errors, opponent QB correctly shown every season in the Schedule tab, League News feed
 populated (23 entries by season 8), team-strength spread stayed realistic (range of 75 points across
@@ -362,3 +424,4 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `career.lifeEventLog` entries carry a `legendary` flag (from `RARE_EVENTS`) for retrospective narrative selection.
 - `loadLastBuildProfile()` / `saveLastBuildProfile(picks)` / `renderLastBuildStrip()` / `loadLastBuildIntoCombine()` — the local-profile system, storage key `gridironlab.lastbuild`.
 - `TROPHY_ROOM_KEY` / `loadTrophyRoom()` / `saveTrophyRoomEntry(entry)` / `buildTrophyRoomTableHTML(sortKey)` / `TROPHY_ROOM_SORTERS` (Round 5) — the cross-career leaderboard, storage key `gridironlab.trophyroom`, separate from the single-slot `gridironlab.activeCareer`/best-career save. `saveTrophyRoomEntry` is called exactly once, from `finishCareer()`, and is the ONLY writer — any future career-ending path should go through `finishCareer()` rather than writing a trophy-room entry directly, so the cap/truncation logic (`TROPHY_ROOM_CAP=60`, oldest dropped first) stays centralized. Record highlighting (`.tr-record`) is deliberately computed via `maxOf(key)` over the FULL stored list every render, independent of `sortKey` — never derive "is this a record" from position in the current sort, since the current sort is rarely by the column being highlighted.
+- `PERF_BADGES` / `LEGEND_BADGES` / `recomputeBadges(eff)` / `checkLegendBadges()` / `career.badges` (Round 5) — the Playstyle Badges system. `recomputeBadges` is the ONLY writer of `perfTier`, called from `generateSeason()` BEFORE `developAttributes()` runs (uses this season's attributes, not next season's); `checkLegendBadges` is the ONLY writer of `legendUnlocked`, called from both `finalizePlayoffOutcome()` and `finishCareer()` and is safe to call from both since it only ever flips false→true, never re-checks a badge already earned. Any future badge added to either array should follow the existing shape (`score`/`check` as a pure function of `career`/`build`/`eff`/`recent`, no side effects) so `recomputeBadges`/`checkLegendBadges` stay the single source of truth. `badgeStatusFor(key)`/`badgeFrameHTML(def,st)`/`badgeIconSVG(icon)` are shared by the Badges tab, the equip-picker overlay, and the front-office widget's equipped strip — extend these, don't duplicate badge-rendering logic at a new call site. Attribute-driven `score` functions must run raw `weighted(eff,{...})` through `scoreCurve(...,45,92)` before blending (see the Round 5 log entry's calibration note) — skipping that rescale is what let a mediocre flat-70 build hit Gold for free the first time this was written.

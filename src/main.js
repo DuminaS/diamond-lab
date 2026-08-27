@@ -701,6 +701,250 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return Math.round(((a+b+c+d)/6)*100*10)/10;
   }
 
+  /* ================= Playstyle Badges =================
+     Two categories, each keyed by a stable `key` string:
+       - PERF_BADGES: tiered (Bronze/Silver/Gold/Platinum), RECOMPUTED every season from a blend of
+         this-season's effective attributes and a trailing window of real stat output -- these rise
+         AND fall over a career, same as Overall, via recomputeBadges() below. Never "unlocked"
+         permanently; tier 0 just means not there yet (or anymore).
+       - LEGEND_BADGES: one-time, permanent unlocks tied to rare specific career moments (including
+         non-attribute lifepath/relationship events, not just stat lines) -- once true, they never
+         re-check or revert. This is the "unicorn of the league" tier, badge-UI label "Legend".
+     Both live in career.badges = { perfTier: {[key]: 0-4}, legendUnlocked: {[key]: bool},
+     equipped: [key|null, key|null, key|null] } (BADGE_EQUIP_CAP=3 slots, an "equip" is cosmetic --
+     it does not change any stat or odds, it's purely a showcase of playstyle). recomputeBadges() is
+     the ONLY writer of perfTier, called once per season from generateSeason() right after this
+     season's totals are locked in and BEFORE developAttributes() mutates build for next season, so
+     tiers reflect the attributes that actually produced THIS season's play. checkLegendBadges() is
+     the ONLY writer of legendUnlocked, called from finalizePlayoffOutcome() (so this season's ring/
+     awards are final) and again from finishCareer() (so a career-ending-only condition like "retired
+     with one team" can fire) -- safe to call from both since it only ever flips false to true. */
+  const BADGE_TIER_NAMES = ["Locked","Bronze","Silver","Gold","Platinum"];
+  const BADGE_EQUIP_CAP = 3;
+
+  function recentSeasons(n){ return career.seasonLog.slice(-n); }
+  function avgOf(list, fn){ if(!list.length) return 0; return list.reduce((s,x)=>s+fn(x),0)/list.length; }
+  function scoreCurve(value, lo, hi){ return clamp(((value-lo)/(hi-lo))*100, 0, 100); }
+
+  const BADGE_ICONS = {
+    bolt: `<path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/>`,
+    target: `<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4.3"/><circle cx="12" cy="12" r="1"/>`,
+    shield: `<path d="M12 3l7 3v6c0 5-3.5 7.8-7 9-3.5-1.2-7-4-7-9V6l7-3Z"/>`,
+    clock: `<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>`,
+    star: `<path d="M12 3l2.6 5.8 6.2.6-4.7 4.2 1.4 6.2L12 16.9 6.5 19.8l1.4-6.2-4.7-4.2 6.2-.6L12 3Z"/>`,
+    football: `<ellipse cx="12" cy="12" rx="9" ry="5.2" transform="rotate(-25 12 12)"/><path d="M7.6 10l8.8 4M8.8 8.5l1 2M15.2 15.5l-1-2M10 6.9l1 2.1M14 17.1l-1-2.1"/>`,
+    gauge: `<path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l4-5"/><circle cx="12" cy="15" r="1.1"/>`,
+    wing: `<path d="M3 13c4-6 9-8 13-6-2 1-3 2-3 4 3-1 6 0 8 3-5 1-9 0-12-2 0 3-2 5-6 5 2-1 3-2 3-4-1 1-2 1-3 0Z"/>`,
+    mountain: `<path d="M3 18l5-9 4 6 3-4 6 7Z"/>`,
+    anchor: `<circle cx="12" cy="5" r="2"/><path d="M12 7v13M7 13H3a9 9 0 0 0 9 8 9 9 0 0 0 9-8h-4M8 10h8"/>`,
+    lock: `<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>`,
+    chain: `<circle cx="8.5" cy="12" r="4"/><circle cx="15.5" cy="12" r="4"/>`,
+    crown: `<path d="M4 18h16l-1-8-4 3-3-6-3 6-4-3-1 8Z"/>`,
+    infinity: `<path d="M7 9a4.5 4.5 0 0 0 0 9c3 0 4-2 5-4.5S14 9 17 9a4.5 4.5 0 0 1 0 9c-3 0-4-2-5-4.5S9 9 7 9Z"/>`,
+    heart: `<path d="M12 20s-7-4.4-9.3-8.8C1 8 2.5 5 5.7 5c1.9 0 3.3 1 4.3 2.4C11 6 12.4 5 14.3 5c3.2 0 4.7 3 3 6.2C19 15.6 12 20 12 20Z"/>`,
+    compass: `<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5 5-2Z"/>`,
+    flame: `<path d="M12 2c1.2 3.8-3.6 5.2-3.6 9.6a3.6 3.6 0 1 0 7.2 0c0-1.6-.6-2.4-.6-2.4s.6 2.4-1 3.2c.8-2.6-1.6-3.6-1.6-6 0 0-.4 2.4 1.4 2.4-1.6-2.4.6-3.6-1.8-6.8Z"/>`,
+    gem: `<path d="M6 3h12l3 6-9 12L3 9Z"/><path d="M3 9h18M9 3l-3 6 6 12 6-12-3-6"/>`,
+    sunrise: `<path d="M12 3v3M4.2 10.2l2.1 2.1M19.8 10.2l-2.1 2.1M2 18h20M6 18a6 6 0 0 1 12 0"/>`,
+    book: `<path d="M4 5c2-1 5-1 8 0v14c-3-1-6-1-8 0V5ZM20 5c-2-1-5-1-8 0v14c3-1 6-1 8 0V5Z"/>`,
+  };
+  function badgeIconSVG(key){
+    return `<svg viewBox="0 0 24 24" class="pb-icon-svg" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${BADGE_ICONS[key]||BADGE_ICONS.star}</svg>`;
+  }
+
+  const PERF_BADGES = [
+    { key:"gunslinger", name:"Gunslinger", icon:"bolt",
+      blurb:"Lives on the deep ball — arm talent that dares defenses to stop it.",
+      hint:"Build around Arm Strength, Deep Ball Accuracy, and Improvisation.",
+      score: (eff, recent)=> scoreCurve(weighted(eff, {ARM:0.45, DAC:0.35, IMP:0.20}), 45, 92) },
+    { key:"fieldgeneral", name:"Field General", icon:"target",
+      blurb:"Sees the whole defense before the snap and rarely makes the wrong read.",
+      hint:"Build around Short & Intermediate Accuracy, Decision Making, and Anticipation.",
+      score: (eff, recent)=> scoreCurve(weighted(eff, {SHA:0.35, DEC:0.35, ANT:0.30}), 45, 92) },
+    { key:"ironman", name:"Iron Man", icon:"shield",
+      blurb:"Shows up every Sunday, wear and tear be damned.",
+      hint:"Keep Durability high and Wear & Tear low — avoid gutting out injuries too often.",
+      score: (eff, recent)=>{
+        const missShare = avgOf(recent, s=>{ const denom = s.games+(s.missedGames||0); return denom>0 ? (s.missedGames||0)/denom : 0; });
+        return clamp(build.DUR*0.5 + (100-(career.wearAndTear||0))*0.3 + (100-missShare*100)*0.2, 0, 100);
+      } },
+    { key:"comebackkid", name:"Comeback Kid", icon:"clock",
+      blurb:"Wants the ball with the season on the line.",
+      hint:"Build around Clutch, and close out seasons with playoff runs.",
+      score: (eff, recent)=>{
+        const ringBonus = recent.some(s=> s.playoffs && s.playoffs.wonRing) ? 15 : 0;
+        return clamp(scoreCurve(weighted(eff, {CLU:0.6, DEC:0.2, ANT:0.2}), 45, 92) + ringBonus, 0, 100);
+      } },
+    { key:"highlightreel", name:"Human Highlight Reel", icon:"star",
+      blurb:"One snap from breaking the game open at any moment.",
+      hint:"Push yards-per-attempt and touchdown rate — chunk plays over checkdowns.",
+      score: (eff, recent)=>{
+        const ypa = avgOf(recent, s=> s.att>0 ? s.yards/s.att : 0);
+        const tdRate = avgOf(recent, s=> s.att>0 ? s.td/s.att : 0);
+        return clamp(scoreCurve(ypa,6,9.5)*0.5 + scoreCurve(tdRate,0.03,0.08)*0.3 + scoreCurve(weighted(eff,{ARM:1}),45,92)*0.2, 0, 100);
+      } },
+    { key:"dualthreat", name:"Dual Threat", icon:"football",
+      blurb:"A running game defenses have to account for on every snap.",
+      hint:"Build around Mobility and Improvisation, and rack up rushing production.",
+      score: (eff, recent)=>{
+        const rushProd = avgOf(recent, s=> (s.rushYards||0) + (s.rushTd||0)*20);
+        return clamp(scoreCurve(rushProd,150,650)*0.55 + scoreCurve(weighted(eff,{MOB:0.7,IMP:0.3}),45,92)*0.45, 0, 100);
+      } },
+    { key:"efficiencyking", name:"Efficiency King", icon:"gauge",
+      blurb:"Doesn't miss — the passer rating stays elite year after year.",
+      hint:"Keep passer rating high across your recent seasons.",
+      score: (eff, recent)=> scoreCurve(avgOf(recent, s=>s.rating), 82, 108) },
+    { key:"untouchable", name:"Untouchable", icon:"wing",
+      blurb:"The pocket collapses around everyone else — never around him.",
+      hint:"Build around Pocket Presence and keep the sack rate down.",
+      score: (eff, recent)=>{
+        const sackRate = avgOf(recent, s=> s.att>0 ? s.sacks/s.att : 0);
+        return clamp(scoreCurve(sackRate,0.11,0.02)*0.5 + scoreCurve(weighted(eff,{PKT:1}),45,92)*0.3 + scoreCurve(career.oline||60,30,85)*0.2, 0, 100);
+      } },
+    { key:"workhorse", name:"Workhorse", icon:"mountain",
+      blurb:"The offense runs through him, snap after snap, season after season.",
+      hint:"Stay on the field and carry a heavy passing volume.",
+      score: (eff, recent)=>{
+        const perGame = avgOf(recent, s=> s.games>0 ? s.att/s.games : 0);
+        return clamp(scoreCurve(perGame,26,38)*0.7 + build.DUR*0.3, 0, 100);
+      } },
+    { key:"cornerstone", name:"Franchise Cornerstone", icon:"anchor",
+      blurb:"The face of the franchise, year after year, through thick and thin.",
+      hint:"Stay with one team for a long stretch of your career.",
+      score: (eff, recent)=>{
+        let streak=0;
+        for(let i=career.seasonLog.length-1;i>=0;i--){ if(career.seasonLog[i].teamId===career.teamId) streak++; else break; }
+        return clamp(scoreCurve(streak,2,11)*0.75 + scoreCurve(career.teamStrength,50,85)*0.25, 0, 100);
+      } },
+    { key:"ballsecurity", name:"Ball Security", icon:"lock",
+      blurb:"Protects the football like it's the only one left in the building.",
+      hint:"Build around Decision Making and keep the interception rate down.",
+      score: (eff, recent)=>{
+        const intRate = avgOf(recent, s=> s.att>0 ? s.int/s.att : 0);
+        return clamp(scoreCurve(intRate,0.045,0.01)*0.6 + scoreCurve(weighted(eff,{DEC:1}),45,92)*0.4, 0, 100);
+      } },
+    { key:"systemfit", name:"System Fit", icon:"chain",
+      blurb:"Makes everyone around him better — the whole cast plays up to him.",
+      hint:"Build around Touch & Ball Placement, and land on a team with strong weapons/line.",
+      score: (eff, recent)=> clamp(scoreCurve(weighted(eff,{TCH:1}),45,92)*0.55 + scoreCurve(((career.oline||60)+(career.weapons||60))/2,45,85)*0.45, 0, 100) },
+    { key:"playoffperformer", name:"Playoff Performer", icon:"crown",
+      blurb:"Turns it up a notch exactly when the games start to matter.",
+      hint:"Reach the postseason often, and bring home rings.",
+      score: (eff, recent)=>{
+        const ringRate = recent.filter(s=> s.playoffs && s.playoffs.wonRing).length / Math.max(1,recent.length);
+        const madePlayoffs = recent.filter(s=> s.playoffs && s.playoffs.made).length / Math.max(1,recent.length);
+        return clamp(ringRate*70 + madePlayoffs*30, 0, 100);
+      } },
+    { key:"agelesswonder", name:"Ageless Wonder", icon:"infinity",
+      blurb:"Somehow still playing his best football deep into his thirties.",
+      hint:"Keep performing at a high level well past age 32.",
+      score: (eff, recent)=>{
+        if(career.age<32) return 0;
+        return clamp(scoreCurve(career.age,32,42)*0.4 + scoreCurve(avgOf(recent,s=>s.rating),85,105)*0.6, 0, 100);
+      } },
+  ];
+
+  const LEGEND_BADGES = [
+    { key:"hollywoodending", name:"Hollywood Ending", icon:"heart",
+      blurb:"Won it all the same year he put a ring on it, off the field too.",
+      hint:"Win a championship the same season you get married.",
+      check: ()=>{ const last = career.seasonLog[career.seasonLog.length-1];
+        return !!(career.relationship && career.relationship.status==="married" && career.relationship.startYear===career.year && last && last.playoffs && last.playoffs.wonRing); } },
+    { key:"againstallodds", name:"Against All Odds", icon:"compass",
+      blurb:"Dragged a roster that had no business contending to the top of the mountain.",
+      hint:"Win an MVP or a championship on a bottom-tier (under 45 grade) team.",
+      check: ()=> career.seasonLog.some(s=> s.teamOverall<45 && ((s.awards||[]).includes("MVP") || (s.playoffs&&s.playoffs.wonRing))) },
+    { key:"phoenixrising", name:"Phoenix Rising", icon:"flame",
+      blurb:"Written off after a bust stretch, then came back better than ever.",
+      hint:"Recover from a bust development swing with a later breakout.",
+      check: ()=>{ let sawBust=false;
+        for(const s of career.seasonLog){
+          if(s.devArcEvent && s.devArcEvent.type==="bust") sawBust=true;
+          if(sawBust && s.devArcEvent && s.devArcEvent.type==="breakout") return true;
+        }
+        return false; } },
+    { key:"ironwill", name:"Iron Will", icon:"shield",
+      blurb:"Played through more pain than the roster around him ever knew.",
+      hint:"Make Pro Bowl or All-Pro in a season your Wear & Tear meter is above 45.",
+      check: ()=>{ const last = career.seasonLog[career.seasonLog.length-1];
+        return !!(last && (career.wearAndTear||0)>45 && ((last.awards||[]).includes("Pro Bowl")||(last.awards||[]).includes("All-Pro"))); } },
+    { key:"theunanimous", name:"The Unanimous", icon:"star",
+      blurb:"An MVP season nobody in the league could argue with.",
+      hint:"Win MVP with a passer rating of 105 or higher.",
+      check: ()=>{ const last = career.seasonLog[career.seasonLog.length-1];
+        return !!(last && (last.awards||[]).includes("MVP") && last.rating>=105); } },
+    { key:"oldmanwinter", name:"Old Man Winter", icon:"gem",
+      blurb:"Still doing it well past the age everyone said he'd be done.",
+      hint:"Make Pro Bowl, All-Pro, or win a ring at age 38 or older.",
+      check: ()=>{ const last = career.seasonLog[career.seasonLog.length-1];
+        return !!(last && career.age>=38 && ((last.awards||[]).includes("Pro Bowl")||(last.awards||[]).includes("All-Pro")||(last.playoffs&&last.playoffs.wonRing))); } },
+    { key:"loyaltothedeath", name:"Loyal to the Death", icon:"anchor",
+      blurb:"One team, one city, an entire career — and he walked away on his own terms.",
+      hint:"Retire (not released or traded away) after 10+ seasons with a single team.",
+      check: ()=> career.exitReason==="retired" && career.seasonLog.length>=10 && career.seasonLog.every(s=>s.teamId===career.teamId) },
+    { key:"latebloomer", name:"Late Bloomer", icon:"sunrise",
+      blurb:"Took the long way to stardom, and got there anyway.",
+      hint:"Earn your first Pro Bowl or All-Pro nod at age 30 or older.",
+      check: ()=>{ const first = career.seasonLog.find(s=> (s.awards||[]).includes("Pro Bowl")||(s.awards||[]).includes("All-Pro"));
+        return !!(first && first.age>=30); } },
+    { key:"storybook", name:"Storybook Career", icon:"book",
+      blurb:"A career people will still be telling stories about decades from now.",
+      hint:"Rack up 3 or more legendary career moments.",
+      check: ()=> (career.lifeEventLog||[]).filter(e=>e.legendary).length>=3 },
+    { key:"scartissue", name:"Scar Tissue", icon:"mountain",
+      blurb:"Broken down more than once, and got back up every single time.",
+      hint:"Survive 2 or more permanent wear-and-tear breakdowns.",
+      check: ()=> career.seasonLog.filter(s=>s.wearBreakdown).length>=2 },
+  ];
+
+  function allBadgeDefs(){ return [...PERF_BADGES.map(b=>({...b,category:"perf"})), ...LEGEND_BADGES.map(b=>({...b,category:"legend"}))]; }
+
+  function ensureBadgeState(){
+    if(!career.badges) career.badges = { perfTier:{}, legendUnlocked:{}, equipped:[null,null,null] };
+  }
+
+  // The only writer of perfTier -- called once per season from generateSeason(), using this
+  // season's own effective attributes (not next season's, which developAttributes hasn't set yet).
+  function recomputeBadges(eff){
+    ensureBadgeState();
+    const recent = recentSeasons(3);
+    PERF_BADGES.forEach(b=>{
+      const score = clamp(b.score(eff, recent), 0, 100);
+      let tier = 0;
+      if(score>=85) tier=4; else if(score>=68) tier=3; else if(score>=48) tier=2; else if(score>=28) tier=1;
+      career.badges.perfTier[b.key] = tier;
+    });
+    career.badges.equipped = career.badges.equipped.map(key=> key && (career.badges.perfTier[key]>0 || career.badges.legendUnlocked[key]) ? key : null);
+  }
+
+  // The only writer of legendUnlocked -- permanent, never re-checked once true. Called from both
+  // finalizePlayoffOutcome() (this season's ring/awards are final by then) and finishCareer() (so a
+  // career-ending-only condition, like retiring with one team, can still fire).
+  function checkLegendBadges(){
+    ensureBadgeState();
+    LEGEND_BADGES.forEach(b=>{
+      if(career.badges.legendUnlocked[b.key]) return;
+      if(b.check()) career.badges.legendUnlocked[b.key] = true;
+    });
+  }
+
+  function badgeStatusFor(key){
+    ensureBadgeState();
+    const def = allBadgeDefs().find(b=>b.key===key);
+    if(!def) return null;
+    if(def.category==="perf"){
+      const tier = career.badges.perfTier[key]||0;
+      return { def, tier, unlocked: tier>0 };
+    }
+    const unlocked = !!career.badges.legendUnlocked[key];
+    return { def, tier: unlocked?1:0, unlocked };
+  }
+
+  function badgeFrameHTML(def, st){
+    const tierClass = def.category==="legend" ? (st.unlocked?"legend":"locked") : (st.unlocked?`tier-${st.tier}`:"locked");
+    return `<div class="pb-frame ${tierClass}">${badgeIconSVG(def.icon)}</div>`;
+  }
+
   function safeStorage(){ try{ const k="__glab__"; localStorage.setItem(k,"1"); localStorage.removeItem(k); return window.localStorage; }catch(e){ return null; } }
   const store = safeStorage();
   // In-memory fallback, alongside localStorage: some embedded/preview contexts silently block
@@ -1585,6 +1829,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       weapons: rollSupportingCastGrade(leagueStrength[team.id]),
       wearAndTear: 0,
       relationship: null,
+      badges: { perfTier:{}, legendUnlocked:{}, equipped:[null,null,null] },
       teamScheme,
       gmRelationship: 50,
       fanSupport: 50,
@@ -2946,6 +3191,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.totals.yards += yards; career.totals.td += td; career.totals.int += interceptions; career.totals.sacks += sacks;
     career.totals.rushYards += rushYards; career.totals.rushTd += rushTd;
     career.totals.earnings += career.contract.apy;
+
+    // Playstyle badge tiers use THIS season's effective attributes (eff, above) -- called here,
+    // before developAttributes() below mutates build for next season.
+    recomputeBadges(eff);
 
     if(!career.peakSeason || rating>career.peakSeason.rating) career.peakSeason = season;
 
@@ -4894,7 +5143,130 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         </div>
         ${scheme ? `<div class="fo-scheme-line">Running <b>${scheme.name}</b> — ${schemeFavorText(schemeId) || "no strong lean"}. <span class="fo-scheme-link" data-goto-scheme="1">See details →</span></div>` : ""}
         ${career.relationship ? `<div class="fo-scheme-line">${career.relationship.status==="married"?"Married to":"Dating"} <b>${svgEscape(career.relationship.partnerName)}</b>, the ${svgEscape(career.relationship.partnerType)}, since ${career.relationship.startYear}.</div>` : ""}
+        ${(career.badges && career.badges.equipped.some(k=>k)) ? `<div class="fo-row">
+          <div class="fo-row-head"><span class="fo-row-label">Equipped Badges</span></div>
+          <div class="pb-fo-row">${career.badges.equipped.map(k=>{
+            if(!k) return `<div class="pb-fo-slot empty"></div>`;
+            const st = badgeStatusFor(k);
+            return st ? `<div class="pb-fo-slot" title="${svgEscape(st.def.name)}">${badgeFrameHTML(st.def, st)}</div>` : `<div class="pb-fo-slot empty"></div>`;
+          }).join("")}</div>
+        </div>` : ""}
       </div>`;
+  }
+
+  /* Playstyle Badges tab: 3 cosmetic equip slots up top (click to open the equip picker), then
+     the full roster below -- unlocked cards show their current tier/status, locked ones show a
+     vague hint instead of the exact threshold. */
+  function buildBadgesTabHTML(){
+    ensureBadgeState();
+    const slots = [0,1,2].map(i=>{
+      const key = career.badges.equipped[i];
+      const st = key ? badgeStatusFor(key) : null;
+      return `<div class="pb-slot${st?" filled":""}" data-slot-index="${i}">
+          ${st ? badgeFrameHTML(st.def, st) : `<div class="be-empty-badge">+</div>`}
+          <div class="pb-slot-label">${st?svgEscape(st.def.name):"Empty"}</div>
+        </div>`;
+    }).join("");
+    const cardFor = def=>{
+      const st = badgeStatusFor(def.key);
+      const tierLabel = def.category==="legend" ? (st.unlocked?"Legend":"Locked") : BADGE_TIER_NAMES[st.tier];
+      return `<div class="pb-card${st.unlocked?"":" is-locked"}">
+          <div class="pb-slot" style="cursor:default;">${badgeFrameHTML(def, st)}</div>
+          <div class="pb-card-name">${svgEscape(def.name)}</div>
+          <div class="pb-card-tier">${tierLabel}</div>
+          <div class="pb-card-hint">${st.unlocked ? svgEscape(def.blurb) : svgEscape(def.hint)}</div>
+        </div>`;
+    };
+    const perfCards = PERF_BADGES.map(def=>cardFor({...def,category:"perf"})).join("");
+    const legendCards = LEGEND_BADGES.map(def=>cardFor({...def,category:"legend"})).join("");
+    return `<div class="calc-refnote">Equip up to ${BADGE_EQUIP_CAP} badges — a showcase of playstyle, not a stat boost. Performance badges rise and fall with recent play; Legend badges are permanent once earned.</div>
+      <div class="pb-equip-row">${slots}</div>
+      <div class="section-label" style="margin-top:1.4rem;">Performance Badges</div>
+      <div class="pb-grid">${perfCards}</div>
+      <div class="section-label" style="margin-top:1.4rem;">Legend Badges</div>
+      <div class="pb-grid">${legendCards}</div>`;
+  }
+
+  function buildBadgeEquipHTML(slotIndex, currentKey){
+    const items = allBadgeDefs().map(def=>{
+      const st = badgeStatusFor(def.key);
+      const equippedElsewhere = career.badges.equipped.some((k,i)=> k===def.key && i!==slotIndex);
+      const locked = !st.unlocked;
+      const tierLabel = def.category==="perf" ? BADGE_TIER_NAMES[st.tier] : (st.unlocked?"Legend":"Locked");
+      return `<div class="be-list-item${locked?" locked":""}${equippedElsewhere?" elsewhere":""}${def.key===currentKey?" selected":""}" data-badge-key="${def.key}">
+          <div class="be-list-icon">${badgeFrameHTML(def, st)}</div>
+          <div class="be-list-text">
+            <div class="be-list-name">${svgEscape(def.name)}</div>
+            <div class="be-list-sub">${locked ? svgEscape(def.hint) : (equippedElsewhere ? "Equipped in another slot" : tierLabel)}</div>
+          </div>
+        </div>`;
+    }).join("");
+    const current = currentKey ? badgeStatusFor(currentKey) : null;
+    return `<div class="badge-equip-card">
+        <div class="be-header"><div class="be-title">Equip Badge — Slot ${slotIndex+1}</div><button type="button" class="be-close" id="beCloseBtn" aria-label="Close">×</button></div>
+        <div class="be-body">
+          <div class="be-list">${items}</div>
+          <div class="be-preview">
+            <div class="be-slot-preview" id="beSlotPreview">${current ? badgeFrameHTML(current.def, current) : `<div class="be-empty-badge">?</div>`}</div>
+            <div class="be-preview-name" id="bePreviewName">${current?svgEscape(current.def.name):"Choose a badge"}</div>
+            <div class="be-preview-desc" id="bePreviewDesc">${current?svgEscape(current.def.blurb):"Select an unlocked badge from the list to equip it in this slot."}</div>
+            <div class="be-preview-actions">${currentKey ? `<button type="button" class="btn btn-ghost" id="beUnequipBtn">Remove badge</button>` : ""}</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function wireBadgeEquipOverlay(){
+    const overlay = document.getElementById("badgeEquipOverlay");
+    if(!overlay) return;
+    const closeBtn = overlay.querySelector("#beCloseBtn");
+    if(closeBtn) closeBtn.addEventListener("click", closeBadgeEquip);
+    overlay.querySelectorAll(".be-list-item").forEach(item=>{
+      item.addEventListener("click", ()=>{
+        if(item.classList.contains("locked") || item.classList.contains("elsewhere")) return;
+        const key = item.dataset.badgeKey;
+        const slotIndex = Number(overlay.dataset.slot);
+        career.badges.equipped[slotIndex] = key;
+        overlay.innerHTML = buildBadgeEquipHTML(slotIndex, key);
+        wireBadgeEquipOverlay();
+        const preview = overlay.querySelector("#beSlotPreview");
+        if(preview) preview.classList.add("pb-fill-anim");
+        refreshBadgesUI();
+      });
+    });
+    const unequipBtn = overlay.querySelector("#beUnequipBtn");
+    if(unequipBtn) unequipBtn.addEventListener("click", ()=>{
+      const slotIndex = Number(overlay.dataset.slot);
+      career.badges.equipped[slotIndex] = null;
+      overlay.innerHTML = buildBadgeEquipHTML(slotIndex, null);
+      wireBadgeEquipOverlay();
+      refreshBadgesUI();
+    });
+  }
+
+  function openBadgeEquip(slotIndex){
+    ensureBadgeState();
+    const overlay = document.getElementById("badgeEquipOverlay");
+    if(!overlay) return;
+    overlay.dataset.slot = String(slotIndex);
+    overlay.innerHTML = buildBadgeEquipHTML(slotIndex, career.badges.equipped[slotIndex]);
+    overlay.classList.add("open");
+    overlay.setAttribute("aria-hidden", "false");
+    wireBadgeEquipOverlay();
+  }
+  function closeBadgeEquip(){
+    const overlay = document.getElementById("badgeEquipOverlay");
+    if(!overlay) return;
+    overlay.classList.remove("open");
+    overlay.setAttribute("aria-hidden", "true");
+    overlay.innerHTML = "";
+    refreshBadgesUI();
+  }
+  function refreshBadgesUI(){
+    const panel = document.getElementById("tabpanel-badges");
+    if(panel) panel.innerHTML = buildBadgesTabHTML();
+    const foWidget = document.querySelector(".front-office-widget");
+    if(foWidget) foWidget.outerHTML = buildFrontOfficeWidgetHTML();
   }
 
   function buildEventLogFeedHTML(){
@@ -5018,6 +5390,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
               <button type="button" class="dash-tab" data-tab="trends">Career Trends</button>
               <button type="button" class="dash-tab" data-tab="attributes">Attributes</button>
               <button type="button" class="dash-tab" data-tab="scheme">Scheme</button>
+              <button type="button" class="dash-tab" data-tab="badges">Badges</button>
               <button type="button" class="dash-tab" data-tab="log">Log</button>
             </div>
             <button type="button" class="dash-tab-arrow" id="dashTabNext" aria-label="Next tab">›</button>
@@ -5053,6 +5426,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <div class="dash-tabpanel" id="tabpanel-trends">${buildTrendsTabHTML()}</div>
           <div class="dash-tabpanel" id="tabpanel-attributes">${buildAttributesTabHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-scheme">${buildSchemeTabHTML()}</div>
+          <div class="dash-tabpanel" id="tabpanel-badges">${buildBadgesTabHTML()}</div>
           <div class="dash-tabpanel" id="tabpanel-log">${buildEventLogFeedHTML()}</div>
         </div>
         <div class="season-actions" id="seasonActions"></div>
@@ -5623,6 +5997,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       // unrealistic.
       career._cutShieldSeasons = Math.max(career._cutShieldSeasons||0, 2);
     }
+    checkLegendBadges();
+    const badgesPanel = document.getElementById("tabpanel-badges");
+    if(badgesPanel) badgesPanel.innerHTML = buildBadgesTabHTML();
     const badgeRow = document.getElementById("badgeRow");
     if(badgeRow) badgeRow.innerHTML = season.awards.map(a=>`<span class="badge ${/Champion$/.test(a)||a==="MVP"?"gold":"good"}">${a}</span>`).join("");
     const foWidget = document.querySelector(".front-office-widget");
@@ -5837,6 +6214,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
   function finishCareer(){
     clearActiveCareer();
+    checkLegendBadges(); // catches career-ending-only conditions (e.g. Loyal to the Death) now that exitReason is set
     const verdict = hofVerdict();
     SFX.retirement(verdict.tier);
     const best = loadBest();
@@ -6554,6 +6932,8 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
   document.getElementById("careerContent").addEventListener("click", (e)=>{
     const link = e.target.closest("[data-rival-id]");
     if(link) openRivalProfile(link.dataset.rivalId);
+    const slot = e.target.closest("[data-slot-index]");
+    if(slot) openBadgeEquip(Number(slot.dataset.slotIndex));
   });
 
   // Trophy Room: static screen (never recreated), so all wiring happens once, here.

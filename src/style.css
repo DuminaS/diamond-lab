@@ -307,6 +307,62 @@
   /* Trophy Room: gold cell = this browser's all-time record in that column */
   .tr-record{ color: var(--gold); font-weight: 800; }
 
+  /* ===== Playstyle Badges ===== */
+  .pb-equip-row{ display:flex; gap:1.1rem; margin-top:1rem; flex-wrap:wrap; }
+  .pb-slot{ width:84px; height:84px; border-radius:14px; border:2px dashed var(--line-strong); display:flex; align-items:center; justify-content:center; cursor:pointer; position:relative; background:rgba(255,255,255,0.02); transition:transform 0.15s ease, border-color 0.15s ease; margin-bottom:1.1rem; }
+  .pb-slot:hover{ transform:translateY(-2px); border-color:var(--gold); }
+  .pb-slot.filled{ border-style:solid; border-color:transparent; }
+  .pb-slot-label{ position:absolute; bottom:-1.25rem; left:0; right:0; text-align:center; font-size:0.62rem; color:var(--ink-muted); text-transform:uppercase; letter-spacing:0.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  .pb-frame{ width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:var(--field-ink); }
+  .pb-icon-svg{ width:56%; height:56%; }
+  .pb-frame.tier-1{ background:linear-gradient(160deg,#c99a6b,#8a5a34); clip-path:circle(46% at 50% 50%); }
+  .pb-frame.tier-2{ background:linear-gradient(160deg,#d7dbe2,#9298a6); clip-path:polygon(25% 4%,75% 4%,100% 50%,75% 96%,25% 96%,0% 50%); }
+  .pb-frame.tier-3{ background:linear-gradient(160deg,var(--field-strong),var(--leather)); clip-path:polygon(50% 2%,79% 12%,98% 38%,92% 70%,68% 96%,32% 96%,8% 70%,2% 38%,21% 12%); }
+  .pb-frame.tier-4{ background:linear-gradient(160deg,#fff3c4,var(--field-strong)); clip-path:polygon(50% 0%,61% 35%,98% 35%,68% 57%,79% 91%,50% 70%,21% 91%,32% 57%,2% 35%,39% 35%); box-shadow:0 0 14px rgba(212,175,55,0.55); }
+  .pb-frame.legend{ background:linear-gradient(160deg,#fff8e0,var(--field-strong) 55%,var(--leather)); clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%); box-shadow:0 0 16px rgba(212,175,55,0.6); animation: pbLegendGlow 2.4s ease-in-out infinite; }
+  @keyframes pbLegendGlow{ 0%,100%{ box-shadow:0 0 10px rgba(212,175,55,0.4);} 50%{ box-shadow:0 0 20px rgba(212,175,55,0.85);} }
+  .pb-frame.locked{ background:rgba(255,255,255,0.06); color:var(--ink-muted); box-shadow:none; animation:none; clip-path:circle(46% at 50% 50%); }
+
+  .pb-fill-anim{ animation: pbFillPop 0.42s cubic-bezier(.34,1.56,.64,1); }
+  @keyframes pbFillPop{ 0%{ transform:scale(0.4); opacity:0;} 60%{ transform:scale(1.12); opacity:1;} 100%{ transform:scale(1); opacity:1;} }
+
+  .pb-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:0.8rem; margin-top:0.9rem; }
+  .pb-card{ border:1px solid var(--line); border-radius:12px; padding:0.8rem 0.7rem 0.7rem; display:flex; flex-direction:column; align-items:center; text-align:center; gap:0.35rem; background:rgba(255,255,255,0.015); }
+  .pb-card.is-locked{ opacity:0.6; }
+  .pb-card-name{ font-size:0.78rem; font-weight:700; margin-top:0.3rem; }
+  .pb-card-tier{ font-size:0.64rem; color:var(--gold); text-transform:uppercase; letter-spacing:0.05em; font-weight:700; }
+  .pb-card.is-locked .pb-card-tier{ color:var(--ink-muted); }
+  .pb-card-hint{ font-size:0.66rem; color:var(--ink-muted); line-height:1.35; }
+
+  .pb-fo-row{ display:flex; gap:0.5rem; margin-top:0.35rem; }
+  .pb-fo-slot{ width:34px; height:34px; }
+  .pb-fo-slot.empty{ border:1.5px dashed var(--line-strong); border-radius:50%; }
+
+  .badge-equip-overlay{ display:none; position:fixed; inset:0; background:rgba(6,10,8,0.75); z-index:212; align-items:center; justify-content:center; padding:1.25rem; overflow-y:auto; }
+  .badge-equip-overlay.open{ display:flex; }
+  .badge-equip-card{ background:var(--surface); border:1.5px solid var(--field); border-radius:10px; width:min(720px,96vw); max-height:88vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 12px 40px rgba(0,0,0,0.5); margin:auto; }
+  .be-header{ display:flex; align-items:center; justify-content:space-between; padding:0.9rem 1.1rem; border-bottom:1px solid var(--line); }
+  .be-title{ font-family:var(--display); font-weight:700; letter-spacing:0.02em; }
+  .be-close{ background:none; border:none; color:var(--ink-muted); font-size:1.5rem; cursor:pointer; line-height:1; padding:0 0.3rem; }
+  .be-close:hover{ color:var(--ink); }
+  .be-body{ display:flex; flex:1; min-height:0; }
+  .be-list{ flex:1.2; overflow-y:auto; padding:0.7rem; border-right:1px solid var(--line); max-height:60vh; }
+  .be-list-item{ display:flex; align-items:center; gap:0.6rem; padding:0.5rem 0.6rem; border-radius:10px; cursor:pointer; }
+  .be-list-item:hover{ background:rgba(255,255,255,0.05); }
+  .be-list-item.locked{ cursor:default; opacity:0.5; }
+  .be-list-item.elsewhere{ cursor:default; opacity:0.6; }
+  .be-list-item.selected{ background:rgba(212,175,55,0.15); }
+  .be-list-icon{ width:36px; height:36px; flex:none; }
+  .be-list-text{ text-align:left; min-width:0; }
+  .be-list-name{ font-size:0.8rem; font-weight:700; }
+  .be-list-sub{ font-size:0.65rem; color:var(--ink-muted); }
+  .be-preview{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:1.3rem 1rem; gap:0.55rem; text-align:center; }
+  .be-slot-preview{ width:104px; height:104px; }
+  .be-empty-badge{ width:100%; height:100%; border-radius:50%; border:2px dashed var(--line-strong); display:flex; align-items:center; justify-content:center; font-size:1.9rem; color:var(--ink-muted); }
+  .be-preview-name{ font-weight:800; }
+  .be-preview-desc{ font-size:0.72rem; color:var(--ink-muted); max-width:220px; }
+
   /* Sim-historical-best badge: distinct from .record-badge above -- that one flags a REAL-world
      NFL record, this one flags the best THIS PLAYTHROUGH'S own simulated league has produced, so
      it gets its own color (a cool blue instead of gold) to read as a clearly different kind of claim. */
