@@ -2140,12 +2140,29 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       leagueRivals: [],
       leagueDepthCharts: {},
       rivalries: {},
+      isBackup: false,
+      _backupSeasonsCount: 0,
       leagueNewsLog: [],
       devSpeed: rollDevSpeed(),
       devCarry: {},
       originalBuild: {...build},
     };
     career.leagueRivals = generateLeagueRivals();
+    // Player's own team gets a depth chart too (QB2/QB3 behind whoever's QB1) -- purely
+    // informational/flavor, never a mechanism that can autonomously bench the player (that's what
+    // the incumbent check right below is for; see PROGRESS.md Round 7 for the scope boundary).
+    career.leagueDepthCharts[team.id] = generateDepthChart(team.id, decade, draftYear, leagueStrength[team.id]);
+    // Is there already an established, entrenched starter blocking this rookie? A true 1st-round
+    // pick only sits behind a truly elite incumbent; anyone else needs a merely-good one. If so,
+    // the player starts as QB2 and has to win the job -- see resolveBackupSeasonSnaps/the
+    // end-of-season competition roll in generateSeason().
+    const incumbent = rollDraftIncumbent(team.id, decade, draftYear, leagueStrength[team.id]);
+    const entrenchThreshold = slot.round===1 ? 80 : 72;
+    if(incumbent.talent>=entrenchThreshold && incumbent.age<=32){
+      career.leagueRivals.push(incumbent);
+      career.isBackup = true;
+      career.transactions.push(`${draftYear}: Enters camp behind ${incumbent.name}, QB1.`);
+    }
 
     showScreen("draftnight");
     document.getElementById("draftNightActions").style.visibility = "hidden";
@@ -3233,6 +3250,24 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       qb3: generateBenchPlayer(teamId, decade, year, teamGrade, Math.random()<0.65),
     };
   }
+  // Rolled once, at draft night, purely to answer "is there already a real starter blocking this
+  // rookie at his own team" -- an established veteran (never a rookie; a rookie never blocks
+  // another rookie's path this hard), skewed a bit above team grade since a guy entrenched enough
+  // to sit a draft pick is probably legitimately good. If he clears the entrenchment bar in the
+  // draft-night handler, he's pushed into career.leagueRivals as this team's real QB1 and ages/
+  // retires/gets fully simulated exactly like any other rival from then on.
+  function rollDraftIncumbent(teamId, decade, year, teamGrade){
+    const age = randInt(26, 34);
+    const talent = clamp(teamGrade + randInt(-10, 20), 20, 99);
+    return {
+      id: "riv_"+teamId+"_incumbent",
+      name: randomFullName(), teamId, talent, age,
+      retireAge: clamp(age + randInt(3,10), 30, 45),
+      draftYear: year-(age-22),
+      seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0 },
+      retired: false, contract: rollRivalContract(decade, talent), entrenchedYears: rollEntrenchedYears(talent),
+    };
+  }
   function generateLeagueRivals(){
     career.leagueDepthCharts = {};
     const rivals = TEAMS.filter(t=>t.id!==career.teamId).map((t,i)=>{
@@ -3427,9 +3462,55 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     }
   }
 
+  /* ================= Player-as-backup =================
+     career.isBackup: true from the moment an entrenched incumbent blocks the player at draft night
+     (see the enterDraftNightBtn handler) until the player wins the starting job outright. While
+     true, generateSeason() routes almost entirely through the SAME missed-games pipeline that
+     already handles injury/suspension -- resolveBackupSeasonSnaps() below just decides how many
+     games the incumbent's own (fully simulated) season leaves for the player, feeding that in as
+     career._backupMissedGames exactly like an injury or suspension would. A true "clipboard year"
+     (incumbent stays healthy and effective all season) naturally falls out of the EXISTING
+     gamesPlayed=clamp(league.games-missedGames,0,league.games) formula hitting 0 -- no separate
+     zero-stat code path needed. */
+  // Simulates the incumbent's real season (same math every other rival gets) and stashes how many
+  // games that leaves for the player -- called from the very top of generateSeason(), before the
+  // missedGames aggregation reads career._backupMissedGames.
+  function resolveBackupSeasonSnaps(decade, league){
+    const incumbent = rivalForTeam(career.teamId);
+    if(!incumbent){ career._backupMissedGames = 0; return; } // he retired with nobody left to track -- treat as an open competition, handled by the end-of-season roll
+    const incumbentSeason = simulatePlayerSeasonStats(incumbent, decade, league, career.year);
+    // Games HE played are, by definition, games the player did not -- a single source of truth
+    // instead of a separate "coach benches for poor play" roll that could double-count games.
+    career._backupMissedGames = incumbentSeason.games;
+    career._backupIncumbentWins = incumbentSeason.wins;
+    career._backupIncumbentLosses = incumbentSeason.losses;
+    career._backupIncumbentName = incumbent.name;
+    career._backupIncumbentSeasonSnapshot = { yards: incumbentSeason.yards, td: incumbentSeason.td, int: incumbentSeason.int, rating: incumbentSeason.rating };
+  }
+  // Called once per season, after the season is otherwise fully resolved -- decides whether the
+  // player keeps competing for the job or wins it outright. A forced resolution after 3 bench
+  // seasons keeps a career from getting stuck indefinitely; otherwise the odds scale with how the
+  // player's own grade compares to the incumbent's CURRENT (age-adjusted) talent, not his talent
+  // at draft time, so a declining incumbent genuinely becomes easier to unseat over the years.
+  function resolveBackupCompetition(effOverall){
+    career._backupSeasonsCount = (career._backupSeasonsCount||0) + 1;
+    const incumbent = rivalForTeam(career.teamId);
+    const forcedResolution = career._backupSeasonsCount >= 3;
+    const incumbentGone = !incumbent || incumbent.retired;
+    const incumbentTalent = incumbentGone ? 0 : rivalEffTalent(incumbent);
+    const competeChance = clamp(0.5 + (effOverall-incumbentTalent)*0.025, 0.05, 0.85);
+    const wonJob = forcedResolution || incumbentGone || Math.random()<competeChance;
+    if(wonJob){
+      career.isBackup = false;
+      career.transactions.push(`${career.year}: Wins the starting job.`);
+    }
+    return wonJob;
+  }
+
   function generateSeason(){
     const decade = decadeForYear(career.year);
     const league = LEAGUE[decade];
+    if(career.isBackup) resolveBackupSeasonSnaps(decade, league);
     const schemeId = career.teamScheme ? career.teamScheme[career.teamId] : null;
     const eff = schemeEffective(career.age, decade, schemeId);
 
@@ -3456,10 +3537,20 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // suspension apart from an actual injury instead of always saying "to injury".
     const missedGamesInjury = career._injuryMissedGames || 0;
     const missedGamesSuspension = career._suspensionMissedGames || 0;
-    let missedGames = missedGamesInjury + missedGamesSuspension;
+    const missedGamesBackup = career._backupMissedGames || 0;
+    let missedGames = missedGamesInjury + missedGamesSuspension + missedGamesBackup;
     let perfPenalty = career._injuryPenalty || 0;
     const hadInjuryThisSeason = !!career._hadInjuryThisSeason;
+    // Captured into locals BEFORE the reset below, since they're needed further down (team-record
+    // composition and the season object) -- reading career._backup* again after this point would
+    // just see the zeroed-out values.
+    const backupIncumbentWins = career._backupIncumbentWins || 0;
+    const backupIncumbentLosses = career._backupIncumbentLosses || 0;
+    const backupIncumbentName = career._backupIncumbentName || null;
+    const backupIncumbentSeasonSnapshot = career._backupIncumbentSeasonSnapshot || null;
     career._injuryMissedGames = 0; career._suspensionMissedGames = 0; career._injuryPenalty = 0; career._hadInjuryThisSeason = false;
+    career._backupMissedGames = 0; career._backupIncumbentWins = 0; career._backupIncumbentLosses = 0;
+    career._backupIncumbentName = null; career._backupIncumbentSeasonSnapshot = null;
 
     const gamesPlayed = clamp(league.games - missedGames, 0, league.games);
 
@@ -3552,13 +3643,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const rating = passerRating(completions, attempts, yards, td, interceptions);
     const winPct = gamesPlayed>0 ? wins/gamesPlayed : 0;
 
-    // the team's season doesn't stop when this QB is hurt — a backup covers the missed games,
-    // playing off team quality alone (not this player's skill), so "team record" and "your
-    // record as the starter" can and often do differ.
+    // the team's season doesn't stop when this QB is hurt — a generic backup covers the missed
+    // games, playing off team quality alone (not this player's skill), so "team record" and "your
+    // record as the starter" can and often do differ. Games missed specifically because a NAMED
+    // incumbent started ahead of you (missedGamesBackup) use HIS real simulated record instead of
+    // this generic roll -- resolveBackupSeasonSnaps already ran his actual season.
+    const genericMissedGames = missedGamesInjury + missedGamesSuspension;
     const backupWinProb = clamp(0.5 + (career.teamStrength-65)*0.01, 0.12, 0.88);
     let backupWins=0;
-    for(let i=0;i<missedGames;i++){ if(Math.random()<backupWinProb) backupWins++; }
-    const backupLosses = missedGames-backupWins;
+    for(let i=0;i<genericMissedGames;i++){ if(Math.random()<backupWinProb) backupWins++; }
+    const backupLosses = genericMissedGames-backupWins;
+    const incumbentWins = backupIncumbentWins;
+    const incumbentLosses = backupIncumbentLosses;
 
     // All three season awards are judged on what actually happened this season -- passer rating
     // relative to that year's league average, raw production, team success, and (for Pro Bowl /
@@ -3582,8 +3678,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       decade, games: gamesPlayed, comp: completions, att: attempts, pct: attempts>0?completions/attempts:0,
       yards, td, int: interceptions, sacks, rating, wins, losses,
       rushAtt, rushYards, rushTd, gameLog,
-      teamGames: league.games, teamWins: wins+backupWins, teamLosses: losses+backupLosses, missedGames,
-      missedGamesInjury, missedGamesSuspension,
+      teamGames: league.games, teamWins: wins+backupWins+incumbentWins, teamLosses: losses+backupLosses+incumbentLosses, missedGames,
+      missedGamesInjury, missedGamesSuspension, missedGamesBackup,
+      incumbentName: backupIncumbentName,
+      incumbentSeasonSnapshot: backupIncumbentSeasonSnapshot,
       teamOverall: career.teamStrength,
       overall: Math.round(effOverall),
       awards, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible,
@@ -3710,6 +3808,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.contract.years--;
     tickTempBoosts();
     developAttributes(season, decade, league);
+    if(career.isBackup) season.wonStartingJob = resolveBackupCompetition(effOverall);
 
     return season;
   }
@@ -5704,6 +5803,23 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         ${sub?`<div class="fo-row-sub">${sub}</div>`:""}
       </div>`;
   }
+  // The player's own team's depth chart -- QB1 is either the player (starter) or the entrenched
+  // incumbent they're stuck behind (backup); QB2/QB3 are purely informational/flavor (see
+  // PROGRESS.md Round 7 for why they never autonomously threaten the player's own job).
+  function buildDepthChartRowHTML(){
+    const chart = (career.leagueDepthCharts||{})[career.teamId];
+    const incumbent = career.isBackup ? rivalForTeam(career.teamId) : null;
+    const qb1Line = career.isBackup && incumbent
+      ? `QB1 ${svgEscape(incumbent.name)} (${rivalEffTalent(incumbent)} ovr) · QB2 You`
+      : `QB1 You`;
+    const benchLine = chart
+      ? `${career.isBackup ? "" : "QB2 "}${career.isBackup ? "" : `${svgEscape(chart.qb2.name)} (${rivalEffTalent(chart.qb2)} ovr) · `}QB3 ${svgEscape(chart.qb3.name)} (${rivalEffTalent(chart.qb3)} ovr)`
+      : "";
+    return `<div class="fo-row">
+        <div class="fo-row-head"><span class="fo-row-label">Depth Chart</span></div>
+        <div class="fo-row-sub">${qb1Line}${benchLine?` · ${benchLine}`:""}${career.isBackup ? " — you're competing for the starting job." : ""}</div>
+      </div>`;
+  }
   function buildFrontOfficeWidgetHTML(){
     const schemeId = career.teamScheme ? career.teamScheme[career.teamId] : null;
     const scheme = SCHEMES.find(s=>s.id===schemeId);
@@ -5731,6 +5847,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <div class="fo-row-head"><span class="fo-row-label">Supporting Cast</span><span class="fo-row-value tabular">O-Line ${castLetterGrade(career.oline)} · Weapons ${castLetterGrade(career.weapons)}</span></div>
           <div class="fo-row-sub">${career.oline<48 ? "A shaky line means more hits taken and a real bump to injury risk. " : career.oline>=82 ? "One of the best lines in the league — extra time in the pocket every week. " : ""}${career.weapons<48 ? "Thin at the skill positions — every rep gets a little harder to complete." : career.weapons>=82 ? "A genuinely stacked group of targets makes every throw a little easier." : ""}</div>
         </div>
+        ${buildDepthChartRowHTML()}
         ${scheme ? `<div class="fo-scheme-line">Running <b>${scheme.name}</b> — ${schemeFavorText(schemeId) || "no strong lean"}. <span class="fo-scheme-link" data-goto-scheme="1">See details →</span></div>` : ""}
         ${career.relationship ? `<div class="fo-scheme-line">${career.relationship.status==="married"?"Married to":"Dating"} <b>${svgEscape(career.relationship.partnerName)}</b>, the ${svgEscape(career.relationship.partnerType)}, since ${career.relationship.startYear}.</div>` : ""}
         ${career.achievements ? `<div class="fo-row">
@@ -5789,6 +5906,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     } else if(season.missedGamesInjury>0){
       narratives.push(`Missed ${season.missedGamesInjury} game${season.missedGamesInjury===1?"":"s"} to injury.`);
     }
+    if(season.missedGamesBackup>0 && season.games===0){
+      const snap = season.incumbentSeasonSnapshot;
+      narratives.push(`A clipboard year — ${svgEscape(season.incumbentName||"the incumbent")} started all ${season.missedGamesBackup} games ahead of him${snap ? ` (${snap.yards.toLocaleString()} yds, ${snap.td} TD, ${snap.rating.toFixed(1)} rating)` : ""}.`);
+    } else if(season.missedGamesBackup>0){
+      narratives.push(`Got ${season.games} start${season.games===1?"":"s"} behind ${svgEscape(season.incumbentName||"the incumbent")}, who took the other ${season.missedGamesBackup}.`);
+    }
+    if(season.wonStartingJob===true) narratives.push(`Wins the starting job — QB1 heading into next season.`);
+    else if(season.wonStartingJob===false) narratives.push(`Still fighting for the starting job — back to camp next year to try again.`);
     if(career.seasonsWithTeam===1 && career.seasonNumber>1) narratives.push(`First season in a new uniform with the ${season.teamName}.`);
     if(season.contractTier==="minimum") narratives.push(`A minimum-deal roster spot — every snap has to be earned.`);
     else if(season.contractTier==="backup") narratives.push(`A backup-caliber deal — the job isn't guaranteed week to week.`);
