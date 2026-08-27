@@ -57,6 +57,7 @@
 
     <div class="menu-actions" style="margin-top:1.75rem;">
       <button class="btn btn-primary" id="startBtn">Start the combine</button>
+      <button class="btn btn-ghost" id="trophyRoomBtn">Trophy Room</button>
     </div>
 
     <div class="active-career-strip" id="activeCareerStrip"></div>
@@ -210,6 +211,29 @@
       <button class="btn btn-leather" id="shareCareerBtn">Copy career recap</button>
       <button class="btn btn-primary" id="newCareerBtn">Same build, new decade</button>
       <button class="btn btn-ghost" id="careerMenuBtn">Back to menu</button>
+    </div>
+  </section>
+
+  <!-- TROPHY ROOM: a local leaderboard across every completed career on this browser -->
+  <section class="screen" id="screen-trophyroom">
+    <div class="section-label">Trophy Room</div>
+    <h2 style="font-size:clamp(1.6rem,5vw,2.2rem);">Every QB you've ever built.</h2>
+    <p class="lede" style="margin-top:0.6rem;">A local leaderboard across every completed career on this browser — who holds the record for rings, yards, rating, or the biggest paycheck.</p>
+
+    <div class="mode-toggle" id="trophyRoomSortRow" style="margin-top:1.25rem; flex-wrap:wrap;">
+      <button type="button" class="tr-sort-btn active" data-sort="recent">Most Recent</button>
+      <button type="button" class="tr-sort-btn" data-sort="rings">Rings</button>
+      <button type="button" class="tr-sort-btn" data-sort="yards">Pass Yards</button>
+      <button type="button" class="tr-sort-btn" data-sort="td">Touchdowns</button>
+      <button type="button" class="tr-sort-btn" data-sort="rating">Rating</button>
+      <button type="button" class="tr-sort-btn" data-sort="earnings">Earnings</button>
+      <button type="button" class="tr-sort-btn" data-sort="seasons">Seasons</button>
+    </div>
+
+    <div id="trophyRoomTable" style="margin-top:1.25rem;"></div>
+
+    <div class="menu-actions" style="margin-top:1.75rem;">
+      <button class="btn btn-ghost" id="trophyRoomBackBtn">Back to menu</button>
     </div>
   </section>
 

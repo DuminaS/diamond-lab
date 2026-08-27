@@ -720,6 +720,67 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     try{ store.setItem("gridironlab.qb.best", JSON.stringify(obj)); }catch(e){}
   }
 
+  // ----- Trophy Room: a local leaderboard across every completed career on this browser, not just
+  // the single "best" HOF tier gridironlab.qb.best already tracks -- lets a player who's run a dozen
+  // builds actually compare them (most rings, highest yards, best rating, biggest paycheck), same
+  // "browser-local, no real accounts" constraint as the last-build profile above. Capped at 60
+  // entries, dropping the OLDEST first, so this can't grow without bound over a long play history.
+  const TROPHY_ROOM_KEY = "gridironlab.trophyroom";
+  const TROPHY_ROOM_CAP = 60;
+  let _sessionTrophyRoom = null;
+  function loadTrophyRoom(){
+    if(_sessionTrophyRoom) return _sessionTrophyRoom.slice();
+    if(!store) return [];
+    try{ const raw = store.getItem(TROPHY_ROOM_KEY); return raw ? JSON.parse(raw) : []; }catch(e){ return []; }
+  }
+  function saveTrophyRoomEntry(entry){
+    const list = loadTrophyRoom();
+    list.push(entry);
+    while(list.length>TROPHY_ROOM_CAP) list.shift();
+    _sessionTrophyRoom = list;
+    if(!store) return;
+    try{ store.setItem(TROPHY_ROOM_KEY, JSON.stringify(list)); }catch(e){}
+  }
+  const TROPHY_ROOM_SORTERS = {
+    recent: (a,b)=> b.completedAt-a.completedAt,
+    rings: (a,b)=> b.rings-a.rings,
+    yards: (a,b)=> b.yards-a.yards,
+    rating: (a,b)=> b.rating-a.rating,
+    earnings: (a,b)=> b.earnings-a.earnings,
+    seasons: (a,b)=> b.seasons-a.seasons,
+    td: (a,b)=> b.td-a.td,
+  };
+  function buildTrophyRoomTableHTML(sortKey){
+    const list = loadTrophyRoom();
+    if(!list.length){
+      return `<div class="calc-refnote">No completed careers yet — retire, get released, or ride one out to the end to start building your Trophy Room.</div>`;
+    }
+    const sorted = list.slice().sort(TROPHY_ROOM_SORTERS[sortKey]||TROPHY_ROOM_SORTERS.recent);
+    // Records are computed across the WHOLE room, independent of the current sort, so which cell
+    // is gold never changes just because you're looking at a different order.
+    const maxOf = key => list.reduce((m,e)=>Math.max(m,e[key]), 0);
+    const maxRings = maxOf("rings"), maxYards = maxOf("yards"), maxRating = maxOf("rating"),
+      maxEarnings = maxOf("earnings"), maxSeasons = maxOf("seasons"), maxTd = maxOf("td");
+    const cell = (value, isMax, fmt) => `<td class="tabular${isMax && value>0 ? " tr-record" : ""}">${fmt?fmt(value):value}</td>`;
+    const rows = sorted.map(e=>`<tr>
+        <td>${svgEscape(e.name)} <span style="color:var(--ink-muted);">— ${svgEscape(e.decade)}</span></td>
+        <td>${svgEscape(e.verdict)}</td>
+        ${cell(e.seasons, e.seasons===maxSeasons)}
+        ${cell(e.rings, e.rings===maxRings)}
+        ${cell(e.yards, e.yards===maxYards, v=>v.toLocaleString())}
+        ${cell(e.td, e.td===maxTd)}
+        ${cell(e.rating, e.rating===maxRating, v=>v.toFixed(1))}
+        ${cell(e.earnings, e.earnings===maxEarnings, v=>fmtMoney(v))}
+      </tr>`).join("");
+    return `<div class="table-wrap">
+        <table class="league-table">
+          <thead><tr><th>QB</th><th>Verdict</th><th class="tabular">Seasons</th><th class="tabular">Rings</th><th class="tabular">Pass Yds</th><th class="tabular">TD</th><th class="tabular">Rating</th><th class="tabular">Earnings</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="calc-refnote" style="margin-top:0.6rem;">Gold cells mark this browser's all-time record in that column. ${list.length} career${list.length===1?"":"s"} logged (last ${TROPHY_ROOM_CAP} kept).</div>`;
+  }
+
   // ----- Local build profile: the practical version of "player accounts" on a platform with no
   // sign-in and no per-account server storage (the Artifact runtime only exposes a single SHARED
   // document, downloads, and MCP -- there's no viewer-identity capability to build real accounts
@@ -923,6 +984,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     draftnight: document.getElementById("screen-draftnight"),
     career: document.getElementById("screen-career"),
     careerSummary: document.getElementById("screen-career-summary"),
+    trophyroom: document.getElementById("screen-trophyroom"),
   };
   function showScreen(name){
     Object.values(screens).forEach(s=>s.classList.remove("active"));
@@ -5801,6 +5863,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     document.getElementById("hofNarrative").innerHTML = narrative.map((p,i)=> `<p${i===narrative.length-1?' class="legacy"':''}>${p}</p>`).join("");
 
     const t = career.totals;
+    saveTrophyRoomEntry({
+      id: `${Date.now()}_${Math.round(Math.random()*1e6)}`,
+      name: career.name, college: career.college,
+      hometownCity: career.hometown.city, hometownState: career.hometown.state,
+      decade: career.decade, draftYear: career.draftYear, finalYear: career.year,
+      verdict: verdict.tier, seasons: career.seasonLog.length, exitReason: career.exitReason,
+      games: t.games, yards: t.yards, td: t.td, int: t.int, sacks: t.sacks,
+      rushYards: t.rushYards, rushTd: t.rushTd, proBowls: t.proBowls, allPros: t.allPros,
+      mvps: t.mvps, rings: t.rings, earnings: t.earnings,
+      rating: passerRating(t.comp, t.att, t.yards, t.td, t.int),
+      completedAt: Date.now(),
+    });
     const careerRecBy = {}; checkCareerRecords(t).forEach(r=> careerRecBy[r.key]=r);
     document.getElementById("totalsGrid").innerHTML = [
       ["Seasons", career.seasonLog.length],
@@ -6480,5 +6554,25 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
   document.getElementById("careerContent").addEventListener("click", (e)=>{
     const link = e.target.closest("[data-rival-id]");
     if(link) openRivalProfile(link.dataset.rivalId);
+  });
+
+  // Trophy Room: static screen (never recreated), so all wiring happens once, here.
+  let trophyRoomSortKey = "recent";
+  function renderTrophyRoomScreen(){
+    document.getElementById("trophyRoomTable").innerHTML = buildTrophyRoomTableHTML(trophyRoomSortKey);
+  }
+  document.getElementById("trophyRoomBtn").addEventListener("click", ()=>{
+    trophyRoomSortKey = "recent";
+    document.querySelectorAll("#trophyRoomSortRow .tr-sort-btn").forEach(b=> b.classList.toggle("active", b.dataset.sort==="recent"));
+    renderTrophyRoomScreen();
+    showScreen("trophyroom");
+  });
+  document.getElementById("trophyRoomBackBtn").addEventListener("click", ()=> showScreen("menu"));
+  document.querySelectorAll("#trophyRoomSortRow .tr-sort-btn").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      trophyRoomSortKey = btn.dataset.sort;
+      document.querySelectorAll("#trophyRoomSortRow .tr-sort-btn").forEach(b=> b.classList.toggle("active", b===btn));
+      renderTrophyRoomScreen();
+    });
   });
 })();

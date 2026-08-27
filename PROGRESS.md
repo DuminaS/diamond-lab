@@ -236,6 +236,40 @@ per-item root causes below, all confirmed as real, verifiable gaps, not just vib
      through selector that also covers `.fa-accept`/`.fa-negotiate` and `[id^='pqSimEnd-']` (fastest
      way to resolve a playoff round in one click) — worth building once, not per-round.
 
+10. **Trophy Room: a local, cross-career leaderboard (wishlist item "Hall of Records" — shipped).**
+    Every completed career (retirement, release, or the age cap) now writes a permanent summary
+    entry to a new `gridironlab.trophyroom` localStorage key, independent of the existing single-slot
+    `gridironlab.activeCareer`/best-career save. `saveTrophyRoomEntry()` is called once, from
+    `finishCareer()`, right after `career.totals` is finalized — it records name/college/hometown/
+    decade/draft year/exit reason/verdict tier alongside the full stat line (games, yards, TD, INT,
+    sacks, rush yards/TD, Pro Bowls, All-Pros, MVPs, rings, earnings, and a computed passer rating),
+    capped at the most recent `TROPHY_ROOM_CAP=60` entries (oldest dropped first) so localStorage
+    can't grow unbounded over a long play history. Same `store`/`_sessionTrophyRoom` fallback pattern
+    as `loadBest`/`saveBest` — falls back to an in-memory array when storage is blocked, so the
+    feature still works within a single session even with cookies/storage disabled.
+
+    New `screen-trophyroom` screen (reachable via a "Trophy Room" button added next to "Start the
+    combine" on the main menu) renders a sortable table via `buildTrophyRoomTableHTML(sortKey)` —
+    seven sort modes (Most Recent, Rings, Pass Yards, Touchdowns, Rating, Earnings, Seasons) via
+    `TROPHY_ROOM_SORTERS`, toggled by `.tr-sort-btn` buttons wired once in Init. Record cells (this
+    browser's all-time best in that column) are highlighted gold via a `.tr-record` CSS class —
+    deliberately computed as `maxOf(key)` across the **entire** stored list every render, not just
+    the currently-sorted/visible rows, so the gold highlight always marks the true all-time record
+    regardless of which sort the player has selected. Empty state (no careers completed yet) shows a
+    plain-language nudge instead of a blank table.
+
+    Verified via three Playwright passes against a real dev build: (1) empty-state message renders
+    correctly with no data, and the back button returns to the main menu; (2) seeded three fake
+    entries directly into the localStorage key, confirmed default sort is most-recent-first, confirmed
+    re-sorting by rings reorders correctly (highest first, zero last), and confirmed the entry holding
+    every one of the 6 numeric records gets exactly 6 `.tr-record`-classed cells; (3) end-to-end real
+    write-path test — started a real career, forced its saved `career.age` to 60 (well past
+    `durabilityAgeCap()`) plus a known rings/yards pair via direct localStorage manipulation, resumed
+    and advanced to trigger the genuine age-cap branch in `advanceCareer()` → `finishCareer()`,
+    confirmed exactly one trophy-room entry was written with the correct rings/yards and all expected
+    fields present, and confirmed the Trophy Room screen displays that real entry by name. Zero page
+    errors across all three passes.
+
 Verified end-to-end via Playwright (not just diagnostics) across a real 8-season playthrough: zero
 page errors, opponent QB correctly shown every season in the Schedule tab, League News feed
 populated (23 entries by season 8), team-strength spread stayed realistic (range of 75 points across
@@ -327,3 +361,4 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `career._bannedEventTitle` / `career._careerEndingInjuryName` — stashed at the moment a forced exit happens so retrospectives can name the actual cause.
 - `career.lifeEventLog` entries carry a `legendary` flag (from `RARE_EVENTS`) for retrospective narrative selection.
 - `loadLastBuildProfile()` / `saveLastBuildProfile(picks)` / `renderLastBuildStrip()` / `loadLastBuildIntoCombine()` — the local-profile system, storage key `gridironlab.lastbuild`.
+- `TROPHY_ROOM_KEY` / `loadTrophyRoom()` / `saveTrophyRoomEntry(entry)` / `buildTrophyRoomTableHTML(sortKey)` / `TROPHY_ROOM_SORTERS` (Round 5) — the cross-career leaderboard, storage key `gridironlab.trophyroom`, separate from the single-slot `gridironlab.activeCareer`/best-career save. `saveTrophyRoomEntry` is called exactly once, from `finishCareer()`, and is the ONLY writer — any future career-ending path should go through `finishCareer()` rather than writing a trophy-room entry directly, so the cap/truncation logic (`TROPHY_ROOM_CAP=60`, oldest dropped first) stays centralized. Record highlighting (`.tr-record`) is deliberately computed via `maxOf(key)` over the FULL stored list every render, independent of `sortKey` — never derive "is this a record" from position in the current sort, since the current sort is rarely by the column being highlighted.

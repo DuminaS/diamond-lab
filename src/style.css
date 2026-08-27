@@ -304,6 +304,9 @@
     font-size: 0.56rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.14rem 0.42rem;
     border-radius: 999px; margin-left: 0.4rem; vertical-align: middle; cursor: help; white-space: nowrap; }
 
+  /* Trophy Room: gold cell = this browser's all-time record in that column */
+  .tr-record{ color: var(--gold); font-weight: 800; }
+
   /* Sim-historical-best badge: distinct from .record-badge above -- that one flags a REAL-world
      NFL record, this one flags the best THIS PLAYTHROUGH'S own simulated league has produced, so
      it gets its own color (a cool blue instead of gold) to read as a clearly different kind of claim. */
