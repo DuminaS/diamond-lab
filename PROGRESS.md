@@ -13,9 +13,134 @@ Single-file HTML/CSS/JS QB-career simulator. Dev copy: `/tmp/gridiron/index.html
 - Diagnostic-driven calibration (Round 2 origin, reused every round since): before committing a new numeric dial, build throwaway diagnostic scripts in `/tmp/gtest` (not part of the permanent suite) that sweep flat/synthetic builds or matchups across a range and print resulting stats/win-rates/event-frequencies, to empirically tune the value instead of guessing.
 - A debug build's `window.__debug` internals list can go stale when a helper is renamed/removed — verify with `node --check` on the extracted script AND actually call `getInternals()` in a quick smoke test before trusting a big regression run against a freshly-built debug copy (Round 4 caught two: a nonexistent `getCs`/`setCs` shorthand-property reference that should have been the inline accessor `getCs: ()=>cs, setCs: (v)=>{ cs = v; }` closing over the real `cs` combine-state variable, and the removed `playoffTeamEdge`/`regularSeasonTeamEdge` names — both would silently break every downstream test in the same process if not caught first).
 
-## Status as of 2026-08-26 — four rounds shipped and published
+## Status as of 2026-08-27 — five rounds shipped
 
-### Round 4 (this round) — difficulty/realism overhaul, all 3 items shipped
+### Round 5 — opponent-QB system, team parity/decline, LeagueNewsFeed, and 3 bug fixes
+Triggered by a large combined feedback dump: the user's own notes (difficulty still too easy —
+16-0 seasons with 70-overall teams, multiple Super Bowls in a row; no league parity — team grades
+"bounce" year to year with no legible reason; a request to see the opposing QB's own overall, not
+just their team grade) plus four playtester reports (a coach fired the same offseason he won the
+Super Bowl; 4 rings in 11 seasons still only graded Hall of Famer, not First-Ballot; free-agency/
+release offers coming from 20-40-overall teams despite being an 85+/Super-Bowl-caliber player; a
+sense that win probability was "just team grade," no real grind even at 95+ overall). Investigated
+each claim against the actual code (via a research subagent) before touching anything — see the
+per-item root causes below, all confirmed as real, verifiable gaps, not just vibes.
+
+1. **Coach-fired-after-a-championship bug — fixed.** `lifeEventCheck()`'s `ORG_EVENTS` roll had zero
+   check for whether the team just won it all; the existing `_cutShieldSeasons` protection only
+   ever covered the *waiver* cut-risk formula, never this org-event roll. New `orgEventsFor()`
+   excludes just the `coachfired` entry (not org news generally — a new GM, ownership sale etc. can
+   still happen for unrelated reasons) whenever `career.seasonLog`'s last entry has
+   `playoffs.wonRing`. Both `ORG_EVENTS` roll sites (`lifeEventCheck`, `secondaryLifeEventCheck`) now
+   call it instead of rolling the raw array.
+
+2. **First-Ballot Hall of Famer ring gate — fixed.** Not a scoring bug (4 rings alone already clears
+   the 150-point bar via `accoladeScore = rings*40 + ...`) — the actual blocker is a hard,
+   independent `minProBowls:3` gate in `hofVerdict()`'s `TIERS` array. Since Pro Bowl slots are
+   winner-take-all league-wide (`resolveSeasonAllProAndProBowl`), a ring-winning QB can genuinely
+   get out-voted for Pro Bowl nods in the very seasons he wins a title, producing exactly the
+   reported case. Added a second, independent qualifying route: `minRingsRoute:3` on the
+   First-Ballot tier only — `t.rings>=3` now also clears the accolade gate, alongside the existing
+   `proBowls>=3` path. Every other tier's Pro-Bowl gating is unchanged.
+
+3. **Free agency / waiver offers ignoring the player's own quality — fixed, and this is the one
+   underlying the "why do 85-overall players only get 20-40-grade offers" complaint.**
+   `teamNeedRank(teamId)` used to be `need = 100 - teamStrength` — purely inverse to a team's OWN
+   roster strength, so an elite player (rank 4) could only ever match with `needRank 3-4` teams,
+   which by that formula's construction were always the *weakest* teams; a genuine contender's high
+   `teamStrength` always registered as "low need" regardless of who was actually playing QB there.
+   Now keyed off `rivalForTeam(teamId)`'s QB talent instead (see item 4) — a stacked team stuck with
+   a mediocre incumbent now shows real need and can make a legitimate elite-tier offer, the same way
+   a real contender goes shopping for a QB upgrade. `renderWaivedEvent`'s post-cut replacement offer
+   was hard-coded to a flat 15-60 team-grade range regardless of who got cut; now scales both ends
+   with the player's own `effOverall` (up to a 92-grade ceiling for a genuinely elite released
+   player — still a "prove-it" deal, never top dollar, but no longer capped at replacement-level
+   teams for a proven star).
+
+4. **Opposing QB system — new, and this turned out to already be 90% built.** `career.leagueRivals`
+   already generated one persistent starting QB per opposing team at career start (name, `talent`,
+   age/retirement curve, full simulated season-by-season stats for league awards) — it just never
+   fed into the actual game-sim/win-calc, only into league-wide MVP/Pro-Bowl/All-Pro comparisons.
+   New `rivalForTeam(teamId)` (lookup), `rivalEffTalent(rival)` (age-adjusts `talent` via the same
+   `primeMultiplier` rivals' own stats already use — an aging rival starter shouldn't blend in at
+   his career-peak number), and `opponentOffenseGrade(teamId, qbInfluence)` (mirrors
+   `blendOffenseWithTeam`, opponent side) — wired into all 4 win-calc sites that used to read a flat
+   `career.leagueStrength[opp.id]`: `simulateRegularSeasonGames`, `resolveConferenceBracket`'s
+   `playMatch`, `stepConferenceBracket`'s `simulateMatch`, `buildSuperBowlRound`. The OT tiebreak
+   (`round._defOverall`) now reads the new `_defOffense` (blended) field instead of raw team
+   strength, so overtime stays consistent with what the actual game was simulated against.
+   Opponent's name+overall now surfaces in the Schedule tab (per game) and both playoff-round-box
+   templates (`sb-oppgrade`/`pr-oppgrade`), right next to the existing "Their team overall" line —
+   `_defOverall` (raw team grade, unchanged label) and the new `_oppQbName`/`_oppQbOverall` are kept
+   as separate fields so "team grade" and "their QB's grade" read as two distinct numbers, per the
+   user's ask.
+
+5. **Team-strength permanence + decline + LeagueNewsFeed — new.** The old per-season update was a
+   flat, unbounded-direction random walk (`randInt(-8,8)` for every other team, `randInt(-4,4)` +
+   a skill nudge for the player's own team) with no reversion and no narrative link — this is why
+   team grades "bounced" with no explainable reason. Replaced with, per season, in order:
+   - **Legible, rival-linked nudges first**: a rival's own award-winning season lifts their team
+     (`+1.5` per award), a rough statistical season (rating well under that decade's average) drags
+     it down (`-2`); a rival's retirement/succession (in `simulateRivalSeasons`) nudges the team
+     immediately, sized to how much the new rookie's talent actually differs from the departing
+     vet's age-adjusted talent — a real, explainable "we just lost our franchise guy to a rookie"
+     transition instead of unexplained noise.
+   - **`rollLeagueNews(year)` / new `LEAGUE_NEWS_EVENTS`** (10 entries — draft busts, coaching
+     changes, blockbuster trades, cap casualties, etc., percentile-weighted so the two big-swing
+     entries are both rarer and wider than the common ±1-3 ones) fires independently for each OTHER
+     team at a flat 10%/season chance, logged to new `career.leagueNewsLog` and rendered via new
+     `buildLeagueNewsFeedHTML()` (reuses the existing `.feed-wrap`/`.feed-line` transaction-log
+     styling) in a new "Around the League" section at the bottom of the League tab. This is the
+     `LeagueNewsFeed` component the user specifically asked for — **built in vanilla JS/DOM, not as
+     a `.jsx` React component**, since the codebase has no React anywhere and introducing it for one
+     component would fragment the architecture rather than extend it; the feature (randomized,
+     percentile-based, named events mutating specific AI team grades with a visible reason) is
+     delivered as asked, just in the project's existing UI paradigm.
+   - **`CONTENDER_DECLINE_THRESHOLD = 76` / `CONTENDER_DECLINE_RATE`**: every team above 76 takes a
+     pull back toward it, scaled by how far above. Diagnostically tuned (pure-math trajectory sweep,
+     no game code needed) — **0.05 was tried first and was far too weak**: against even a modest
+     positive skill nudge, ANY team above dead-average rocketed to the 97 hard cap within 2-3
+     seasons and froze there permanently, which is exactly the "superteam that never has to work for
+     it" complaint this exists to fix. At **0.22**: a zero-skill-nudge average team genuinely bleeds
+     out over a decade (90→~79 over 10 seasons), a "merely good" QB's team settles into real
+     season-to-season texture in the low-to-mid 80s instead of pinning at the cap, a truly elite
+     QB's team plateaus around 90-93 over roughly 7-8 seasons (great, but earned, and still has real
+     give from season to season — not an instant, permanent 97), and a bad team with an elite QB
+     takes a believable ~decade to build into a real contender. Both random-walk noise terms were
+     also cut from ±8/±4 down to ±2, since most of a team's movement should now come from an
+     explainable cause above, not dice. The player's own team faces identical decline pressure; the
+     one counteracting force is the same skill-linked nudge it always had (this is the "stays great
+     because its QB is legitimately elite" case the user asked for).
+
+   **Diagnostic verification** (pure win-probability sweeps, `simulateGameScore` called directly via
+   a debug-hook — no full career needed): confirms the literal reported case ("70-overall QB, 70-
+   grade team, going 16-0") is now genuinely rare — 4,000 simulated 16-game seasons against
+   realistic random opponents (team strength ~20-96, rival talent = team±15) average 10.35/16 wins
+   with a **0.13% chance of a perfect season** (5-in-4,000 trials), down from whatever produced the
+   reported complaint (which necessarily predates every fix in this round). A genuinely elite build
+   (effOverall 92, team 90) still goes undefeated in ~10% of simulated seasons — a real, earned
+   rarity for an all-time-great team, not a routine outcome, and averages only 13.8-13.9 wins/16
+   (86%), not a stat-padded 16-0 by default. Note the opponent-QB blend alone barely moved the
+   *average*-case numbers versus the old flat-team-strength system (adding symmetric noise around
+   team strength doesn't shift a win-rate average against a wide random distribution of opponents,
+   only adds game-to-game texture) — **the decline-rate retune is what actually did the heavy
+   lifting** on the core difficulty complaint; the opponent-QB system's real value is the added
+   texture/visibility (a genuinely tough or genuinely soft individual matchup) and being the
+   necessary foundation for items 3-5 above, not a difficulty lever by itself.
+
+   **Not done this round** (explicitly deferred, user-prioritized next): a clickable rival-QB
+   profile page, and A-F supporting-cast grades (O-line/weapons) affecting completion%/injury risk.
+   Neither touches the systems shipped here, but both build naturally on top of `leagueRivals` now
+   actually mattering during games.
+
+Verified end-to-end via Playwright (not just diagnostics) across a real 8-season playthrough: zero
+page errors, opponent QB correctly shown every season in the Schedule tab, League News feed
+populated (23 entries by season 8), team-strength spread stayed realistic (range of 75 points across
+the league, bounds respected). Screenshotted the Schedule and League tabs to confirm the rendering
+matches the data (a 62-grade team fielding a 49-overall rival QB; a 34-grade team's 41-overall QB;
+etc. — genuine, visible mismatches between team grade and QB grade, not just a relabeled team number).
+
+### Round 4 — difficulty/realism overhaul, all 3 items shipped
 Triggered by user feedback on the Round 3 build: a 63-overall QB was posting 4,721 yards / 39 TD / 104.7 rating, and a 42-overall team was shown beating a 73-overall team in the conference championship, then facing (and being competitive with) a 96-overall team in the Super Bowl. Three asks: (a) tighten stat production further, (b) make team grade matter much more so lopsided upsets are "very very rare," (c) redesign player development to have boom/bust potential instead of smooth linear progression — explicitly flagged by the user as something to brainstorm together, not implement unilaterally. For item (c), presented 4 concrete mechanic options to the user via AskUserQuestion; the user selected all 4 (rare breakout events, real bust/plateau paths, volatility tied to dev-speed tag, dev speed shifting mid-career) — synthesized into one unified system rather than four bolted-on mechanics (see item 3 below).
 
 1. **Team quality now BLENDS with the QB's own grade, instead of just nudging it (item b — shipped).** Root cause: the old `playoffTeamEdge(season)` / `regularSeasonTeamEdge(age, decade)` added team quality as a small ADDITIVE edge on top of the QB's own `effOverall` (`(teamStrength-70)*0.32` for playoffs, max magnitude ~±9-10) — so an elite QB's personal grade almost entirely determined game outcomes regardless of team quality. Diagnostically confirmed the bug: an elite QB (effOverall≈92) on a teamStrength=42 team had a 37-63% win rate against 80-90-grade opponents under the old formula.
@@ -78,6 +203,11 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `devVolatility(speed)` / career-arc swing block in `developAttributes()` (Round 4) — the boom/bust development system. `devVolatility` gives the per-season swing chance from the player's *current* `career.devSpeed`; when a swing fires, direction is a weighted coinflip (`breakoutProb`), a breakout boosts 3-5 attributes and raises `devSpeed` (max 2 lifetime, `career._breakoutCount`), a bust drops 2-4 attributes and lowers `devSpeed` (uncapped, self-limiting via the existing `maxGain = round(14*devSpeed)` formula in the normal drift loop above it). Sets `season.devArcEvent = {type, keys}`, consumed by `buildSeasonProgressHTML`'s new banner. `devSpeedTag(speed)` now covers `<0.45` ("Stalled Out") through `≥1.45` ("Breakout Star"), beyond the original 0.6-1.4 roll range, since devSpeed can now drift outside it. Any future change to base development math should preserve this: normal per-attribute drift (`curveVal*devSpeed*experienceFactor*orgMult*variance`) is untouched, the swing system is a layer on top that occasionally moves the `devSpeed` dial itself.
 - `regularSeasonOffenseGrade(effOverall, age, decade)` / `playoffOffenseGrade(effOverall, season)` (Round 4) — the current team-quality + Clutch win-edge helpers, playoff and regular-season respectively. **Replace** the old `playoffTeamEdge(season)` / `regularSeasonTeamEdge(age, decade)`, which no longer exist — those returned a small additive nudge to add to `effOverall`; the new functions return the full blended offensive grade directly (don't add `effOverall` to their result, it's already folded in). Built on `blendOffenseWithTeam(effOverall, teamStrength, qbInfluence) = teamStrength + (effOverall-teamStrength)*qbInfluence`, with `QB_INFLUENCE_PLAYOFF = 0.35` / `QB_INFLUENCE_REGULAR = 0.45`.
 - `simulateGameScore(offOverall, defOverall)` — shared quarter-by-quarter game engine, used by both playoffs and the regular season (`simulateRegularSeasonGames`). Takes the already-blended offensive grade (see above), not a raw `effOverall`.
+- `rivalForTeam(teamId)` / `rivalEffTalent(rival)` / `opponentOffenseGrade(teamId, qbInfluence)` (Round 5) — the opponent-side counterpart to `regularSeasonOffenseGrade`/`playoffOffenseGrade`. `career.leagueRivals` already has one persistent starting QB per opposing team (generated at career start, aged/succeeded every season in `simulateRivalSeasons`); these three functions are what actually feed that into the win-calc, at all 4 sites `regularSeasonOffenseGrade`/`playoffOffenseGrade` are called at. Any future call site that resolves a game against a specific opponent team should call `opponentOffenseGrade(teamId, qbInfluence)` — never read `career.leagueStrength[teamId]` directly for a win-calc input, only for *display* of the team's own grade (kept as a separate `_defOverall`/`opponentGrade` field alongside the new `_oppQbName`/`_oppQbOverall`/`opponentQbName`/`opponentQbOverall` — team grade and QB grade are deliberately two different displayed numbers, don't collapse them back into one).
+- `CONTENDER_DECLINE_THRESHOLD = 76` / `CONTENDER_DECLINE_RATE = 0.22` / `contenderDeclinePull(strength)` (Round 5) — every team above the threshold pulls back toward it every season, scaled by how far above; this is what stops a team from just sitting at the 97 cap forever once a positive nudge (a good rival QB season, the player's own skill nudge) pushes it there. `0.22` was reached by a pure-math trajectory sweep (no game code needed) after `0.05` proved far too weak — see the Round 5 log entry for the actual before/after trajectories. Do not lower this without re-running that sweep; it's tuned specifically so even a genuinely elite build takes ~7-8 seasons to plateau, not 2-3.
+- `LEAGUE_NEWS_EVENTS` / `rollLeagueNews(year)` / `buildLeagueNewsFeedHTML()` / `career.leagueNewsLog` (Round 5) — league-wide narrative events for OTHER teams' grade changes (the `LeagueNewsFeed` ask), parallel to `ORG_EVENTS` which remains exclusively for the player's own team. Rendered in the League tab under "Around the League." Reuses the existing `.feed-wrap`/`.feed-line` CSS from the transaction log rather than new classes.
+- `orgEventsFor()` (Round 5) — wraps `ORG_EVENTS`, filtering out `coachfired` whenever the just-completed season won a ring. Always call this instead of rolling `ORG_EVENTS` directly; there are two call sites (`lifeEventCheck`, `secondaryLifeEventCheck`), both already updated.
+- `hofVerdict()`'s `TIERS[0].minRingsRoute` (Round 5) — First-Ballot Hall of Famer now has two independent accolade gates: the original `minProBowls:3`, or `minRingsRoute:3` (3+ rings alone also qualifies). Any future tier added to `TIERS` should decide deliberately whether it wants a `minRingsRoute` of its own rather than assuming only the Pro Bowl count gates it.
 - `STAT_SENSITIVITY = 0.32` (Round 4, was `0.5` from Round 2) / `STAT_BLEND = 0.18` (Round 2, unchanged) — the two stacked stat-production compression dials in `generateSeason()`, mirrored in `computeMetricBreakdown()` for the Admin Calc preview. Keep these two functions' values in sync if either is tuned again.
 - `computeSeasonAwardRows(season)` — shared by `buildLeagueTabHTML` and `buildAwardCeremonyHTML`, one source of truth for "every QB's season this year."
 - `resolveSeasonMVP(season, year)` / `resolveSeasonAllProAndProBowl(season, year)` — the league-wide award decision points, both called once per season from `generateSeason` right after `simulateRivalSeasons`. Same pattern: score+eligibility computed per-QB in `evaluateSeasonAwards`, compared league-wide once everyone's season is locked in.

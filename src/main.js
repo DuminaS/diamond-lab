@@ -203,6 +203,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <div class="sb-title" id="sbTitle-${i}">${svgEscape(roundDisplayLabel(r.round, year)).toUpperCase()}</div>
           <div class="sb-final" id="sbFinal-${i}">vs. the ${svgEscape(r.opponent)}</div>
           ${r._defOverall!=null ? `<div class="sb-oppgrade">Their team overall: <b>${Math.round(r._defOverall)}</b> &nbsp;·&nbsp; Your team overall: <b>${Math.round(career.teamStrength)}</b></div>` : ""}
+          ${r._oppQbName ? `<div class="sb-oppgrade">Their QB: <b>${svgEscape(r._oppQbName)}</b> (${r._oppQbOverall} overall)</div>` : ""}
           ${r.oppTendency ? `<div class="pr-tendency" style="color:var(--header-muted);text-align:center;">Scouting report: <b style="color:var(--header-accent);">${svgEscape(r.oppTendency.label)}</b> — ${svgEscape(r.oppTendency.blurb)}</div>` : ""}
           <div class="sb-quarters" id="pqQuarters-${i}"></div>
           <div class="pr-controls" id="pqControls-${i}"></div>
@@ -221,6 +222,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <div class="pr-box-title" id="prTitle-${i}">${svgEscape(roundDisplayLabel(r.round, year)).toUpperCase()}</div>
         <div class="pr-box-final" id="prFinal-${i}">vs. the ${svgEscape(r.opponent)}</div>
         ${r._defOverall!=null ? `<div class="pr-oppgrade">Their team overall: <b>${Math.round(r._defOverall)}</b> &nbsp;·&nbsp; Your team overall: <b>${Math.round(career.teamStrength)}</b></div>` : ""}
+        ${r._oppQbName ? `<div class="pr-oppgrade">Their QB: <b>${svgEscape(r._oppQbName)}</b> (${r._oppQbOverall} overall)</div>` : ""}
         ${tendencyHtml}
         <div class="pr-quarters" id="pqQuarters-${i}"></div>
         <div class="pr-controls" id="pqControls-${i}"></div>
@@ -1525,6 +1527,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       lifeEventLog: [],
       _cutShieldSeasons: 0,
       leagueRivals: [],
+      leagueNewsLog: [],
       devSpeed: rollDevSpeed(),
       devCarry: {},
       originalBuild: {...build},
@@ -1772,7 +1775,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     let tComp=0,tAtt=0,tYards=0,tTd=0,tInt=0,tSacks=0,tRushAtt=0,tRushYards=0,tRushTd=0,wins=0;
     opponents.forEach((oppId, idx)=>{
       const oppGrade = oppId===career.teamId ? career.teamStrength : (career.leagueStrength[oppId] ?? 60);
-      const scoreSim = simulateGameScore(myOff, oppGrade);
+      const oppRival = rivalForTeam(oppId);
+      const oppOffense = opponentOffenseGrade(oppId, QB_INFLUENCE_REGULAR);
+      const scoreSim = simulateGameScore(myOff, oppOffense);
       const won = scoreSim.won;
       if(won) wins++;
 
@@ -1797,7 +1802,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       tRushAtt+=gRushAtt; tRushYards+=gRushYards; tRushTd+=gRushTd;
 
       games.push({ week: idx+1, opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
-        opponentGrade: Math.round(oppGrade), won, myScore: scoreSim.myTotal, oppScore: scoreSim.oppTotal,
+        opponentGrade: Math.round(oppGrade),
+        opponentQbName: oppRival ? oppRival.name : null,
+        opponentQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
+        won, myScore: scoreSim.myTotal, oppScore: scoreSim.oppTotal,
         comp: gComp, att: gAtt, yards: gYards, td: gTd, int: gInt, sacks: gSacks,
         rushAtt: gRushAtt, rushYards: gRushYards, rushTd: gRushTd });
     });
@@ -1938,6 +1946,28 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function blendOffenseWithTeam(effOverall, teamStrength, qbInfluence){
     return teamStrength + (effOverall-teamStrength)*qbInfluence;
   }
+  // A "superteam" doesn't just coast on a high grade forever -- real contenders have to keep
+  // paying, replacing, and re-signing to stay one, and that's constant downward pressure a plain
+  // random walk never modeled. Every team above this line takes a small pull back toward it each
+  // season (see generateSeason's team-strength block), scaled by how far above it they are, so a
+  // 90-grade team decays faster than a 78-grade one. The player's own team faces the exact same
+  // pull -- the one thing that can outrun it is the QB actually playing at an elite level himself
+  // (the existing effOverall-vs-neutral nudge), which is the "team stays great because ITS QB is
+  // legitimately elite" case asked for, instead of a dynasty just being free to sit at 95 forever.
+  const CONTENDER_DECLINE_THRESHOLD = 76;
+  // Diagnostically tuned (see PROGRESS.md-style reasoning in commit notes): 0.05 was far too weak
+  // against even a modest positive skill nudge -- ANY QB better than dead-average (even a merely
+  // "good," non-elite one) rocketed straight to the 97 hard cap within 2-3 seasons and froze there
+  // permanently, exactly the "superteam that never has to work for it" complaint this exists to
+  // fix. At 0.22, a zero-nudge average QB's team genuinely bleeds out over a decade, a good QB's
+  // team settles into real season-to-season texture in the mid-80s instead of pinning at the cap,
+  // a truly elite QB's team plateaus around 90-93 (great, but still has to hold that level, not
+  // just arrive at 97 and stop), and a bad team with an elite QB takes a believable ~decade to
+  // build into a real contender rather than an instant jump.
+  const CONTENDER_DECLINE_RATE = 0.22;
+  function contenderDeclinePull(strength){
+    return strength>CONTENDER_DECLINE_THRESHOLD ? (strength-CONTENDER_DECLINE_THRESHOLD)*CONTENDER_DECLINE_RATE : 0;
+  }
   function regularSeasonOffenseGrade(effOverall, age, decade){
     const clu = eraEffective(age, decade).CLU;
     const clutchEdge = (clu-65)*0.03;
@@ -1950,6 +1980,29 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const clutchEdge = (clu-65)*0.09;
     return blendOffenseWithTeam(effOverall, career.teamStrength, QB_INFLUENCE_PLAYOFF) + clutchEdge;
   }
+
+  // ----- Opponent side of the blend: every OTHER team already has its own persistent starting QB
+  // (career.leagueRivals, one per team, generated at career start and simulated every season for
+  // league-wide awards) -- it just never fed into the actual game-sim/win-calc before, so every
+  // opponent was a single flat team-strength number with no equivalent "their QB is also great"
+  // term. This is the direct fix for both "no grind even at 95 overall" (a genuinely elite rival
+  // starter can now swing a game on his own, the same way the player's own QB does) and "let me
+  // see the opposing QB's overall" (rivalEffTalent IS that displayed number).
+  function rivalForTeam(teamId){
+    if(!career.leagueRivals) return null;
+    return career.leagueRivals.find(r=>r.teamId===teamId && !r.retired) || null;
+  }
+  // Age-adjusted the same way a rival's own season stats already are (ageMult in
+  // simulateRivalSeasons) -- an aging rival starter shouldn't blend in at his career-peak talent.
+  function rivalEffTalent(rival){
+    return clamp(Math.round(65 + (rival.talent-65)*primeMultiplier(rival.age)), 20, 99);
+  }
+  function opponentOffenseGrade(teamId, qbInfluence){
+    const teamStrength = teamId===career.teamId ? career.teamStrength : (career.leagueStrength[teamId] ?? 60);
+    const rival = rivalForTeam(teamId);
+    if(!rival) return teamStrength;
+    return blendOffenseWithTeam(rivalEffTalent(rival), teamStrength, qbInfluence);
+  }
   function resolveConferenceBracket(seeds, myTeamId, myOffFn, format, season){
     const rounds = [];
     function playMatch(teamA, teamB, roundLabel){
@@ -1957,13 +2010,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const player = teamA.id===myTeamId ? teamA : teamB;
         const opp = teamA.id===myTeamId ? teamB : teamA;
         const oppStrength = career.leagueStrength[opp.id] ?? 60;
+        const oppRival = rivalForTeam(opp.id);
+        const oppOffense = opponentOffenseGrade(opp.id, QB_INFLUENCE_PLAYOFF);
         const myOff = playoffOffenseGrade(myOffFn(), season);
-        const game = simulateGameScore(myOff, oppStrength);
+        const game = simulateGameScore(myOff, oppOffense);
         rounds.push({
           round: roundLabel, opponent: teamNameAt(opp.id, career.year), mySeed: player.seed, oppSeed: opp.seed,
           myScore: game.myTotal, oppScore: game.oppTotal, won: game.won, quarters: game.quarters,
           box: season ? generateGameBoxScore(season, game.myTotal, game.myTds) : null,
-          oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength,
+          oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength, _defOffense: oppOffense,
+          _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
         });
         return game.won ? player : opp;
       }
@@ -2021,13 +2077,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const player = teamA.id===myTeamId ? teamA : teamB;
         const opp = teamA.id===myTeamId ? teamB : teamA;
         const oppStrength = career.leagueStrength[opp.id] ?? 60;
+        const oppRival = rivalForTeam(opp.id);
+        const oppOffense = opponentOffenseGrade(opp.id, QB_INFLUENCE_PLAYOFF);
         const myOff = playoffOffenseGrade(myOffFn(), season);
-        const game = simulateGameScore(myOff, oppStrength);
+        const game = simulateGameScore(myOff, oppOffense);
         const round = {
           round: roundLabel, opponent: teamNameAt(opp.id, career.year), mySeed: player.seed, oppSeed: opp.seed,
           myScore: game.myTotal, oppScore: game.oppTotal, won: game.won, quarters: game.quarters,
           box: season ? generateGameBoxScore(season, game.myTotal, game.myTds) : null,
-          oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength,
+          oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength, _defOffense: oppOffense,
+          _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
         };
         return { isMine:true, player, opp, round };
       }
@@ -2081,13 +2140,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const otherBracket = resolveConferenceBracket(playoffs._seeded[playoffs._otherConf], "__none__", ()=>0, playoffs._format);
     const otherChampId = otherBracket.champion.id;
     const oppStrength = career.leagueStrength[otherChampId] ?? 60;
+    const oppRival = rivalForTeam(otherChampId);
+    const oppOffense = opponentOffenseGrade(otherChampId, QB_INFLUENCE_PLAYOFF);
     const myOff = playoffOffenseGrade(playoffs._effOverall, season);
-    const game = simulateGameScore(myOff, oppStrength);
+    const game = simulateGameScore(myOff, oppOffense);
     const sbRound = {
       round:"Super Bowl", opponent: teamNameAt(otherChampId, career.year),
       myScore: game.myTotal, oppScore: game.oppTotal, won: game.won,
       quarters: game.quarters, box: generateGameBoxScore(season, game.myTotal, game.myTds),
-      oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength,
+      oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength, _defOffense: oppOffense,
+      _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
     };
     sbRound._revealedCount = 0; sbRound._keyMomentChecked = false;
     playoffs.rounds.push(sbRound);
@@ -2411,9 +2473,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         // replace with a fresh rookie at the same team so the league doesn't thin out over a
         // 20-season player career -- the new starter takes over the same roster spot.
         const teamGrade = career.leagueStrength[r.teamId] ?? 60;
+        const newTalent = clamp(teamGrade + randInt(-15,15), 20, 99);
+        // A concrete, legible reason a team's grade moves: losing a known, age-adjusted starter
+        // for an unproven rookie is a real transition, not neutral -- how big a deal it is depends
+        // on how much the succession actually downgrades (or upgrades) the position.
+        const successionNudge = Math.round((newTalent - rivalEffTalent(r)) * 0.3);
+        career.leagueStrength[r.teamId] = clamp(teamGrade + successionNudge, 20, 96);
         career.leagueRivals.push({
           id: "riv_"+r.teamId+"_"+year, name: randomFullName(), teamId: r.teamId,
-          talent: clamp(teamGrade + randInt(-15,15), 20, 99), age: 22, retireAge: randInt(30,40),
+          talent: newTalent, age: 22, retireAge: randInt(30,40),
           draftYear: year, seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0 },
           retired: false, succeededId: r.id,
         });
@@ -2597,15 +2665,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       rating, td, winPct, attempts, gamesPlayed, leagueGames: league.games, decade,
     });
 
-    // team quality evolves heading into this season: outside factors (coaching churn, roster
-    // turnover, the draft) move every other team on their own; how well THIS QB has been
-    // playing nudges his own team's grade on top of that same noise.
-    TEAMS.forEach(t=>{
-      if(t.id===career.teamId) return;
-      career.leagueStrength[t.id] = clamp(career.leagueStrength[t.id] + randInt(-8,8), 20, 96);
-    });
-    career.teamStrength = clamp(career.teamStrength + randInt(-4,4) + Math.round((effOverall-neutralOverall)*primeMult*0.14), 20, 97);
-    career.leagueStrength[career.teamId] = career.teamStrength;
+    // Team quality for THIS season is whatever it already was heading in (see the end of last
+    // season's block below) -- it deliberately does NOT change mid-season, so the same team
+    // grade is what both the regular season and the playoffs actually played against.
 
     const season = {
       year: career.year, age: career.age, teamId: career.teamId, teamName: teamNameAt(career.teamId, career.year),
@@ -2634,6 +2696,36 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // player and every simulated rival -- has this year's season locked in.
     const mvp = resolveSeasonMVP(season, career.year);
     const { proBowl, allPro } = resolveSeasonAllProAndProBowl(season, career.year);
+
+    // ----- Team quality for NEXT season: legible causes first, small residual noise last. -----
+    // Every other team's grade now moves because of something that actually happened to their own
+    // rival QB this season (an award-winning year lifts them, a rough statistical season drags on
+    // them -- succession/retirement is handled separately, right where it happens, in
+    // simulateRivalSeasons), plus the same superteam decline pull everyone faces, plus a MUCH
+    // smaller noise term than the old flat +/-8 random walk (most of a team's movement should now
+    // be explainable, not just dice). rollLeagueNews layers headline-driven swings for a handful of
+    // teams a season on top of this, same idea ORG_EVENTS already gives the player's own team.
+    const decadeAvgRating = leagueAvgRatingForDecade(decade);
+    career.leagueRivals.forEach(r=>{
+      const justSeason = r.seasons.length ? r.seasons[r.seasons.length-1] : null;
+      if(!justSeason || justSeason.year!==career.year) return; // retired/succeeded this same year -- handled at the point of succession instead
+      const s = career.leagueStrength[r.teamId] ?? 60;
+      let nudge = randInt(-2,2);
+      if(justSeason.awards && justSeason.awards.length) nudge += justSeason.awards.length*1.5;
+      else if(justSeason.rating < decadeAvgRating-8) nudge -= 2;
+      nudge -= contenderDeclinePull(s);
+      career.leagueStrength[r.teamId] = clamp(s + Math.round(nudge), 20, 96);
+    });
+    rollLeagueNews(career.year);
+    // The player's own team faces identical decline pressure -- the counteracting force is the
+    // same skill-linked nudge this always had (how far above/below neutral effOverall actually
+    // played this season), unchanged from before this pass.
+    const teamNoise = randInt(-2,2);
+    const teamSkillNudge = Math.round((effOverall-neutralOverall)*primeMult*0.14);
+    const teamDeclinePull = Math.round(contenderDeclinePull(career.teamStrength));
+    career.teamStrength = clamp(career.teamStrength + teamNoise + teamSkillNudge - teamDeclinePull, 20, 97);
+    career.leagueStrength[career.teamId] = career.teamStrength;
+
     career.totals.games += gamesPlayed; career.totals.comp += completions; career.totals.att += attempts;
     career.totals.yards += yards; career.totals.td += td; career.totals.int += interceptions; career.totals.sacks += sacks;
     career.totals.rushYards += rushYards; career.totals.rushTd += rushTd;
@@ -2729,6 +2821,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function infractionEventsFor(){
     const year = career.year;
     return INFRACTION_EVENTS.filter(e=> (!e.minYear || year>=e.minYear) && (!e.maxYear || year<=e.maxYear));
+  }
+
+  // A coach getting fired for poor results the SAME offseason the team just won it all reads as
+  // flatly illogical (a real reported complaint) -- excludes just that one entry right after a
+  // title, rather than suppressing org news generally (a new GM, ownership sale, etc. can still
+  // happen for reasons that have nothing to do with the season just played).
+  function orgEventsFor(){
+    const lastSeason = career.seasonLog.length ? career.seasonLog[career.seasonLog.length-1] : null;
+    const justWonTitle = !!(lastSeason && lastSeason.playoffs && lastSeason.playoffs.wonRing);
+    return justWonTitle ? ORG_EVENTS.filter(e=>e.id!=="coachfired") : ORG_EVENTS;
   }
 
   // ----- Rare "easter egg" career-altering events -----
@@ -2834,6 +2936,61 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const next = pick(others);
     career.teamScheme[career.teamId] = next.id;
     return next;
+  }
+
+  /* ----- League News: the same "why did that team's grade move" narrative ORG_EVENTS gives the
+     player's own team, extended league-wide to every OTHER team. Most seasons only a handful of
+     teams roll a news event at all (see rollLeagueNews) -- most of the other ~25+ teams' grades
+     that season just take the small residual noise/decline term below, no headline needed. Weights
+     are deliberately percentile-shaped: the common entries move a team ±1-3, the two "big swing"
+     entries (generational bust/breakout) are both rare (low weight) AND wider (±4-8), so a
+     franchise-altering headline is a real but uncommon event, not routine season noise. ----- */
+  const LEAGUE_NEWS_EVENTS = [
+    { id:"draftbust", title:"Generational Draft Bust", weight:3, strengthDelta:[-8,-4],
+      flavor:(team)=>`The ${team}' can't-miss rookie has looked lost through camp and the preseason — the kind of bust scouts will be dissecting for years.` },
+    { id:"rookiestar", title:"Rookie Sensation Wins the Job", weight:4, strengthDelta:[3,7],
+      flavor:(team)=>`A rookie nobody expected to start Week 1 has forced the ${team}' hand and taken the job outright.` },
+    { id:"coachchange", title:"Coaching Change", weight:9, strengthDelta:[-5,4],
+      flavor:(team)=>`The ${team} moved on from their head coach this offseason — could be a fresh system, could be a rebuild nobody's excited about yet.` },
+    { id:"blockbuster", title:"Blockbuster Trade", weight:6, strengthDelta:[2,5],
+      flavor:(team)=>`The ${team} sent a haul of draft capital for a proven difference-maker at a position of need.` },
+    { id:"capcasualty", title:"Cap Casualties Gut the Roster", weight:7, strengthDelta:[-5,-1],
+      flavor:(team)=>`A brutal cap crunch forced the ${team} to part ways with several longtime starters this offseason.` },
+    { id:"freeagentwin", title:"Front Office Wins Free Agency", weight:6, strengthDelta:[2,5],
+      flavor:(team)=>`The ${team} landed the best available name in free agency, and it wasn't particularly close.` },
+    { id:"holdOut", title:"Star Holds Out of Camp", weight:5, strengthDelta:[-4,-1],
+      flavor:(team)=>`A contract standoff kept the ${team}' best player out of camp all summer — chemistry and timing both took a hit.` },
+    { id:"ownershipmeddling", title:"Ownership Meddling", weight:4, strengthDelta:[-4,-1],
+      flavor:(team)=>`Report after report describes an owner overruling his own front office — the building is reportedly not a fun place to work right now.` },
+    { id:"schemeclicks", title:"New Scheme Clicks Immediately", weight:5, strengthDelta:[2,4],
+      flavor:(team)=>`A new coordinator's system fit the existing roster like a glove from day one of camp.` },
+    { id:"injurywave", title:"Rash of Injuries in Camp", weight:5, strengthDelta:[-3,-1],
+      flavor:(team)=>`An unusually bad run of camp injuries has already thinned the ${team}' depth chart before Week 1.` },
+  ];
+  function rollLeagueNews(year){
+    const totalWeight = LEAGUE_NEWS_EVENTS.reduce((s,e)=>s+e.weight, 0);
+    function pickWeighted(){
+      let r = Math.random()*totalWeight;
+      for(const e of LEAGUE_NEWS_EVENTS){ if(r<e.weight) return e; r -= e.weight; }
+      return LEAGUE_NEWS_EVENTS[0];
+    }
+    // A handful of OTHER teams (never the player's own -- that's ORG_EVENTS' job) get a headline
+    // this season, each independently, so most seasons feel different but no two feel alike.
+    const others = TEAMS.filter(t=>t.id!==career.teamId);
+    others.forEach(t=>{
+      if(Math.random()>=0.1) return;
+      const ev = pickWeighted();
+      const delta = randInt(ev.strengthDelta[0], ev.strengthDelta[1]);
+      career.leagueStrength[t.id] = clamp((career.leagueStrength[t.id]??60)+delta, 20, 96);
+      career.leagueNewsLog.push({ year, teamId: t.id, title: ev.title, delta, flavor: ev.flavor(teamNameAt(t.id, year)) });
+    });
+  }
+  function buildLeagueNewsFeedHTML(){
+    const log = career.leagueNewsLog || [];
+    if(!log.length) return `<div class="feed-wrap"><div class="feed-empty">No league news yet — check back after your rookie season.</div></div>`;
+    const recent = log.slice(-16).reverse();
+    const rows = recent.map(n=>`<div class="feed-line ${n.delta>=0?"good":"bad"}"><span class="feed-year tabular">${n.year}</span><span class="feed-text"><b>${svgEscape(teamNameAt(n.teamId, n.year))}</b> — ${svgEscape(n.title)} (${fmtDelta(n.delta)}). ${svgEscape(n.flavor)}</span></div>`).join("");
+    return `<div class="feed-wrap">${rows}</div>`;
   }
 
   /* ----- Locker room & leadership: choice-driven interactions with teammates and coaches, not
@@ -2972,7 +3129,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const notableChance = clamp(0.065 + prominence*0.0032, 0.045, 0.32);
     if(Math.random()<notableChance){
       if(Math.random()<0.55){ renderPositiveEvent(pick(POSITIVE_EVENTS)); return; }
-      renderOrgEvent(pick(ORG_EVENTS));
+      renderOrgEvent(pick(orgEventsFor()));
       return;
     }
     waiverCheck();
@@ -2990,7 +3147,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const lockerPool = lockerRoomEventsFor();
         if(lockerPool.length){ renderLockerRoomEvent(pick(lockerPool)); return; }
       }
-      renderOrgEvent(pick(ORG_EVENTS));
+      renderOrgEvent(pick(orgEventsFor()));
       return;
     }
     waiverCheck();
@@ -3321,7 +3478,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const canSign = Math.random()<reSignChance;
     let offerTeam=null, offerApy=0;
     if(canSign){
-      offerTeam = pickTeamByStrength(career.year, career.teamId, 15, 60);
+      // A cut is still a cut (a "prove-it" deal, not top dollar) but the destination shouldn't be
+      // capped at a flat 15-60 team grade regardless of who's being cut -- a real proven starter
+      // still draws interest from a genuinely good team looking for a value/prove-it flier, even
+      // right after a surprising release. Range scales up with the player's own recent overall.
+      const lo = clamp(15 + (effOverall-50)*0.5, 15, 55);
+      const hi = clamp(60 + (effOverall-50)*0.7, 60, 92);
+      offerTeam = pickTeamByStrength(career.year, career.teamId, lo, hi);
       offerApy = Math.round(veteranAPY(decade,"minimum") * (Math.random()<0.3?1.4:1));
     }
     const content = document.getElementById("careerContent");
@@ -3496,9 +3659,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
      unexpectedly team-friendly deal working out great, or the opposite, a lowball nobody saw
      coming — can land on any one offer regardless of how the negotiating goes. ----- */
   function tierRank(tier){ return ({minimum:0,backup:1,average:2,good:3,elite:4})[tier] ?? 0; }
+  // Need used to be modeled purely off how WEAK a team's overall roster already was (100-teamStrength)
+  // -- which meant an elite free agent could only ever match with rebuilding teams, since a good
+  // team's high team-strength always registered as "low need," regardless of who was actually
+  // playing QB there. A real report: "I'm mid-80s+, consistently good, and my only offers are from
+  // 20-40 overall teams." Fixed by keying need off how replaceable the team's OWN current starter
+  // is (their rivalForTeam QB's talent) instead -- a stacked team stuck with a mediocre incumbent
+  // is exactly the kind of team that goes all-in on a big free-agent name in real life, and now
+  // shows up as a legitimate elite-tier destination the same way a rebuilding team does.
   function teamNeedRank(teamId){
-    const s = career.leagueStrength[teamId] ?? 60;
-    const need = clamp(100 - s + randInt(-15,15), 0, 100);
+    const rival = rivalForTeam(teamId);
+    const qbQuality = rival ? rivalEffTalent(rival) : 60;
+    const need = clamp(100 - qbQuality + randInt(-12,12), 0, 100);
     if(need>=78) return 4; if(need>=58) return 3; if(need>=38) return 2; if(need>=18) return 1; return 0;
   }
   function buildFreeAgentOffers(decade, tier, oldTeamId){
@@ -3846,7 +4018,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     }
     const rows = log.map(g=>`<tr>
         <td class="tabular">${g.week}</td>
-        <td>${svgEscape(g.opponentName)} <span style="color:var(--ink-muted);">(grade ${g.opponentGrade})</span></td>
+        <td>${svgEscape(g.opponentName)} <span style="color:var(--ink-muted);">(grade ${g.opponentGrade})</span>${g.opponentQbName ? `<br><span style="color:var(--ink-muted);font-size:0.82em;">QB ${svgEscape(g.opponentQbName)} — ${g.opponentQbOverall} overall</span>` : ""}</td>
         <td class="${g.won?"good":"bad"}"><b>${g.won?"W":"L"}</b> <span class="tabular">${g.myScore}-${g.oppScore}</span></td>
         <td class="tabular">${g.comp}/${g.att}</td>
         <td class="tabular">${g.yards}</td>
@@ -4022,6 +4194,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           </table>
         </div>
         ${classHtml}
+        <div class="section-label" style="margin-top:1.5rem;">Around the League</div>
+        <div class="calc-refnote">Front-office news from other teams — this is why their grades move, not just dice.</div>
+        ${buildLeagueNewsFeedHTML()}
       </div>`;
   }
 
@@ -4638,7 +4813,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const otPts = otTd?6:3;
       let otMy=0, otOpp=0;
       if(good) otMy = otPts;
-      else if(Math.random() < 0.5 + ((round._offOverall??65)-(round._defOverall??65))*0.01) otMy = otPts;
+      else if(Math.random() < 0.5 + ((round._offOverall??65)-(round._defOffense??round._defOverall??65))*0.01) otMy = otPts;
       else otOpp = otPts;
       round.quarters.push({ q:"OT", myQ: otMy, oppQ: otOpp, myTotal: q4.myTotal+otMy, oppTotal: q4.oppTotal+otOpp });
       round.myScore = q4.myTotal+otMy; round.oppScore = q4.oppTotal+otOpp;
@@ -5019,7 +5194,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // excellence, not one hot short stretch. Tiers are checked highest-first; a gated tier that fails
     // the season requirement simply falls through to the next one down.
     const TIERS = [
-      { min:150, seasons:10, minProBowls:3, tier:"First-Ballot Hall of Famer", note:"The bronze bust is a formality at this point." },
+      // minRingsRoute is a second, independent way into First-Ballot: winner-take-all Pro Bowl
+      // slots mean an elite player can genuinely lose out on selections to other elite QBs the
+      // very seasons he wins it all, so a 3-Pro-Bowl floor alone can wrongly demote a multi-ring
+      // champion (a real reported case: 4 rings in 11 seasons, only Hall of Famer). Real-life
+      // multi-ring starters are essentially never a First-Ballot snub over a Pro Bowl technicality.
+      { min:150, seasons:10, minProBowls:3, minRingsRoute:3, tier:"First-Ballot Hall of Famer", note:"The bronze bust is a formality at this point." },
       { min:100, seasons:8,  minProBowls:1, tier:"Hall of Famer", note:"A career the voters won't be able to leave off the ballot." },
       { min:65,  seasons:0,  minProBowls:0, tier:"Hall of Very Good", note:"A borderline case — the kind that sparks arguments for a decade." },
       { min:35,  seasons:0,  minProBowls:0, tier:"Longtime Starter", note:"Not a legend, but a team could win with this for a long time." },
@@ -5027,7 +5207,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       { min:-Infinity, seasons:0, minProBowls:0, tier:"Camp Arm", note:"The jersey barely got game-worn, but you were on an NFL roster." },
     ];
     for(const tier of TIERS){
-      if(score>=tier.min && seasons>=tier.seasons && t.proBowls>=(tier.minProBowls||0)){
+      const accoladeGateMet = t.proBowls>=(tier.minProBowls||0) || (tier.minRingsRoute && t.rings>=tier.minRingsRoute);
+      if(score>=tier.min && seasons>=tier.seasons && accoladeGateMet){
         // "Hall of Famer" only requires ONE Pro Bowl to gate into -- a career can clear the 100-point
         // bar mostly on longevity/volume score with barely any real accolades to show for it. That's
         // exactly the "hall of fame while being not great" case: the tier is real (the math says so),
