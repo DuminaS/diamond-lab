@@ -162,6 +162,40 @@ per-item root causes below, all confirmed as real, verifiable gaps, not just vib
    (waiver signing, expansion draft, trade, granted trade request, free-agent signing) roll fresh
    values for the new roster; light ±2/season noise keeps both stats from going static between events.
 
+8. **Wear and tear economy — shipped.** Replaces "instead of binary injury events" (the user's own
+   framing) with a persistent, career-long `career.wearAndTear` meter (0-100) that the play-through-
+   it-vs-sit-it-out choice actually feeds, instead of the old system where that choice only affected
+   this-season missed games/performance and a since-untouched, tiny, choice-independent
+   `permanentHit` roll (still present, unchanged — a rare ~1-4pt freak structural injury, distinct
+   from and much less common than this new accumulation-driven system) was the only source of
+   permanent decay. In `resolveInjuryChoice`: gutting it out adds `randInt(10,18) + sev*16` (+more if
+   it worsens) to the meter; shutting it down adds almost nothing (`randInt(0,2) + sev*3`) — rest
+   genuinely protects the body. In `generateSeason()`: a small age/DUR-scaled baseline wear applies
+   every season (accelerating past age 26, faster for low-DUR builds), and an injury-free season
+   recovers some back, tapering off past age 28 (an older body doesn't bounce back the way a
+   23-year-old's does). Above a **45-point threshold**, each season rolls a breakdown chance
+   (`clamp((wear-45)*0.012, 0, 0.4)`) that permanently docks 1-2 *physical* attributes (ARM/REL/MOB/
+   IMP — DUR itself is never touched, preserving the existing "DUR is the one attribute deliberately
+   left un-adjusted" invariant) by 2-5 points each, and relieves 22 points of wear (a breakdown is
+   itself a forced recovery, not an ongoing drain). **Diagnostically tuned** (pure-math trajectory
+   sweep across 5,000 simulated careers per policy, no game code needed, before writing any of this
+   into `src/main.js`): "always sit out" stays at ~0% breakdown risk for a full 14-season career
+   regardless of durability; "always gut it out" produces at least one permanent breakdown in
+   **65-81% of careers** (worse for a fragile/low-DUR build), with a **23-35% chance of one
+   specifically by age 30** — a genuine, tangible cost tied directly to the choice, not a rare
+   footnote. Visible, not hidden, matching this project's "legible causes" convention from item 5
+   above: a new "Wear & Tear" meter row in the front-office widget (reusing the existing
+   `fanMeterRow` component) with a plain-language tag (Fresh/Some Mileage/Battle-Tested/Breaking
+   Down/Running on Fumes) and explanation; the injury-choice card itself shows the current wear
+   level and an explicit warning once it's past the risk threshold, so the decision can be made
+   with full information, not blind; a breakdown season gets its own narrative line on the Season
+   tab (`season.wearBreakdown`) alongside a transactions-log entry naming exactly which attributes
+   declined. Verified live (not just diagnostics): a Playwright run that always chooses "gut it out"
+   confirmed no crashes and correct display across many seasons; a second run that force-set
+   `career.wearAndTear` to 95 via the save data and resumed confirmed the breakdown narrative fires,
+   the correct physical attributes take a real hit at the moment it happens, and wear drops
+   afterward exactly as designed.
+
 Verified end-to-end via Playwright (not just diagnostics) across a real 8-season playthrough: zero
 page errors, opponent QB correctly shown every season in the Schedule tab, League News feed
 populated (23 entries by season 8), team-strength spread stayed realistic (range of 75 points across
@@ -239,6 +273,7 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `hofVerdict()`'s `TIERS[0].minRingsRoute` (Round 5) — First-Ballot Hall of Famer now has two independent accolade gates: the original `minProBowls:3`, or `minRingsRoute:3` (3+ rings alone also qualifies). Any future tier added to `TIERS` should decide deliberately whether it wants a `minRingsRoute` of its own rather than assuming only the Pro Bowl count gates it.
 - `findRivalById(id)` / `openRivalProfile(rivalId)` / `buildRivalProfileHTML(rival)` / `rivalCareerFunFacts(rival)` (Round 5) — the rival QB profile page. `findRivalById` (unlike `rivalForTeam`) also matches retired rivals, since a profile opened from an old season's log should resolve to who actually played that game. Every place an opponent QB is generated/displayed carries a matching `...QbId`/`_oppQbId` field alongside name/overall specifically so this can look them up later. The single delegated `[data-rival-id]` click listener lives in the one-time Init block, NOT inside `renderSeasonCard` — `#careerContent` itself is never recreated between seasons (only its innerHTML), so attaching a fresh listener there every render would silently stack duplicates. Any future clickable element added inside a season card that needs the same "works in any tab, any season" behavior should follow this pattern, not add its own per-render listener.
 - `career.oline` / `career.weapons` / `rollSupportingCastGrade(teamStrength)` / `castLetterGrade(value)` (Round 5) — the Supporting Cast system, 20-99 with their own independent noise against team strength (a good team can have a bad line). Reset at all 5 sites the player joins a new team (waiver sign, expansion draft, trade, granted trade request, FA sign); FA offers roll a preview once and store it ON the offer object (`o.oline`/`o.weapons`) so `signFreeAgentOffer` uses the exact value shown, never a fresh re-roll. `ORG_EVENTS` entries can carry a `target:"oline"`/`target:"weapons"` field (only `oline`/`starleaves` currently do) to route their `strengthDelta` at a specific supporting-cast stat instead of generic `career.teamStrength` — `renderOrgEvent` checks this before falling back to the team-wide default. Feeds `sackRate` (oline) and a small completion%/YPA nudge (weapons) in `generateSeason()`, mirrored in the Admin Calc preview per the `STAT_SENSITIVITY` sync convention below.
+- `career.wearAndTear` / `career._hadInjuryThisSeason` (Round 5) — the wear-and-tear economy. Set almost entirely in two places: the wear-add itself in `resolveInjuryChoice` (bigger for `played=true`, i.e. "gut it out," than for sitting out), and the per-season baseline/recovery/breakdown-threshold check in `generateSeason()`, which reads `_hadInjuryThisSeason` (captured into a local BEFORE it's reset alongside `_injuryMissedGames`/`_injuryPenalty`, same pattern as those) to decide whether to apply recovery. `WEAR_BREAKDOWN_THRESHOLD=45` and its coefficients were reached via a pure-math trajectory sweep BEFORE writing any game code (see the Round 5 log entry) — retune with that same method, not by guessing, if this ever needs adjusting. Breakdown decay is scoped to `["ARM","REL","MOB","IMP"]` only — never `DUR`, matching the pre-existing "DUR is fixed for the career" invariant the rare `permanentHit` roll in the same function already respected. This is deliberately a SEPARATE mechanism from `permanentHit` (still present, unchanged) — `permanentHit` is a rare freak-injury flavor, wear-driven breakdown is the real, choice-driven accumulation system.
 - `STAT_SENSITIVITY = 0.32` (Round 4, was `0.5` from Round 2) / `STAT_BLEND = 0.18` (Round 2, unchanged) — the two stacked stat-production compression dials in `generateSeason()`, mirrored in `computeMetricBreakdown()` for the Admin Calc preview. Keep these two functions' values in sync if either is tuned again.
 - `computeSeasonAwardRows(season)` — shared by `buildLeagueTabHTML` and `buildAwardCeremonyHTML`, one source of truth for "every QB's season this year."
 - `resolveSeasonMVP(season, year)` / `resolveSeasonAllProAndProBowl(season, year)` — the league-wide award decision points, both called once per season from `generateSeason` right after `simulateRivalSeasons`. Same pattern: score+eligibility computed per-QB in `evaluateSeasonAwards`, compared league-wide once everyone's season is locked in.

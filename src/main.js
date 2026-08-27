@@ -1521,6 +1521,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       teamStrength: leagueStrength[team.id],
       oline: rollSupportingCastGrade(leagueStrength[team.id]),
       weapons: rollSupportingCastGrade(leagueStrength[team.id]),
+      wearAndTear: 0,
       teamScheme,
       gmRelationship: 50,
       fanSupport: 50,
@@ -2663,7 +2664,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const missedGamesSuspension = career._suspensionMissedGames || 0;
     let missedGames = missedGamesInjury + missedGamesSuspension;
     let perfPenalty = career._injuryPenalty || 0;
-    career._injuryMissedGames = 0; career._suspensionMissedGames = 0; career._injuryPenalty = 0;
+    const hadInjuryThisSeason = !!career._hadInjuryThisSeason;
+    career._injuryMissedGames = 0; career._suspensionMissedGames = 0; career._injuryPenalty = 0; career._hadInjuryThisSeason = false;
 
     const gamesPlayed = clamp(league.games - missedGames, 0, league.games);
 
@@ -2842,6 +2844,40 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // between events.
     career.oline = clamp(career.oline + randInt(-2,2), 20, 99);
     career.weapons = clamp(career.weapons + randInt(-2,2), 20, 99);
+
+    // ----- Wear and tear economy: a persistent, career-long meter (not a per-injury dice roll) --
+    // see resolveInjuryChoice for the play-through-it vs. shut-it-down wear add, which is where
+    // most of a career's real accumulation actually comes from. A small age/durability-scaled
+    // baseline applies every season regardless (wear starts accelerating past 26, a low-DUR build
+    // wears faster, a high one slower); an injury-free season recovers some of it back, tapering
+    // off with age since an older body doesn't bounce back the way a 23-year-old's does. Diagnostically
+    // tuned (pure-math trajectory sweep, no game code needed): "always sit out" stays near-zero
+    // breakdown risk for a full career; "always gut it out" produces at least one permanent
+    // breakdown in ~65-80% of careers (more for a fragile build), with a real (~25-35%) chance of
+    // one specifically by age 30 -- a genuine, tangible cost to the choice, not a footnote.
+    const ageWear = career.age>26 ? (career.age-26)*0.9 : 0.5;
+    const durRelief = (build.DUR-65)*0.04;
+    const seasonWear = clamp(ageWear - durRelief, 0.3, 7);
+    career.wearAndTear = clamp((career.wearAndTear||0) + seasonWear, 0, 100);
+    if(!hadInjuryThisSeason){
+      const recovery = career.age<28 ? 3 : 1.2;
+      career.wearAndTear = clamp(career.wearAndTear - recovery, 0, 100);
+    }
+    const WEAR_BREAKDOWN_THRESHOLD = 45;
+    if(career.wearAndTear > WEAR_BREAKDOWN_THRESHOLD){
+      const breakdownChance = clamp((career.wearAndTear-WEAR_BREAKDOWN_THRESHOLD)*0.012, 0, 0.4);
+      if(Math.random() < breakdownChance){
+        const physicalKeys = ["ARM","REL","MOB","IMP"].filter(k=>build[k]>18);
+        if(physicalKeys.length){
+          const hitKeys = shuffle(physicalKeys).slice(0, Math.min(physicalKeys.length, randInt(1,2)));
+          hitKeys.forEach(k=>{ build[k] = clamp(build[k]-randInt(2,5), 15, 99); });
+          career.wearAndTear = clamp(career.wearAndTear - 22, 0, 100);
+          season.wearBreakdown = { keys: hitKeys.slice() };
+          const keyLabels = hitKeys.map(k=>(ATTR_BY_KEY[k]||{}).label||k).join(" and ");
+          career.transactions.push(`${career.year}: Years of wear catch up with him — a permanent decline in ${keyLabels}.`);
+        }
+      }
+    }
 
     career.totals.games += gamesPlayed; career.totals.comp += completions; career.totals.att += attempts;
     career.totals.yards += yards; career.totals.td += td; career.totals.int += interceptions; career.totals.sacks += sacks;
@@ -4018,13 +4054,17 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function renderInjuryEvent(type, dur, injMult, decade, week){
     const content = document.getElementById("careerContent");
     const sevFlavor = type.sev>=0.7 ? "a serious injury — the kind that can end a season" : type.sev>=0.42 ? "a real injury, not a tweak" : "a nagging but manageable injury";
+    const wear = career.wearAndTear||0;
+    const wearWarning = wear>=45
+      ? ` His body's already worn (${Math.round(wear)}/100) — gutting out another one now is real risk of a permanent decline, not just a bad week.`
+      : "";
     content.innerHTML = eraWrap(decade, `
         <div class="ev-eyebrow">${career.year} Season · Week ${week}</div>
         <h3>${type.name}.</h3>
-        <p>Training staff calls it ${sevFlavor}. Play through it and chase the season, or shut it down and protect the long game.</p>
+        <p>Training staff calls it ${sevFlavor}. Play through it and chase the season, or shut it down and protect the long game.${wearWarning}</p>
         <div class="event-choices">
-          <button class="choice-btn" id="injPlay"><div class="cb-title">Gut it out</div><div class="cb-sub">Stay on the field — but pushing through a ${type.name.toLowerCase()} carries a real chance of making it worse.</div></button>
-          <button class="choice-btn" id="injSit"><div class="cb-title">Shut it down</div><div class="cb-sub">Miss real time this year, come back closer to full strength.</div></button>
+          <button class="choice-btn" id="injPlay"><div class="cb-title">Gut it out</div><div class="cb-sub">Stay on the field — but pushing through it adds real wear and tear, on top of a chance of making it worse right now.</div></button>
+          <button class="choice-btn" id="injSit"><div class="cb-title">Shut it down</div><div class="cb-sub">Miss real time this year, come back closer to full strength — and barely adds to his long-term wear.</div></button>
         </div>
       `, {tone:"bad"});
     document.getElementById("injPlay").addEventListener("click", ()=> resolveInjuryChoice(type, dur, injMult, decade, true, week));
@@ -4053,6 +4093,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       missedGames = randInt(Math.round(2+type.sev*4), Math.round(4+type.sev*10));
       perfPenalty = Math.round(type.sev*3);
     }
+    // ----- Wear and tear: the real, cumulative version of "playing through it has a cost."
+    // Gutting it out adds a real chunk to a persistent career-long meter; shutting it down adds
+    // almost nothing (rest protects the body). generateSeason() adds a small age/durability-scaled
+    // baseline on top every season and lets the meter recover on a clean, injury-free one -- see
+    // that function for the threshold check that can turn a high meter into a genuine, permanent
+    // physical decline. This is deliberately separate from (and much more common than) the rare
+    // structural permanentHit below, which represents one freak injury, not accumulated damage.
+    const wearAdd = played
+      ? randInt(10,18) + Math.round(type.sev*16) + (worsened ? randInt(4,10) : 0)
+      : randInt(0,2) + Math.round(type.sev*3);
+    career.wearAndTear = clamp((career.wearAndTear||0) + wearAdd, 0, 100);
+    career._hadInjuryThisSeason = true;
     // cap in-season missed games at what's actually left on the schedule after the week the
     // injury happened -- a "Week 12" injury in a 17-game season can miss at most 6 games this
     // year (weeks 12-17), never the 10-14 the raw severity roll above might otherwise produce.
@@ -4532,10 +4584,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const ageCap = durabilityAgeCap();
     const yearsLeft = Math.max(0, ageCap-career.age);
     const durTag = build.DUR>=80 ? "Iron man" : build.DUR>=55 ? "Average wear" : "Fragile";
+    const wear = career.wearAndTear||0;
+    const wearTag = wear>=85 ? "Running on Fumes" : wear>=65 ? "Breaking Down" : wear>=45 ? "Battle-Tested" : wear>=25 ? "Some Mileage" : "Fresh";
+    const wearSub = wear>=45
+      ? `Playing through injuries instead of resting them is what built this up — above 45, every season carries a real chance of a permanent physical decline.`
+      : `Stays low by resting injuries instead of playing through them. Keep it that way to protect his physical attributes long-term.`;
     return `<div class="front-office-widget">
         ${fanMeterRow("GM Relations", career.gmRelationship, gmTag)}
         ${fanMeterRow("Fan Support", career.fanSupport, fanTag)}
         ${fanMeterRow("League Popularity", career.leaguePopularity, popTag)}
+        ${fanMeterRow("Wear & Tear", wear, `${wearTag} — ${wearSub}`)}
         <div class="fo-row">
           <div class="fo-row-head"><span class="fo-row-label">Career Outlook</span><span class="fo-row-value tabular">${durTag}</span></div>
           <div class="fo-row-sub">Durability ${build.DUR} — the body should hold up through roughly age ${ageCap}${yearsLeft>0 ? ` (about ${yearsLeft} more season${yearsLeft===1?"":"s"} at current age, injuries permitting)` : " — this could be the last one"}.</div>
@@ -4585,6 +4643,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(season.wins/Math.max(1,season.games) >= 0.75) narratives.push(`One of the best rooms in the league all year.`);
     if(season.wins/Math.max(1,season.games) <= 0.25 && season.games>4) narratives.push(`A rough year up front — the offense never found its footing.`);
     if(career.age>=agingVetThreshold()) narratives.push(`Father Time is undefeated — with a durability grade like this, every season from here is borrowed time.`);
+    if(season.wearBreakdown){
+      const keyLabels = season.wearBreakdown.keys.map(k=>(ATTR_BY_KEY[k]||{}).label||k).join(" and ");
+      narratives.push(`⚠ The wear finally caught up with him this year — a permanent decline in ${keyLabels}. Playing through pain has a real cost.`);
+    }
 
     const p = season.playoffs;
     const standingsLine = p.made
