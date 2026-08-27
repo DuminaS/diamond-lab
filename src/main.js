@@ -1857,6 +1857,26 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(effOverall>=46) return "backup";
     return "minimum";
   }
+  // Rival/depth-chart contract economics -- reuses the exact same CONTRACT_SCALE tiers the
+  // player's own contract math is built on (veteranAPY/performanceTier), so a rival's deal reads
+  // on the same real-money scale as the player's, instead of an invented parallel number.
+  function rollRivalContract(decade, talent){
+    const tier = performanceTier(talent);
+    const apy = Math.round(veteranAPY(decade, tier) * (0.85 + Math.random()*0.3));
+    const years = tier==="elite" ? randInt(4,6) : tier==="good" ? randInt(3,5) : tier==="average" ? randInt(2,4) : randInt(1,3);
+    return { apy, years, tier };
+  }
+  function rollRookieDepthContract(decade, round){
+    return { apy: rookieAPY(decade, round), years: 4, tier: "rookie" };
+  }
+  // "Stuck on a big contract" proxy (user's own framing) -- a team won't bench/replace a starter
+  // while this is still positive unless he's declined sharply or is clearly past his prime (see
+  // evaluateSuccession), the same way a real second-contract veteran is hard to bench purely for
+  // a promising backup. Scales with talent since a real second contract is a reward for being good,
+  // not a random dice roll independent of quality.
+  function rollEntrenchedYears(talent){
+    return talent>=80 ? randInt(5,8) : talent>=65 ? randInt(3,6) : randInt(2,4);
+  }
   function fmtMoney(n){
     if(n>=1000000) return "$"+(Math.round(n/100000)/10).toFixed(1).replace(/\.0$/,"")+"M";
     return "$"+Math.round(n/1000)+"K";
@@ -2118,6 +2138,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       lifeEventLog: [],
       _cutShieldSeasons: 0,
       leagueRivals: [],
+      leagueDepthCharts: {},
       rivalries: {},
       leagueNewsLog: [],
       devSpeed: rollDevSpeed(),
@@ -2694,11 +2715,21 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const rec = (career.rivalries||{})[rival.id];
     const rivalryHtml = rec ? fanMeterRow("Rivalry", rec.score,
       `${rivalryLevelLabel(rec.score)} — ${rec.meetings} meeting${rec.meetings===1?"":"s"}${rec.playoffMeetings?`, ${rec.playoffMeetings} in the playoffs`:""}.`) : "";
+    const contractLine = (!rival.retired && rival.contract) ? `<div class="rival-meta">Contract: <b>${fmtMoney(rival.contract.apy)}</b>/yr · ${rival.contract.years} year${rival.contract.years===1?"":"s"} left · ${svgEscape(rival.contract.tier)}${rival.entrenchedYears>0?"":" · expiring"}</div>` : "";
+    const chart = (career.leagueDepthCharts||{})[rival.teamId];
+    const depthChartHtml = (!rival.retired && chart) ? `<div class="rival-facts">
+        <div class="rival-facts-label">Depth Chart</div>
+        <ul>
+          <li>QB2 — ${svgEscape(chart.qb2.name)} (${rivalEffTalent(chart.qb2)} ovr, age ${chart.qb2.age}, ${svgEscape(chart.qb2.contract.tier)})</li>
+          <li>QB3 — ${svgEscape(chart.qb3.name)} (${rivalEffTalent(chart.qb3)} ovr, age ${chart.qb3.age}, ${svgEscape(chart.qb3.contract.tier)})</li>
+        </ul>
+      </div>` : "";
     return `
       <div class="rival-card">
         <div class="rival-eyebrow">${svgEscape(teamNameAt(rival.teamId, career.year))}${rival.retired?" · Retired":""}</div>
         <h3>${svgEscape(rival.name)}</h3>
         <div class="rival-meta">Age ${rival.age} · Drafted ${rival.draftYear} · Overall <b>${overall}</b> (${svgEscape(g.flavor)})</div>
+        ${contractLine}
         <div class="rival-stats-grid">
           <div><div class="rv-label">Career Yards</div><div class="rv-value tabular">${t.yards.toLocaleString()}</div></div>
           <div><div class="rv-label">Touchdowns</div><div class="rv-value tabular">${t.td}</div></div>
@@ -2709,6 +2740,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         </div>
         ${badges ? `<div class="rival-badges">${badges}</div>` : ""}
         ${rivalryHtml}
+        ${depthChartHtml}
         <div class="rival-facts">
           <div class="rival-facts-label">Fun Facts</div>
           <ul>${facts.map(f=>`<li>${svgEscape(f)}</li>`).join("")}</ul>
@@ -3175,15 +3207,44 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
      team excluding the player's own; when a rival ages past their (randomly rolled once) retirement
      age, a fresh rookie is generated at that team so the league leaderboard never runs dry across a
      very long player career -- exactly like a real league keeps producing new starters. */
+  // A depth-chart bench player -- same shape as a starter (rival) object, minus isRival/succeededId,
+  // plus a contract. Never appears in career.leagueRivals (that array means "current starters
+  // only" everywhere else in the codebase -- MVP/Pro-Bowl pooling, team-grade drift, the classmates
+  // table, etc. -- so folding bench players into it would silently double-count or crown a backup
+  // MVP). Lives in career.leagueDepthCharts[teamId] = {qb2, qb3} instead. `isProspect` skews young,
+  // rookie-contracted, and wide-variance (a real QB3 flier or a groomed QB2 successor) vs. a
+  // veteran journeyman backup skewing older and clearly below the starter's own grade.
+  function generateBenchPlayer(teamId, decade, year, teamGrade, isProspect){
+    const age = isProspect ? randInt(22,25) : randInt(24,32);
+    const talent = isProspect ? clamp(teamGrade + randInt(-10,10), 20, 90) : clamp(teamGrade + randInt(-25,-5), 15, 75);
+    const contract = isProspect ? rollRookieDepthContract(decade, randInt(2,7)) : rollRivalContract(decade, talent);
+    return {
+      id: "bqb_"+teamId+"_"+Math.round(Math.random()*1e6),
+      name: randomFullName(), teamId, talent, age,
+      retireAge: clamp(age + randInt(3,12), 30, 45),
+      draftYear: year - (age-22),
+      seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0 },
+      retired: false, contract, entrenchedYears: rollEntrenchedYears(talent),
+    };
+  }
+  function generateDepthChart(teamId, decade, year, teamGrade){
+    return {
+      qb2: generateBenchPlayer(teamId, decade, year, teamGrade, Math.random()<0.3),
+      qb3: generateBenchPlayer(teamId, decade, year, teamGrade, Math.random()<0.65),
+    };
+  }
   function generateLeagueRivals(){
+    career.leagueDepthCharts = {};
     const rivals = TEAMS.filter(t=>t.id!==career.teamId).map((t,i)=>{
       const teamGrade = career.leagueStrength[t.id] ?? 60;
       const age = randInt(23, 34);
+      const talent = clamp(teamGrade + randInt(-15, 15), 20, 99);
+      career.leagueDepthCharts[t.id] = generateDepthChart(t.id, career.decade, career.year, teamGrade);
       return {
         id: "riv_"+t.id+"_"+i,
         name: randomFullName(),
         teamId: t.id,
-        talent: clamp(teamGrade + randInt(-15, 15), 20, 99),
+        talent,
         age,
         // Guarantee at least a few seasons of runway from age -- age alone can already be as high
         // as 34 here, and an unguarded randInt(30,40) could land BELOW that, retiring a rival on the
@@ -3195,6 +3256,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         seasons: [],
         totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0 },
         retired: false,
+        contract: rollRivalContract(career.decade, talent),
+        entrenchedYears: rollEntrenchedYears(talent),
       };
     });
     // Three marked "rivals" (distinct from the other ~28 background league QBs) get their draft
@@ -3203,6 +3266,51 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const classmates = rivals.slice().sort(()=>Math.random()-0.5).slice(0, Math.min(3, rivals.length));
     classmates.forEach(r=>{ r.isRival = true; r.age = 22; r.draftYear = career.year; r.retireAge = randInt(32, 42); });
     return rivals;
+  }
+  // Shared per-player season-stat math -- originally inline in simulateRivalSeasons, extracted so
+  // depth-chart bench players (simulateDepthChartSeasons) can run the IDENTICAL formula instead of
+  // a parallel copy. Mutates entity.seasons/totals/age and returns the season object (callers that
+  // need "how did he actually play this year" for a succession decision use the return value).
+  function simulatePlayerSeasonStats(entity, decade, league, year){
+    const talentEdge = entity.talent - 65;
+    const ageMult = primeMultiplier(entity.age);
+    const delta = talentEdge*ageMult;
+    const cal = STAT_CAL[decade] || STAT_CAL["2000s"];
+    const comp = clamp(league.comp + delta*(delta>=0?cal.comp.up:cal.comp.down)*RIVAL_STAT_SCALE, cal.comp.lo, cal.comp.hi);
+    const ypa = clamp(league.ypa + delta*(delta>=0?cal.ypa.up:cal.ypa.down)*RIVAL_STAT_SCALE, cal.ypa.lo, cal.ypa.hi);
+    const tdRate = clamp(league.tdRate + delta*(delta>=0?cal.td.up:cal.td.down)*RIVAL_STAT_SCALE, cal.td.lo, cal.td.hi);
+    const intRate = clamp(league.intRate - delta*(delta>=0?cal.int.up:cal.int.down)*RIVAL_STAT_SCALE, cal.int.lo, cal.int.hi);
+    const attPerGame = clamp(league.attPerGame + randInt(-3,3), 4, 45);
+    const missedGames = Math.random()<0.18 ? randInt(1, 7) : 0;
+    const gamesPlayed = clamp(league.games - missedGames, 0, league.games);
+    const attempts = Math.round(attPerGame*gamesPlayed);
+    const completions = Math.round(attempts*comp);
+    const yards = Math.round(attempts*ypa);
+    const td = Math.max(0, Math.round(attempts*tdRate));
+    const interceptions = Math.max(0, Math.round(attempts*intRate));
+    const rating = passerRating(completions, attempts, yards, td, interceptions);
+    const teamGrade = career.leagueStrength[entity.teamId] ?? 60;
+    const winProb = clamp(0.5 + talentEdge*ageMult*0.009 + (teamGrade-65)*0.009, 0.08, 0.92);
+    let wins = 0;
+    for(let i=0;i<gamesPlayed;i++){ if(Math.random()<winProb) wins++; }
+    const losses = gamesPlayed-wins;
+    const winPct = gamesPlayed>0 ? wins/gamesPlayed : 0;
+    const { awards, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = evaluateSeasonAwards({
+      rating, td, winPct, attempts, gamesPlayed, leagueGames: league.games, decade,
+    });
+    const season = { year, age: entity.age, teamId: entity.teamId, games: gamesPlayed, comp: completions, att: attempts,
+      pct: attempts>0?completions/attempts:0, yards, td, int: interceptions, rating, wins, losses, awards,
+      proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible };
+    entity.seasons.push(season);
+    entity.totals.games += gamesPlayed; entity.totals.comp += completions; entity.totals.att += attempts;
+    entity.totals.yards += yards; entity.totals.td += td; entity.totals.int += interceptions;
+    entity.totals.wins += wins; entity.totals.losses += losses;
+    // Pro Bowl/All-Pro/MVP totals are incremented once, league-wide, by
+    // resolveSeasonAllProAndProBowl/resolveSeasonMVP after every QB's season this year is locked in
+    // -- bench players are never in that pool (they're not in career.leagueRivals), so their
+    // awards/eligibility fields above are computed but never actually granted, which is fine.
+    entity.age++;
+    return season;
   }
   function simulateRivalSeasons(decade, league, year){
     if(!career.leagueRivals) return;
@@ -3223,47 +3331,100 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           id: "riv_"+r.teamId+"_"+year, name: randomFullName(), teamId: r.teamId,
           talent: newTalent, age: 22, retireAge: randInt(30,40),
           draftYear: year, seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0 },
-          retired: false, succeededId: r.id,
+          retired: false, succeededId: r.id, contract: rollRookieDepthContract(decade, randInt(1,4)), entrenchedYears: rollEntrenchedYears(newTalent),
         });
         return;
       }
-      const talentEdge = r.talent - 65;
-      const ageMult = primeMultiplier(r.age);
-      const delta = talentEdge*ageMult;
-      const cal = STAT_CAL[decade] || STAT_CAL["2000s"];
-      const comp = clamp(league.comp + delta*(delta>=0?cal.comp.up:cal.comp.down)*RIVAL_STAT_SCALE, cal.comp.lo, cal.comp.hi);
-      const ypa = clamp(league.ypa + delta*(delta>=0?cal.ypa.up:cal.ypa.down)*RIVAL_STAT_SCALE, cal.ypa.lo, cal.ypa.hi);
-      const tdRate = clamp(league.tdRate + delta*(delta>=0?cal.td.up:cal.td.down)*RIVAL_STAT_SCALE, cal.td.lo, cal.td.hi);
-      const intRate = clamp(league.intRate - delta*(delta>=0?cal.int.up:cal.int.down)*RIVAL_STAT_SCALE, cal.int.lo, cal.int.hi);
-      const attPerGame = clamp(league.attPerGame + randInt(-3,3), 4, 45);
-      const missedGames = Math.random()<0.18 ? randInt(1, 7) : 0;
-      const gamesPlayed = clamp(league.games - missedGames, 0, league.games);
-      const attempts = Math.round(attPerGame*gamesPlayed);
-      const completions = Math.round(attempts*comp);
-      const yards = Math.round(attempts*ypa);
-      const td = Math.max(0, Math.round(attempts*tdRate));
-      const interceptions = Math.max(0, Math.round(attempts*intRate));
-      const rating = passerRating(completions, attempts, yards, td, interceptions);
-      const teamGrade = career.leagueStrength[r.teamId] ?? 60;
-      const winProb = clamp(0.5 + talentEdge*ageMult*0.009 + (teamGrade-65)*0.009, 0.08, 0.92);
-      let wins = 0;
-      for(let i=0;i<gamesPlayed;i++){ if(Math.random()<winProb) wins++; }
-      const losses = gamesPlayed-wins;
-      const winPct = gamesPlayed>0 ? wins/gamesPlayed : 0;
-      const { awards, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = evaluateSeasonAwards({
-        rating, td, winPct, attempts, gamesPlayed, leagueGames: league.games, decade,
-      });
-      const season = { year, age: r.age, teamId: r.teamId, games: gamesPlayed, comp: completions, att: attempts,
-        pct: attempts>0?completions/attempts:0, yards, td, int: interceptions, rating, wins, losses, awards,
-        proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible };
-      r.seasons.push(season);
-      r.totals.games += gamesPlayed; r.totals.comp += completions; r.totals.att += attempts;
-      r.totals.yards += yards; r.totals.td += td; r.totals.int += interceptions;
-      r.totals.wins += wins; r.totals.losses += losses;
-      // Pro Bowl/All-Pro/MVP totals are incremented once, league-wide, by
-      // resolveSeasonAllProAndProBowl/resolveSeasonMVP after every QB's season this year is locked in.
-      r.age++;
+      simulatePlayerSeasonStats(r, decade, league, year);
     });
+  }
+
+  // Bench-player equivalent of simulateRivalSeasons -- same math (simulatePlayerSeasonStats), much
+  // simpler retirement handling (no team-grade impact, no news; a bench player quietly ages out and
+  // is replaced by a fresh prospect at the same slot). Never touches career.leagueRivals.
+  function simulateDepthChartSeasons(decade, league, year){
+    if(!career.leagueDepthCharts) return;
+    Object.keys(career.leagueDepthCharts).forEach(teamId=>{
+      const chart = career.leagueDepthCharts[teamId];
+      ["qb2","qb3"].forEach(slot=>{
+        const p = chart[slot];
+        if(!p || p.retired) return;
+        if(p.age > p.retireAge){
+          const teamGrade = career.leagueStrength[teamId] ?? 60;
+          chart[slot] = generateBenchPlayer(teamId, decade, year, teamGrade, slot==="qb3" ? Math.random()<0.65 : Math.random()<0.3);
+          return;
+        }
+        simulatePlayerSeasonStats(p, decade, league, year);
+      });
+    });
+  }
+
+  /* ----- Succession: does a team stick with its starter, promote from within, sign a veteran
+     replacement, or add a fresh rookie to the depth chart? Runs once per team per season, after
+     both the starter and the bench have their year's stats in hand. "Entrenched" (rollEntrenchedYears)
+     plus real contract years remaining is the user's own framing verbatim -- a team won't move on
+     from a starter who's still good value on his deal, no matter how good the backup looks; once
+     both run out, a real decline (or just clearly being past his prime) opens the door. */
+  function evaluateSuccession(teamId, decade, year){
+    const rival = rivalForTeam(teamId);
+    const chart = career.leagueDepthCharts[teamId];
+    if(!rival || !chart) return;
+    // Independent of whether the starter is even in question this year -- a team can draft a
+    // developmental QB purely to groom a future successor, same as a real front office does.
+    if(Math.random()<0.04){
+      const teamGrade = career.leagueStrength[teamId] ?? 60;
+      chart.qb3 = generateBenchPlayer(teamId, decade, year, teamGrade, true);
+      career.leagueNewsLog.push({ year, teamId, title:"Drafts a QB to Develop", delta:0,
+        flavor:`${teamNameAt(teamId, year)} use a mid-round pick on a developmental quarterback — no pressure on the current starter yet, but the clock is quietly ticking.` });
+    }
+    rival.contract.years = Math.max(0, rival.contract.years-1);
+    rival.entrenchedYears = Math.max(0, rival.entrenchedYears-1);
+    const stillEntrenched = rival.entrenchedYears>0 || rival.contract.years>0;
+    // Only a REAL falloff breaks entrenchment -- being merely old is not enough on its own (the
+    // user's own framing: a QB stuck on a big contract stays, full stop, unless he's truly
+    // declined). A first calibration pass also let "just old" bypass entrenchment, and left a
+    // SURVIVING starter at 0/0 contract/entrenchedYears -- immediately re-eligible again every
+    // subsequent season forever -- which produced 68 succession events across 30 teams in 11
+    // seasons in real gameplay. Corrected via a 30-team/15-year pure-math sweep before re-shipping
+    // (see PROGRESS.md); the "survives -- signs an extension" branch below is the actual fix.
+    const declinedSharply = rivalEffTalent(rival) <= rival.talent-15;
+    if(stillEntrenched && !declinedSharply) return;
+    const qb2 = chart.qb2;
+    const teamName = teamNameAt(teamId, year);
+    if(qb2 && !qb2.retired && rivalEffTalent(qb2) >= rivalEffTalent(rival)-5 && Math.random()<0.22){
+      // Internal promotion: the kid they've been developing (or the steady backup) wins the job.
+      const oldName = rival.name;
+      rival.retired = true;
+      const promoted = { ...qb2, contract: rollRivalContract(decade, qb2.talent), entrenchedYears: rollEntrenchedYears(qb2.talent) };
+      career.leagueRivals.push(promoted);
+      chart.qb2 = generateBenchPlayer(teamId, decade, year, career.leagueStrength[teamId] ?? 60, Math.random()<0.4);
+      const delta = randInt(-3,6);
+      career.leagueStrength[teamId] = clamp((career.leagueStrength[teamId]??60)+delta, 20, 96);
+      career.leagueNewsLog.push({ year, teamId, title:"Backup Wins the Starting Job", delta,
+        flavor:`${teamName} bench ${oldName} in favor of ${promoted.name}, who'd been waiting for exactly this shot.` });
+    } else if(Math.random()<0.15){
+      // External signing: a veteran from outside the sim takes over instead of anyone already on the depth chart.
+      const oldName = rival.name;
+      rival.retired = true;
+      const teamGrade = career.leagueStrength[teamId] ?? 60;
+      const newTalent = clamp(teamGrade + randInt(-10,20), 20, 99);
+      career.leagueRivals.push({
+        id: "riv_"+teamId+"_"+year+"_fa", name: randomFullName(), teamId,
+        talent: newTalent, age: randInt(26,34), retireAge: clamp(30+randInt(0,10), 30, 45),
+        draftYear: year-randInt(3,10), seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0 },
+        retired:false, contract: rollRivalContract(decade, newTalent), entrenchedYears: rollEntrenchedYears(newTalent),
+      });
+      const delta = randInt(-4,8);
+      career.leagueStrength[teamId] = clamp((career.leagueStrength[teamId]??60)+delta, 20, 96);
+      career.leagueNewsLog.push({ year, teamId, title:"Free-Agent Quarterback Signing", delta,
+        flavor:`${teamName} move on from ${oldName} and hand the job to a veteran brought in from outside.` });
+    } else {
+      // Survives -- signs a fresh extension, protected again for a while. This is what actually
+      // keeps a good, stable starter stable long-term instead of facing a fresh coin-flip every
+      // single season forever once his first deal runs out.
+      rival.contract = rollRivalContract(decade, rival.talent);
+      rival.entrenchedYears = rollEntrenchedYears(rival.talent);
+    }
   }
 
   function generateSeason(){
@@ -3438,6 +3599,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
     career.seasonLog.push(season);
     simulateRivalSeasons(decade, league, career.year);
+    simulateDepthChartSeasons(decade, league, career.year);
+    TEAMS.filter(t=>t.id!==career.teamId).forEach(t=> evaluateSuccession(t.id, decade, career.year));
     // Winner-take-all MVP (see resolveSeasonMVP) and fixed-slot Pro Bowl/All-Pro (see
     // resolveSeasonAllProAndProBowl): both decided once, here, after every QB in the league -- the
     // player and every simulated rival -- has this year's season locked in.
