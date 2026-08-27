@@ -203,7 +203,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <div class="sb-title" id="sbTitle-${i}">${svgEscape(roundDisplayLabel(r.round, year)).toUpperCase()}</div>
           <div class="sb-final" id="sbFinal-${i}">vs. the ${svgEscape(r.opponent)}</div>
           ${r._defOverall!=null ? `<div class="sb-oppgrade">Their team overall: <b>${Math.round(r._defOverall)}</b> &nbsp;·&nbsp; Your team overall: <b>${Math.round(career.teamStrength)}</b></div>` : ""}
-          ${r._oppQbName ? `<div class="sb-oppgrade">Their QB: <b>${svgEscape(r._oppQbName)}</b> (${r._oppQbOverall} overall)</div>` : ""}
+          ${r._oppQbName ? `<div class="sb-oppgrade">Their QB: <button type="button" class="rival-link" data-rival-id="${r._oppQbId}">${svgEscape(r._oppQbName)}</button> (${r._oppQbOverall} overall)</div>` : ""}
           ${r.oppTendency ? `<div class="pr-tendency" style="color:var(--header-muted);text-align:center;">Scouting report: <b style="color:var(--header-accent);">${svgEscape(r.oppTendency.label)}</b> — ${svgEscape(r.oppTendency.blurb)}</div>` : ""}
           <div class="sb-quarters" id="pqQuarters-${i}"></div>
           <div class="pr-controls" id="pqControls-${i}"></div>
@@ -222,7 +222,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <div class="pr-box-title" id="prTitle-${i}">${svgEscape(roundDisplayLabel(r.round, year)).toUpperCase()}</div>
         <div class="pr-box-final" id="prFinal-${i}">vs. the ${svgEscape(r.opponent)}</div>
         ${r._defOverall!=null ? `<div class="pr-oppgrade">Their team overall: <b>${Math.round(r._defOverall)}</b> &nbsp;·&nbsp; Your team overall: <b>${Math.round(career.teamStrength)}</b></div>` : ""}
-        ${r._oppQbName ? `<div class="pr-oppgrade">Their QB: <b>${svgEscape(r._oppQbName)}</b> (${r._oppQbOverall} overall)</div>` : ""}
+        ${r._oppQbName ? `<div class="pr-oppgrade">Their QB: <button type="button" class="rival-link" data-rival-id="${r._oppQbId}">${svgEscape(r._oppQbName)}</button> (${r._oppQbOverall} overall)</div>` : ""}
         ${tendencyHtml}
         <div class="pr-quarters" id="pqQuarters-${i}"></div>
         <div class="pr-controls" id="pqControls-${i}"></div>
@@ -1803,6 +1803,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
       games.push({ week: idx+1, opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
         opponentGrade: Math.round(oppGrade),
+        opponentQbId: oppRival ? oppRival.id : null,
         opponentQbName: oppRival ? oppRival.name : null,
         opponentQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
         won, myScore: scoreSim.myTotal, oppScore: scoreSim.oppTotal,
@@ -1992,6 +1993,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(!career.leagueRivals) return null;
     return career.leagueRivals.find(r=>r.teamId===teamId && !r.retired) || null;
   }
+  // Unlike rivalForTeam, this also finds RETIRED rivals -- a profile card opened from an old
+  // season's schedule/playoff log should still resolve to that season's actual starter, not
+  // whoever currently holds the job (or nothing at all, if he's since retired).
+  function findRivalById(id){
+    if(!career.leagueRivals || !id) return null;
+    return career.leagueRivals.find(r=>r.id===id) || null;
+  }
   // Age-adjusted the same way a rival's own season stats already are (ageMult in
   // simulateRivalSeasons) -- an aging rival starter shouldn't blend in at his career-peak talent.
   function rivalEffTalent(rival){
@@ -2003,6 +2011,86 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(!rival) return teamStrength;
     return blendOffenseWithTeam(rivalEffTalent(rival), teamStrength, qbInfluence);
   }
+  // ----- Rival QB profile: a clickable "character page" for any opposing starter, everywhere one
+  // is shown by name (Schedule tab, playoff round boxes, League tab standings). Facts are all
+  // derived from data the rival already carries -- no separate hand-authored joke pool to keep in
+  // sync -- except one genuine easter egg: rivals are named via the same randomFullName() the
+  // player's own prospects use, which has its own small chance of landing on one of the Key &
+  // Peele draft-name gags (EASTER_EGG_NAMES), and that's worth calling out when it happens.
+  function rivalCareerFunFacts(rival){
+    const facts = [];
+    const seasonsPlayed = rival.seasons.length;
+    if(rival.isRival) facts.push(`Drafted the exact same year as you (${rival.draftYear}) — a true draft classmate.`);
+    if(EASTER_EGG_NAMES.includes(rival.name)) facts.push(`Yes, that's really his name.`);
+    if(seasonsPlayed){
+      const best = rival.seasons.reduce((a,b)=> b.rating>a.rating ? b : a, rival.seasons[0]);
+      facts.push(`Best season: ${best.year} — ${best.yards.toLocaleString()} yards, ${best.td} TD, a ${best.rating.toFixed(1)} rating.`);
+    }
+    if(rival.totals.mvps>0) facts.push(`${rival.totals.mvps}-time MVP.`);
+    if(rival.totals.allPros>0) facts.push(`${rival.totals.allPros}-time All-Pro.`);
+    if(rival.totals.proBowls>0) facts.push(`${rival.totals.proBowls}-time Pro Bowler.`);
+    else if(seasonsPlayed>=4) facts.push(`Still hasn't made a Pro Bowl despite ${seasonsPlayed} seasons as a starter.`);
+    if(rival.succeededId) facts.push(`Took over the starting job after his predecessor retired.`);
+    if(rival.retired){
+      const lastYear = seasonsPlayed ? rival.seasons[seasonsPlayed-1].year : rival.draftYear;
+      facts.push(`Retired after the ${lastYear} season.`);
+    } else {
+      facts.push(`Entering year ${seasonsPlayed+1} of his career at age ${rival.age}.`);
+    }
+    return facts;
+  }
+  function buildRivalProfileHTML(rival){
+    const t = rival.totals;
+    const rating = passerRating(t.comp, t.att, t.yards, t.td, t.int);
+    const overall = rivalEffTalent(rival);
+    const g = gradeFor(clamp(overall, 0, 98));
+    const totalGames = t.wins+t.losses;
+    const winPct = totalGames>0 ? (t.wins/totalGames*100).toFixed(1) : "0.0";
+    const badges = [
+      t.mvps ? `<span class="badge gold">${t.mvps}x MVP</span>` : "",
+      t.allPros ? `<span class="badge good">${t.allPros}x All-Pro</span>` : "",
+      t.proBowls ? `<span class="badge good">${t.proBowls}x Pro Bowl</span>` : "",
+    ].join("");
+    const facts = rivalCareerFunFacts(rival);
+    return `
+      <div class="rival-card">
+        <div class="rival-eyebrow">${svgEscape(teamNameAt(rival.teamId, career.year))}${rival.retired?" · Retired":""}</div>
+        <h3>${svgEscape(rival.name)}</h3>
+        <div class="rival-meta">Age ${rival.age} · Drafted ${rival.draftYear} · Overall <b>${overall}</b> (${svgEscape(g.flavor)})</div>
+        <div class="rival-stats-grid">
+          <div><div class="rv-label">Career Yards</div><div class="rv-value tabular">${t.yards.toLocaleString()}</div></div>
+          <div><div class="rv-label">Touchdowns</div><div class="rv-value tabular">${t.td}</div></div>
+          <div><div class="rv-label">Interceptions</div><div class="rv-value tabular">${t.int}</div></div>
+          <div><div class="rv-label">Rating</div><div class="rv-value tabular">${rating.toFixed(1)}</div></div>
+          <div><div class="rv-label">Record</div><div class="rv-value tabular">${t.wins}-${t.losses}${totalGames?` (${winPct}%)`:""}</div></div>
+          <div><div class="rv-label">Games</div><div class="rv-value tabular">${t.games}</div></div>
+        </div>
+        ${badges ? `<div class="rival-badges">${badges}</div>` : ""}
+        <div class="rival-facts">
+          <div class="rival-facts-label">Fun Facts</div>
+          <ul>${facts.map(f=>`<li>${svgEscape(f)}</li>`).join("")}</ul>
+        </div>
+        <button type="button" class="btn btn-ghost rival-close">Close</button>
+      </div>`;
+  }
+  function openRivalProfile(rivalId){
+    const rival = findRivalById(rivalId);
+    const overlay = document.getElementById("rivalProfileOverlay");
+    if(!rival || !overlay) return;
+    overlay.innerHTML = buildRivalProfileHTML(rival);
+    overlay.classList.add("open");
+    overlay.setAttribute("aria-hidden", "false");
+    const closeBtn = overlay.querySelector(".rival-close");
+    if(closeBtn) closeBtn.addEventListener("click", closeRivalProfile);
+  }
+  function closeRivalProfile(){
+    const overlay = document.getElementById("rivalProfileOverlay");
+    if(!overlay) return;
+    overlay.classList.remove("open");
+    overlay.setAttribute("aria-hidden", "true");
+    overlay.innerHTML = "";
+  }
+
   function resolveConferenceBracket(seeds, myTeamId, myOffFn, format, season){
     const rounds = [];
     function playMatch(teamA, teamB, roundLabel){
@@ -2019,7 +2107,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           myScore: game.myTotal, oppScore: game.oppTotal, won: game.won, quarters: game.quarters,
           box: season ? generateGameBoxScore(season, game.myTotal, game.myTds) : null,
           oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength, _defOffense: oppOffense,
-          _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
+          _oppQbId: oppRival ? oppRival.id : null, _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
         });
         return game.won ? player : opp;
       }
@@ -2086,7 +2174,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           myScore: game.myTotal, oppScore: game.oppTotal, won: game.won, quarters: game.quarters,
           box: season ? generateGameBoxScore(season, game.myTotal, game.myTds) : null,
           oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength, _defOffense: oppOffense,
-          _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
+          _oppQbId: oppRival ? oppRival.id : null, _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
         };
         return { isMine:true, player, opp, round };
       }
@@ -2149,7 +2237,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       myScore: game.myTotal, oppScore: game.oppTotal, won: game.won,
       quarters: game.quarters, box: generateGameBoxScore(season, game.myTotal, game.myTds),
       oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength, _defOffense: oppOffense,
-      _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
+      _oppQbId: oppRival ? oppRival.id : null, _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
     };
     sbRound._revealedCount = 0; sbRound._keyMomentChecked = false;
     playoffs.rounds.push(sbRound);
@@ -4018,7 +4106,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     }
     const rows = log.map(g=>`<tr>
         <td class="tabular">${g.week}</td>
-        <td>${svgEscape(g.opponentName)} <span style="color:var(--ink-muted);">(grade ${g.opponentGrade})</span>${g.opponentQbName ? `<br><span style="color:var(--ink-muted);font-size:0.82em;">QB ${svgEscape(g.opponentQbName)} — ${g.opponentQbOverall} overall</span>` : ""}</td>
+        <td>${svgEscape(g.opponentName)} <span style="color:var(--ink-muted);">(grade ${g.opponentGrade})</span>${g.opponentQbName ? `<br><span style="color:var(--ink-muted);font-size:0.82em;">QB <button type="button" class="rival-link" data-rival-id="${g.opponentQbId}">${svgEscape(g.opponentQbName)}</button> — ${g.opponentQbOverall} overall</span>` : ""}</td>
         <td class="${g.won?"good":"bad"}"><b>${g.won?"W":"L"}</b> <span class="tabular">${g.myScore}-${g.oppScore}</span></td>
         <td class="tabular">${g.comp}/${g.att}</td>
         <td class="tabular">${g.yards}</td>
@@ -4082,7 +4170,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const s = r.seasons.find(x=>x.year===year);
       if(!s) return;
       rows.push({ name:r.name, teamId:r.teamId, age:s.age, mine:false, att:s.att, pct:s.pct,
-        yards:s.yards, td:s.td, int:s.int, rating:s.rating, awards:s.awards, isRival:r.isRival });
+        yards:s.yards, td:s.td, int:s.int, rating:s.rating, awards:s.awards, isRival:r.isRival, id:r.id });
     });
     rows.sort((a,b)=> b.rating-a.rating);
     return rows;
@@ -4149,7 +4237,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
     const rowsHtml = rows.map((r,i)=> `<tr class="${r.mine?"me":""}">
         <td class="tabular">${i+1}</td>
-        <td>${svgEscape(r.name)}${r.mine?" (you)":r.isRival?" ★":""} <span style="color:var(--ink-muted);">— ${svgEscape(teamNameAt(r.teamId, year))}</span></td>
+        <td>${r.mine ? svgEscape(r.name)+" (you)" : `<button type="button" class="rival-link" data-rival-id="${r.id}">${svgEscape(r.name)}</button>${r.isRival?" ★":""}`} <span style="color:var(--ink-muted);">— ${svgEscape(teamNameAt(r.teamId, year))}</span></td>
         <td class="tabular">${r.age}</td>
         <td class="tabular">${(r.pct*100).toFixed(1)}%</td>
         <td class="tabular">${r.att}</td>
@@ -6037,4 +6125,13 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
   initSoundToggle();
   initKeyMomentsToggle();
   initAdminPanel();
+  // One delegated listener, attached once (NOT inside renderSeasonCard -- #careerContent itself is
+  // never recreated between seasons, only its innerHTML, so attaching there on every render would
+  // stack up a duplicate listener per season). Covers every rival-name link on the card in any tab
+  // panel (Schedule, League, playoff boxes) -- panels all stay in the DOM at once (switchDashTab
+  // only toggles visibility), so this needs no re-wiring on tab switches or season re-renders.
+  document.getElementById("careerContent").addEventListener("click", (e)=>{
+    const link = e.target.closest("[data-rival-id]");
+    if(link) openRivalProfile(link.dataset.rivalId);
+  });
 })();

@@ -490,6 +490,26 @@
   .km-flip.bad{ color: var(--danger); }
   .km-continue{ margin-top: 1.2rem; }
 
+  /* ---------- Rival QB profile overlay ---------- */
+  .rival-overlay{ display:none; position:fixed; inset:0; background:rgba(6,10,8,0.75); z-index:210; align-items:center; justify-content:center; padding:1.25rem; overflow-y:auto; }
+  .rival-overlay.open{ display:flex; }
+  .rival-card{ background: var(--surface); border: 1.5px solid var(--field); border-radius: 8px; padding: 1.5rem; max-width: 460px; width:100%; box-shadow: 0 12px 40px rgba(0,0,0,0.5); margin: auto; }
+  .rival-eyebrow{ font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--field); }
+  .rival-card h3{ font-family: var(--display); font-size: 1.3rem; margin-top: 0.25rem; }
+  .rival-meta{ font-size: 0.86rem; color: var(--ink-muted); margin-top: 0.4rem; }
+  .rival-meta b{ color: var(--ink); }
+  .rival-stats-grid{ display:grid; grid-template-columns: repeat(3, 1fr); gap: 0.8rem; margin-top: 1.1rem; }
+  .rv-label{ font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-muted); }
+  .rv-value{ font-size: 1.05rem; font-weight: 700; color: var(--ink); margin-top: 0.15rem; }
+  .rival-badges{ display:flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 1rem; }
+  .rival-facts{ margin-top: 1.1rem; border-top: 1px solid var(--line); padding-top: 0.8rem; }
+  .rival-facts-label{ font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-muted); margin-bottom: 0.4rem; }
+  .rival-facts ul{ margin:0; padding-left: 1.1rem; display:flex; flex-direction:column; gap: 0.35rem; }
+  .rival-facts li{ font-size: 0.86rem; color: var(--ink); }
+  .rival-close{ margin-top: 1.25rem; width: 100%; }
+  .rival-link{ background:none; border:none; padding:0; margin:0; font:inherit; color: var(--field); cursor:pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .rival-link:hover{ color: var(--field-strong); }
+
   /* ---------- Admin / testing panel ---------- */
   .admin-btn{ font-size: 0.85rem; }
   .admin-overlay{ display:none; position:fixed; inset:0; background:rgba(6,10,8,0.82); z-index:250; padding:1rem; overflow-y:auto; }
