@@ -459,6 +459,46 @@ per-item root causes below, all confirmed as real, verifiable gaps, not just vib
     pure-math script against constructed season logs, including the pre-1966 edge case, before ever
     touching the real game code.
 
+14. **8 dark-humor achievements, hooked directly to specific rare/infraction scandal events
+    (explicit user ask, with "He Got That Dawg in Him" as the model for the tone — a joke title
+    layered on top of the game's own straight-faced event narration).** RARE_EVENTS already carried
+    a stable `achievementId` field per event (added back in the original lifepath-events round,
+    specifically "so a future achievements system can hook directly off career.lifeEventLog entries
+    without a schema change later" — that promise had never actually been wired up until now).
+    Turned out `resolveInfraction()`'s `career.lifeEventLog.push(...)` wasn't actually stamping that
+    id onto the log entry at all yet — fixed by adding `achievementId: ev.achievementId||null` to
+    that one push call, which is the single resolver both `INFRACTION_EVENTS` and `RARE_EVENTS`
+    share. Also added `achievementId:"got_that_dawg"` to the previously-untagged `animalring`
+    ("Federal Investigation") infraction — the fictionalized, no-real-names dogfighting-scandal
+    event — matching the same convention. New shared helper `hadLifeEvent(achievementId)` just scans
+    `career.lifeEventLog` for a matching id; every new achievement's `check()` is a one-line call to
+    it, so a future scandal event just needs an `achievementId` to get an achievement hook for free.
+
+    The 8: **He Got That Dawg in Him** (`got_that_dawg` / animalring), **Shot Himself in the Foot
+    (Literally)** (`own_worst_enemy` / accidentally shoots himself at a nightclub), **Bounty Hunter**
+    (`bounty_hunter` / pay-for-injury bounty scandal), **Master of Disguise** (`master_of_disguise` /
+    caught skipping a team flight in a bad wig), **Walkabout** (`walked_away` / quietly vanishes
+    mid-career to "find himself"), **Wrong Place, Wrong Time** (`wrong_place_wrong_time` / named in a
+    nightclub shooting he wasn't part of), **The House Always Wins** (`house_always_wins` / gambling
+    debts end the career), **Do Not Disturb** (`unraveling_on_camera` / furniture-throwing hotel
+    meltdown goes viral). Each achievement's own name is a separate joke layered on top of the
+    event's straight, in-character news-story title — the event itself still reads as a real
+    consequence (suspension, released, banned), the achievement popup is where the dark humor lives.
+    New `paw` icon added to `BADGE_ICONS` for the dogfighting one; the rest reuse existing icons.
+    Roster is now 38 total (30 + these 8).
+
+    Verified via Playwright using the Admin panel's real "force fire" controls (not a synthetic
+    stub) against a live career: confirmed both new cards render locked pre-trigger; force-fired
+    `disguiseflight` (a fast-resolving single-suspension event, chosen over `animalring` specifically
+    because `animalring`'s real severity is a 3-season suspension saga with several unrelated
+    interstitial events in between — not a practical target for a deterministic automated test,
+    though it shares the exact same `resolveInfraction` code path and `lifeEventLog.push` line, so
+    the mechanism is validated by direct code parity, not just by inference); clicked through to
+    resolve it and advance one season so `checkAchievements()` (called from `generateSeason()`)
+    actually ran; confirmed Master of Disguise flipped to unlocked while He Got That Dawg in Him
+    stayed locked (proof a different event firing doesn't cross-unlock an unrelated achievement);
+    confirmed the roster count reached 38. Zero page errors.
+
 Verified end-to-end via Playwright (not just diagnostics) across a real 8-season playthrough: zero
 page errors, opponent QB correctly shown every season in the Schedule tab, League News feed
 populated (23 entries by season 8), team-strength spread stayed realistic (range of 75 points across
@@ -551,5 +591,5 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `career.lifeEventLog` entries carry a `legendary` flag (from `RARE_EVENTS`) for retrospective narrative selection.
 - `loadLastBuildProfile()` / `saveLastBuildProfile(picks)` / `renderLastBuildStrip()` / `loadLastBuildIntoCombine()` — the local-profile system, storage key `gridironlab.lastbuild`.
 - `TROPHY_ROOM_KEY` / `loadTrophyRoom()` / `saveTrophyRoomEntry(entry)` / `buildTrophyRoomTableHTML(sortKey)` / `TROPHY_ROOM_SORTERS` (Round 5) — the cross-career leaderboard, storage key `gridironlab.trophyroom`, separate from the single-slot `gridironlab.activeCareer`/best-career save. `saveTrophyRoomEntry` is called exactly once, from `finishCareer()`, and is the ONLY writer — any future career-ending path should go through `finishCareer()` rather than writing a trophy-room entry directly, so the cap/truncation logic (`TROPHY_ROOM_CAP=60`, oldest dropped first) stays centralized. Record highlighting (`.tr-record`) is deliberately computed via `maxOf(key)` over the FULL stored list every render, independent of `sortKey` — never derive "is this a record" from position in the current sort, since the current sort is rarely by the column being highlighted.
-- `ACHIEVEMENTS` / `checkAchievements()` / `career.achievements` (Round 5, replaced the original tiered/equipped Playstyle Badges system — see the log entry for why) — 30 one-time, permanent achievements, each just `{key, name, icon, blurb, hint, check(){...}}`, no tiers, no equip slots. `checkAchievements()` is the ONLY writer of `career.achievements.unlocked`, and is idempotent (only ever flips an entry false→true) — safe to call from anywhere; currently called from `generateSeason()`, `finalizePlayoffOutcome()`, and `finishCareer()` so season-level, playoff-final, and career-ending-only conditions are all caught at the right moment. Any new achievement should be a pure `check()` function reading only `career`/`build`, no side effects. `achievementStatusFor(key)`/`achievementFrameHTML(def,unlocked)`/`badgeIconSVG(icon)` are shared by the Achievements tab and the Baseball Card back face — extend these, don't duplicate rendering logic at a new call site. `maxConsecutive(list,pred)` and `reachedTitleGameAndLost(s)` are the two reusable helpers behind every streak/title-game achievement — `reachedTitleGameAndLost` specifically needs its `!wonTitle(s)` guard to avoid misreading a pre-1966 season (ring already won via Conference Championship, then "loses" the meaningless fictional Super Bowl simulated afterward) as a title-game loss.
+- `ACHIEVEMENTS` / `checkAchievements()` / `career.achievements` (Round 5, replaced the original tiered/equipped Playstyle Badges system — see the log entry for why) — 30 one-time, permanent achievements, each just `{key, name, icon, blurb, hint, check(){...}}`, no tiers, no equip slots. `checkAchievements()` is the ONLY writer of `career.achievements.unlocked`, and is idempotent (only ever flips an entry false→true) — safe to call from anywhere; currently called from `generateSeason()`, `finalizePlayoffOutcome()`, and `finishCareer()` so season-level, playoff-final, and career-ending-only conditions are all caught at the right moment. Any new achievement should be a pure `check()` function reading only `career`/`build`, no side effects. `achievementStatusFor(key)`/`achievementFrameHTML(def,unlocked)`/`badgeIconSVG(icon)` are shared by the Achievements tab and the Baseball Card back face — extend these, don't duplicate rendering logic at a new call site. `maxConsecutive(list,pred)` and `reachedTitleGameAndLost(s)` are the two reusable helpers behind every streak/title-game achievement — `reachedTitleGameAndLost` specifically needs its `!wonTitle(s)` guard to avoid misreading a pre-1966 season (ring already won via Conference Championship, then "loses" the meaningless fictional Super Bowl simulated afterward) as a title-game loss. `hadLifeEvent(achievementId)` (Round 5) is the third: a one-line `career.lifeEventLog.some(e=>e.achievementId===id)` scan powering every dark-humor achievement tied to a specific RARE_EVENTS/INFRACTION_EVENTS scandal — `resolveInfraction()` is the ONLY place that stamps `achievementId` onto a lifeEventLog entry (from `ev.achievementId`), so any future scandal event just needs that one field set to get a hookable achievement for free, no engine changes.
 - `buildCardFaceSVG(entry, side)` / `openBaseballCard(entry)` / `exportBaseballCard(entry)` / `CARD_HEX` / `CARD_RARITY` (Round 5) — the Exportable Baseball Card. Takes a Trophy-Room-entry-SHAPED object, not `career` directly, so it works identically whether the source is `lastFinishedCareerEntry` (the career that just ended) or a historical row loaded back out of `loadTrophyRoom()` by id — never pass `career` in directly, build/extend the entry object instead. Every color inside a card face MUST be a literal hex from `CARD_HEX`, never a CSS `var(--...)` — the export path re-parses the SVG string in an isolated context that has no access to the page's custom properties, so a `var()` there would silently render as nothing. Any new field added to a card face should be read as `entry.field || fallback`, since real Trophy Room rows saved before this shipped (or any future round that forgets to set a new field) will be missing it — the "old entry" Playwright pass exists specifically to catch a future field added without a fallback.

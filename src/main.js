@@ -730,6 +730,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const last = s.playoffs.rounds[s.playoffs.rounds.length-1];
     return last.round==="Super Bowl" && !last.won && !wonTitle(s);
   }
+  // RARE_EVENTS/select INFRACTION_EVENTS entries carry a stable achievementId (see resolveInfraction,
+  // which stamps it onto the career.lifeEventLog entry it pushes) specifically so the dark-humor
+  // achievements below can hook a specific scandal/easter-egg event without matching on title text.
+  function hadLifeEvent(achievementId){ return (career.lifeEventLog||[]).some(e=>e.achievementId===achievementId); }
 
   const BADGE_ICONS = {
     bolt: `<path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/>`,
@@ -754,6 +758,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     book: `<path d="M4 5c2-1 5-1 8 0v14c-3-1-6-1-8 0V5ZM20 5c-2-1-5-1-8 0v14c3-1 6-1 8 0V5Z"/>`,
     snow: `<path d="M12 2v20M4 7l16 10M20 7L4 17M2 12h20M7 4l10 16M17 4L7 20"/>`,
     trophy: `<path d="M8 3h8v3a4 4 0 0 1-8 0V3Z"/><path d="M6 4H4a3 3 0 0 0 3 5M18 4h2a3 3 0 0 1-3 5"/><path d="M12 10v4M9 20h6M9 20v-1a3 3 0 0 1 3-3 3 3 0 0 1 3 3v1"/>`,
+    paw: `<ellipse cx="8" cy="8.5" rx="2" ry="2.6"/><ellipse cx="12" cy="6.2" rx="2.1" ry="2.8"/><ellipse cx="16" cy="8.5" rx="2" ry="2.6"/><ellipse cx="12" cy="15.5" rx="4.4" ry="3.5"/>`,
   };
   function badgeIconSVG(key){
     return `<svg viewBox="0 0 24 24" class="pb-icon-svg" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${BADGE_ICONS[key]||BADGE_ICONS.star}</svg>`;
@@ -908,6 +913,44 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       blurb:"A full decade-plus in the league, and never once missed a game to injury.",
       hint:"Play 10+ seasons without ever missing a game to injury.",
       check: ()=> career.seasonLog.length>=10 && career.seasonLog.every(s=>(s.missedGamesInjury||0)===0) },
+
+    // ----- dark-humor achievements, tied to specific rare/infraction scandal events -----
+    // Each hooks a single specific event via its stable achievementId (see RARE_EVENTS/animalring
+    // above) rather than a generic stat threshold -- these are jokes about a specific bad night, not
+    // a pattern of behavior, so a title-only match (in case an event's flavor text ever changes)
+    // would be fragile where the id-based hadLifeEvent() lookup isn't.
+    { key:"gotthatdawg", name:"He Got That Dawg in Him", icon:"paw",
+      blurb:"Not the kind of \"dawg in him\" anyone meant. A very, very wrong kind of dog story.",
+      hint:"Get caught up in a career-altering federal investigation.",
+      check: ()=> hadLifeEvent("got_that_dawg") },
+    { key:"shotfoot", name:"Shot Himself in the Foot (Literally)", icon:"flame",
+      blurb:"The only casualty of the incident was, unfortunately, himself.",
+      hint:"Have an extremely avoidable off-field accident go very publicly, very badly wrong.",
+      check: ()=> hadLifeEvent("own_worst_enemy") },
+    { key:"bountyhunter", name:"Bounty Hunter", icon:"target",
+      blurb:"Put a price on some heads, and the league found out.",
+      hint:"Get caught running a pay-for-injury bounty scheme.",
+      check: ()=> hadLifeEvent("bounty_hunter") },
+    { key:"masterofdisguise", name:"Master of Disguise", icon:"compass",
+      blurb:"The wig did not, in fact, work.",
+      hint:"Get caught sneaking past team compliance in a disguise.",
+      check: ()=> hadLifeEvent("master_of_disguise") },
+    { key:"walkabout", name:"Walkabout", icon:"sunrise",
+      blurb:"No scandal, no arrest — just up and gone, mid-career, to go find himself.",
+      hint:"Walk away from football entirely, mid-career, with no explanation.",
+      check: ()=> hadLifeEvent("walked_away") },
+    { key:"wrongplacewrongtime", name:"Wrong Place, Wrong Time", icon:"clock",
+      blurb:"Wasn't the shooter. Was, unfortunately, still there.",
+      hint:"Get named in a nightclub shooting investigation you had nothing to do with.",
+      check: ()=> hadLifeEvent("wrong_place_wrong_time") },
+    { key:"housealwayswins", name:"The House Always Wins", icon:"chain",
+      blurb:"The bookie always gets paid, one way or another.",
+      hint:"Let a gambling problem spiral into a career-ending scandal.",
+      check: ()=> hadLifeEvent("house_always_wins") },
+    { key:"donotdisturb", name:"Do Not Disturb", icon:"wing",
+      blurb:"Redecorated a hotel room. Not on purpose. Definitely on camera.",
+      hint:"Have a bizarre, furniture-throwing public meltdown go viral.",
+      check: ()=> hadLifeEvent("unraveling_on_camera") },
   ];
 
   function achievementDefFor(key){ return ACHIEVEMENTS.find(a=>a.key===key); }
@@ -3481,7 +3524,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       flavor:()=>"Years-old private messages leak to the press — ugly, offensive, and now permanently public. Sponsors are already pulling out." },
     { id:"domestic", title:"Off-field Violent Incident", severity:"major", suspensionGames:[6,14], repHit:[-25,-40], mitigable:true,
       flavor:()=>"A police report from a domestic incident becomes national news. The league has a policy for exactly this, and it isn't lenient." },
-    { id:"animalring", title:"Federal Investigation", severity:"career-multi", minYear:1990, suspensionSeasons:[2,3], repHit:[-40,-55], mitigable:false,
+    { id:"animalring", achievementId:"got_that_dawg", title:"Federal Investigation", severity:"career-multi", minYear:1990, suspensionSeasons:[2,3], repHit:[-40,-55], mitigable:false,
       flavor:()=>"Federal investigators uncover his financing of an underground animal fighting operation. The evidence is overwhelming, and this is no longer a football story." },
     { id:"video", title:"Video Evidence Goes Public", severity:"career-end", minYear:2000, repHit:-60, mitigable:false,
       flavor:()=>"Surveillance footage of a violent incident becomes public, and there is no explaining it away.",
@@ -4109,7 +4152,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // the rest of the country only know the headline, while the locals have years of context.
     career.fanSupport = clamp((career.fanSupport ?? 50) + Math.round(repHit*0.5), 0, 100);
     career.leaguePopularity = clamp((career.leaguePopularity ?? 50) + Math.round(repHit*0.7), 0, 100);
-    career.lifeEventLog.push({ year:career.year, title:ev.title, severity:ev.severity, legendary: !!ev.legendary });
+    career.lifeEventLog.push({ year:career.year, title:ev.title, severity:ev.severity, legendary: !!ev.legendary, achievementId: ev.achievementId||null });
 
     if(ev.severity==="career-end"){
       career.transactions.push(`${career.year}: ${ev.title} — banned from the league.`);
