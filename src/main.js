@@ -5273,7 +5273,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
   function playSeasonAndRender(){
     const season = generateSeason();
-    renderSeasonCard(season);
+    renderSeasonCard(season, true);
     saveActiveCareer();
   }
 
@@ -5891,7 +5891,32 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return `<div class="feed-wrap">${rows}<div class="feed-line"><span class="feed-year"></span><span class="feed-text" style="color:var(--ink-muted);">— present day<span class="feed-cursor"></span></span></div></div>`;
   }
 
-  function renderSeasonCard(season){
+  // QOL: a season's headline stats (yards/TD/INT/rating) tick up from 0 rather than snapping
+  // straight to the final number -- only on a genuine "Simulate Season" advance (playSeasonAndRender
+  // passes animate=true), never on a resumeActiveCareer() re-render of the same already-seen season.
+  function animateNumberTicker(el, finalValue, duration, kind){
+    if(!el) return;
+    const reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const format = kind==="decimal1" ? (v)=>v.toFixed(1) : (v)=>Math.round(v).toLocaleString();
+    if(reduced || !finalValue){ el.textContent = format(finalValue); return; }
+    const start = performance.now();
+    function frame(now){
+      const t = clamp((now-start)/duration, 0, 1);
+      const eased = 1 - Math.pow(1-t, 3);
+      el.textContent = format(finalValue*eased);
+      if(t<1) requestAnimationFrame(frame);
+      else el.textContent = format(finalValue);
+    }
+    requestAnimationFrame(frame);
+  }
+  function animateSeasonStatTickers(scope){
+    scope.querySelectorAll(".sw-num[data-final]").forEach(el=>{
+      const finalValue = parseFloat(el.dataset.final);
+      animateNumberTicker(el, finalValue, 1500, el.dataset.kind);
+    });
+  }
+
+  function renderSeasonCard(season, animate){
     const content = document.getElementById("careerContent");
     const badges = season.awards.map(a=>`<span class="badge ${/Champion$/.test(a)||a==="MVP"?"gold":"good"}">${a}</span>`).join("");
     const brokenRecords = checkSeasonRecords(season);
@@ -6012,10 +6037,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
           <div class="dash-tabpanel active" id="tabpanel-season">
             <div class="widget-grid">
-              <div class="stat-widget"><span class="sw-label">Pass Yards</span><span class="sw-value tabular">${season.yards.toLocaleString()}${recBy.yards?recordBadgeHtml(recBy.yards):""}${simBy.yards?simBestBadgeHtml(simBy.yards):""}</span><span class="sw-sub">${season.comp}/${season.att} · ${(season.pct*100).toFixed(1)}%</span></div>
-              <div class="stat-widget"><span class="sw-label">Touchdowns</span><span class="sw-value good tabular">${season.td}${recBy.td?recordBadgeHtml(recBy.td):""}${simBy.td?simBestBadgeHtml(simBy.td):""}</span><span class="sw-sub">${season.games} games played</span></div>
-              <div class="stat-widget${season.int>=15?" neg":""}"><span class="sw-label">Interceptions</span><span class="sw-value${season.int>=15?" bad":""} tabular">${season.int}</span><span class="sw-sub">&nbsp;</span></div>
-              <div class="stat-widget"><span class="sw-label">Passer Rating</span><span class="sw-value tabular">${season.rating}${recBy.rating?recordBadgeHtml(recBy.rating):""}${simBy.rating?simBestBadgeHtml(simBy.rating):""}</span><span class="sw-sub">&nbsp;</span></div>
+              <div class="stat-widget"><span class="sw-label">Pass Yards</span><span class="sw-value tabular"><span class="sw-num" id="swNumYards" data-final="${season.yards}" data-kind="int">${season.yards.toLocaleString()}</span>${recBy.yards?recordBadgeHtml(recBy.yards):""}${simBy.yards?simBestBadgeHtml(simBy.yards):""}</span><span class="sw-sub">${season.comp}/${season.att} · ${(season.pct*100).toFixed(1)}%</span></div>
+              <div class="stat-widget"><span class="sw-label">Touchdowns</span><span class="sw-value good tabular"><span class="sw-num" id="swNumTd" data-final="${season.td}" data-kind="int">${season.td}</span>${recBy.td?recordBadgeHtml(recBy.td):""}${simBy.td?simBestBadgeHtml(simBy.td):""}</span><span class="sw-sub">${season.games} games played</span></div>
+              <div class="stat-widget${season.int>=15?" neg":""}"><span class="sw-label">Interceptions</span><span class="sw-value${season.int>=15?" bad":""} tabular"><span class="sw-num" id="swNumInt" data-final="${season.int}" data-kind="int">${season.int}</span></span><span class="sw-sub">&nbsp;</span></div>
+              <div class="stat-widget"><span class="sw-label">Passer Rating</span><span class="sw-value tabular"><span class="sw-num" id="swNumRating" data-final="${season.rating}" data-kind="decimal1">${season.rating}</span>${recBy.rating?recordBadgeHtml(recBy.rating):""}${simBy.rating?simBestBadgeHtml(simBy.rating):""}</span><span class="sw-sub">&nbsp;</span></div>
             </div>
             <div class="mini-stat-row">
               <span>Games <b class="tabular">${season.games}</b></span>
@@ -6094,6 +6119,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     }
     animatePlayoffQuarters(season);
     updateHeaderCareerTicker();
+    if(animate) animateSeasonStatTickers(content);
   }
 
   /* ================= Key Moment mini-game ================= */
