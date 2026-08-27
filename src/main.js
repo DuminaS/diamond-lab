@@ -951,6 +951,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       blurb:"Redecorated a hotel room. Not on purpose. Definitely on camera.",
       hint:"Have a bizarre, furniture-throwing public meltdown go viral.",
       check: ()=> hadLifeEvent("unraveling_on_camera") },
+    { key:"twotimeloser", name:"Two-Time Loser", icon:"heart",
+      blurb:"Lost to the same guy twice — once on the scoreboard, once at home.",
+      hint:"Have your partner get caught up in a scandal with a bitter rival.",
+      check: ()=> hadLifeEvent("two_time_loser") },
   ];
 
   function achievementDefFor(key){ return ACHIEVEMENTS.find(a=>a.key===key); }
@@ -2114,6 +2118,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       lifeEventLog: [],
       _cutShieldSeasons: 0,
       leagueRivals: [],
+      rivalries: {},
       leagueNewsLog: [],
       devSpeed: rollDevSpeed(),
       devCarry: {},
@@ -2367,6 +2372,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const scoreSim = simulateGameScore(myOff, oppOffense);
       const won = scoreSim.won;
       if(won) wins++;
+      bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
 
       // per-game noise ranges are all built to average to exactly 1.0x the season rate over a
       // full season, so summed game logs land on the same season totals the old single-formula
@@ -2592,6 +2598,45 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function rivalEffTalent(rival){
     return clamp(Math.round(65 + (rival.talent-65)*primeMultiplier(rival.age)), 20, 99);
   }
+
+  /* ----- Rivalry growth: a per-rival "how personal is this" score, keyed by the individual rival's
+     own id (NOT the team) -- a rivalry is between two PEOPLE, so when a team's starter retires and
+     is succeeded, that specific personal rivalry naturally stops accumulating and a new one starts
+     fresh with whoever replaces him, exactly like a real division rivalry resets when a franchise
+     QB retires. career.rivalries = { [rivalId]: {score:0-100, meetings, playoffMeetings, lastYear} }.
+     bumpRivalry() is the only writer, called from every site that actually resolves a game against
+     a specific opponent (simulateRegularSeasonGames, and the 3 playoff win-calc sites). Score decays
+     for nobody -- a one-off cross-conference game only ever adds +1 and the schedule rotation means
+     it rarely repeats, so scores stay low there on their own without needing explicit decay. */
+  function ensureRivalryRecord(rivalId){
+    if(!career.rivalries) career.rivalries = {};
+    if(!career.rivalries[rivalId]) career.rivalries[rivalId] = { score:0, meetings:0, playoffMeetings:0, lastYear:null };
+    return career.rivalries[rivalId];
+  }
+  function bumpRivalry(rival, { playoff=false, divisionRival=false, won=true, close=false }={}){
+    if(!rival) return;
+    const rec = ensureRivalryRecord(rival.id);
+    let inc = playoff ? 14 : (divisionRival ? 3 : 1);
+    if(rival.isRival) inc += 2; // draft classmate -- shared history from day one
+    if(close) inc += 3;
+    if(!won) inc += 2; // losing to the same guy stings more than beating him
+    rec.score = clamp(rec.score + inc, 0, 100);
+    rec.meetings++;
+    if(playoff) rec.playoffMeetings++;
+    rec.lastYear = career.year;
+  }
+  // The single most-developed CURRENTLY ACTIVE rivalry (the associated rival hasn't retired/been
+  // succeeded) -- used to pick who a rivalry-flavor event is actually about. A high-score rivalry
+  // whose rival has since retired is treated as over: no new rival, no new candidate.
+  function topActiveRivalry(minScore){
+    const candidates = Object.entries(career.rivalries||{})
+      .filter(([id,rec])=> rec.score>=minScore)
+      .map(([id,rec])=>({ rival: findRivalById(id), rec }))
+      .filter(x=> x.rival && !x.rival.retired);
+    if(!candidates.length) return null;
+    candidates.sort((a,b)=> b.rec.score-a.rec.score);
+    return candidates[0];
+  }
   function opponentOffenseGrade(teamId, qbInfluence){
     const teamStrength = teamId===career.teamId ? career.teamStrength : (career.leagueStrength[teamId] ?? 60);
     const rival = rivalForTeam(teamId);
@@ -2626,6 +2671,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     }
     return facts;
   }
+  function rivalryLevelLabel(score){
+    if(score>=75) return "Blood Feud";
+    if(score>=50) return "Heated Rivalry";
+    if(score>=25) return "Developing Rivalry";
+    if(score>0) return "Building";
+    return "No History Yet";
+  }
   function buildRivalProfileHTML(rival){
     const t = rival.totals;
     const rating = passerRating(t.comp, t.att, t.yards, t.td, t.int);
@@ -2639,6 +2691,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       t.proBowls ? `<span class="badge good">${t.proBowls}x Pro Bowl</span>` : "",
     ].join("");
     const facts = rivalCareerFunFacts(rival);
+    const rec = (career.rivalries||{})[rival.id];
+    const rivalryHtml = rec ? fanMeterRow("Rivalry", rec.score,
+      `${rivalryLevelLabel(rec.score)} — ${rec.meetings} meeting${rec.meetings===1?"":"s"}${rec.playoffMeetings?`, ${rec.playoffMeetings} in the playoffs`:""}.`) : "";
     return `
       <div class="rival-card">
         <div class="rival-eyebrow">${svgEscape(teamNameAt(rival.teamId, career.year))}${rival.retired?" · Retired":""}</div>
@@ -2653,6 +2708,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <div><div class="rv-label">Games</div><div class="rv-value tabular">${t.games}</div></div>
         </div>
         ${badges ? `<div class="rival-badges">${badges}</div>` : ""}
+        ${rivalryHtml}
         <div class="rival-facts">
           <div class="rival-facts-label">Fun Facts</div>
           <ul>${facts.map(f=>`<li>${svgEscape(f)}</li>`).join("")}</ul>
@@ -2871,6 +2927,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function confirmPlayoffRound(playoffs, season){
     const round = playoffs.rounds[playoffs.rounds.length-1];
     if(!round){ playoffs.done = true; return; }
+    // round.won is final here (Key Moment swing already applied), unlike the baseline result the
+    // bracket-resolution functions computed when the round was first created -- this is the one
+    // correct place to bump rivalry off a playoff result, for every round type uniformly.
+    bumpRivalry(round._oppQbId ? findRivalById(round._oppQbId) : null, { playoff:true, won: round.won, close: Math.abs(round.myScore-round.oppScore)<=3 });
     if(round.round==="Super Bowl"){ playoffs.wonSuperBowl = round.won; playoffs.done = true; return; }
     if(!round.won){ playoffs.done = true; return; }
     const result = confirmRoundAdvancement(playoffs._bracketState);
@@ -3846,6 +3906,104 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return true;
   }
 
+  /* ================= Rivalry-flavor events =================
+     Pure narrative/reputation-adjacent flavor (same convention as lifepath events -- no attribute
+     effects), but keyed to a SPECIFIC opponent via topActiveRivalry() rather than picked blind. A
+     rivalry has to actually be developed (score>=40, see bumpRivalry) before this pool is even
+     eligible to fire, so early-career seasons never see one -- there's nobody to have a rivalry
+     with yet. Tone (toxic vs. respectful) is weighted by how hot the rivalry actually is: a fresh
+     40-score rivalry skews respectful/competitive, a 90-score blood feud skews toxic. A toxic event
+     escalates the score further; a respectful one cools it slightly -- the story and the number stay
+     in sync in both directions. */
+  const RIVALRY_EVENTS = [
+    { id:"handshakesnub", tone:"toxic", title:"Postgame Handshake Snub",
+      flavor:(n)=>`He and ${n} skip the postgame handshake again this year — the cameras catch it every single time, and neither side denies it's on purpose.` },
+    { id:"podcastbeef", tone:"toxic", title:"Dueling Podcast Beef",
+      flavor:(n)=>`He and ${n} spend a full week trading shots at each other on their competing podcasts. Neither one backs down an inch.` },
+    { id:"sidelineshove", tone:"toxic", title:"Sideline Shoving Match",
+      flavor:(n)=>`Tempers finally boil over in the fourth quarter — he and ${n} have to be separated, and both benches empty onto the field.` },
+    { id:"calledout", tone:"toxic", title:"Called Him Out By Name",
+      flavor:(n)=>`A routine press conference question about ${n} gets an answer nobody expected — blunt, personal, and absolutely not what the PR department wanted.` },
+    { id:"refusesname", tone:"toxic", title:"Refuses to Say His Name",
+      flavor:(n)=>`Asked directly about ${n} in an interview, he pointedly refuses to say the name at all — "that guy" comes up four times in ninety seconds, and everyone notices.` },
+    { id:"jerseyswap", tone:"respect", title:"Postgame Jersey Swap",
+      flavor:(n)=>`After another classic, he and ${n} trade jerseys at midfield — the photo is everywhere within the hour.` },
+    { id:"quietdinner", tone:"respect", title:"Quietly Gets Dinner With Him After the Game",
+      flavor:(n)=>`He and ${n} are spotted getting dinner together after the game, like it's nothing. For a rivalry this fierce, it's a genuinely surprising story.` },
+    { id:"charityevent", tone:"respect", title:"Co-Hosts a Charity Event With Him",
+      flavor:(n)=>`He and ${n} team up for a charity event in the offseason, and the league can't stop talking about the optics.` },
+    { id:"bestplayed", tone:"respect", title:"Calls Him the Best He's Ever Played Against",
+      flavor:(n)=>`In a rare moment of candor, he calls ${n} "the best I've ever lined up against" — and clearly means it.` },
+    { id:"offseasontexts", tone:"respect", title:"The Two of Them Text Every Offseason",
+      flavor:(n)=>`A reporter's offhand mention reveals he and ${n} actually text each other every offseason. The rivalry, it turns out, has a real friendship quietly underneath it.` },
+  ];
+  function renderRivalryEvent(ev, rival){
+    const content = document.getElementById("careerContent");
+    const text = ev.flavor(rival.name, teamNameAt(rival.teamId, career.year));
+    const repDelta = ev.tone==="toxic" ? -randInt(1,6) : randInt(2,7);
+    const popDelta = ev.tone==="toxic" ? randInt(3,10) : randInt(2,6);
+    career.reputation = clamp(career.reputation + repDelta, 0, 100);
+    career.leaguePopularity = clamp((career.leaguePopularity??50) + popDelta, 0, 100);
+    const rec = ensureRivalryRecord(rival.id);
+    rec.score = clamp(rec.score + (ev.tone==="toxic" ? 6 : -4), 0, 100);
+    career.lifeEventLog.push({ year:career.year, title:ev.title, severity:"rivalry" });
+    career.transactions.push(`${career.year}: ${ev.title} — vs. ${rival.name}.`);
+    content.innerHTML = eraWrap(decadeForYear(career.year), `
+      <div class="ev-eyebrow">${career.year} · Rivalry</div>
+      <h3>${ev.title}</h3>
+      <p>${text}</p>
+      <div class="rep-note">Effect: Reputation ${fmtDelta(repDelta)} · League Popularity ${fmtDelta(popDelta)}.</div>
+      <div class="event-choices"><button class="choice-btn" id="rivEventAck"><div class="cb-title">Continue</div></button></div>
+    `, {tone: ev.tone==="toxic" ? "bad" : "good"});
+    document.getElementById("rivEventAck").addEventListener("click", secondaryLifeEventCheck);
+  }
+  function rivalryEventCheck(){
+    const top = topActiveRivalry(40);
+    if(!top || Math.random()>=0.08) return false;
+    const toxicChance = clamp(0.3 + (top.rec.score-40)*0.01, 0.3, 0.8);
+    const tone = Math.random()<toxicChance ? "toxic" : "respect";
+    const pool = RIVALRY_EVENTS.filter(e=>e.tone===tone);
+    renderRivalryEvent(pick(pool), top.rival);
+    return true;
+  }
+
+  // The one rivalry event with real mechanical teeth: needs an existing relationship AND a
+  // genuinely toxic (score>=60) active rivalry to even be eligible, then ends the relationship
+  // outright, same as a messy breakup, but tags the escalation onto the actual rivalry (biggest
+  // rivalries in a long career should feel like they picked up real scar tissue along the way, not
+  // just a scoreboard number). achievementId hooks the dark-humor "Two-Time Loser" achievement via
+  // the same hadLifeEvent() mechanism the scandal achievements use.
+  function rivalryAffairCheck(){
+    if(!career.relationship) return false;
+    const top = topActiveRivalry(60);
+    if(!top || Math.random()>=0.03) return false;
+    renderRivalryAffairEvent(top.rival, top.rec);
+    return true;
+  }
+  function renderRivalryAffairEvent(rival, rec){
+    const content = document.getElementById("careerContent");
+    const partner = career.relationship;
+    const teamName = teamNameAt(rival.teamId, career.year);
+    const title = `Caught: ${partner.partnerName} and ${rival.name}`;
+    const text = `${partner.partnerName} is photographed leaving dinner with ${rival.name}, the ${teamName} quarterback — yes, THAT ${rival.name}, the one he's spent years trying to beat on the field. The tabloids don't need to add commentary. The photo says all of it.`;
+    career.relationship = null;
+    const repDelta = -randInt(6,14);
+    const popDelta = randInt(8,20); // drama sells, same convention as a messy public breakup
+    career.reputation = clamp(career.reputation + repDelta, 0, 100);
+    career.leaguePopularity = clamp((career.leaguePopularity??50) + popDelta, 0, 100);
+    rec.score = clamp(rec.score + 30, 0, 100);
+    career.lifeEventLog.push({ year:career.year, title, severity:"rivalry", legendary:true, achievementId:"two_time_loser" });
+    career.transactions.push(`${career.year}: ${title}.`);
+    content.innerHTML = eraWrap(decadeForYear(career.year), `
+      <div class="ev-eyebrow">${career.year} · Personal Life</div>
+      <h3>${title}</h3>
+      <p>${text}</p>
+      <div class="rep-note">Effect: Reputation ${fmtDelta(repDelta)} · League Popularity ${fmtDelta(popDelta)} · Relationship over.</div>
+      <div class="event-choices"><button class="choice-btn" id="rivAffairAck"><div class="cb-title">Continue</div></button></div>
+    `, {tone:"bad"});
+    document.getElementById("rivAffairAck").addEventListener("click", secondaryLifeEventCheck);
+  }
+
   const ORG_EVENTS = [
     { id:"coachfired", title:"His Coach Gets Fired", repDelta:0, strengthDelta:[-10,-4], gmDelta:[-6,2], setFlag:"_orgTurmoil", schemeChangeChance:0.5,
       flavor:()=>"The coach who believed in him is out after a rough stretch. The new regime doesn't owe him anything." },
@@ -4068,7 +4226,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // chain below -- they're pure narrative/reputation beats, never competing with an actual
     // infraction or org-news roll for the same season's "slot."
     if(relationshipCheck()) return;
+    if(rivalryAffairCheck()) return;
     if(lifepathCheck()) return;
+    if(rivalryEventCheck()) return;
     // Very-low-odds roll for a bizarre, career-altering easter egg, checked independently and
     // ahead of the ordinary infraction roll -- roughly 1-in-165 seasons, so most careers never see
     // one and a handful of very long careers might see exactly one.
@@ -4096,6 +4256,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // letting a second infraction/suspension land on top of the first one this same season.
   function secondaryLifeEventCheck(){
     if(lifepathCheck()) return;
+    if(rivalryEventCheck()) return;
     if(Math.random() < 0.12){
       const roll = Math.random();
       if(roll<0.4){ renderPositiveEvent(pick(POSITIVE_EVENTS)); return; }
@@ -6495,6 +6656,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     positive: { label:"Positive", list: POSITIVE_EVENTS, kind:"positive" },
     org: { label:"Organization", list: ORG_EVENTS, kind:"org" },
     locker: { label:"Locker Room", list: LOCKER_ROOM_EVENTS, kind:"locker" },
+    rivalry: { label:"Rivalry", list: RIVALRY_EVENTS, kind:"rivalry" },
   };
   const ADMIN_PLAYER_COLUMNS = [
     { key:"name", label:"Name" }, { key:"team", label:"Team" }, { key:"years", label:"Years" }, { key:"decade", label:"Decade" },
@@ -6526,6 +6688,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       ev.choices.forEach(c=> parts.push(`"${c.label}": good ${fmtDelta(c.goodDelta[0])}..${fmtDelta(c.goodDelta[1])} (${Math.round(c.goodChance*100)}%) / bad ${fmtDelta(c.badDelta[0])}..${fmtDelta(c.badDelta[1])}`));
       return parts.join(" · ");
     }
+    if(kind==="rivalry"){
+      return ev.tone==="toxic" ? "toxic · rep -1..-6 · pop +3..+10 · rivalry +6" : "respect · rep +2..+7 · pop +2..+6 · rivalry -4";
+    }
     // org
     const parts = [];
     if(Array.isArray(ev.repDelta)) parts.push(`rep ${fmtDelta(ev.repDelta[0])}..${fmtDelta(ev.repDelta[1])}`);
@@ -6546,6 +6711,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(pool.kind==="infraction") renderInfractionEvent(ev);
     else if(pool.kind==="positive") renderPositiveEvent(ev);
     else if(pool.kind==="locker") renderLockerRoomEvent(ev);
+    else if(pool.kind==="rivalry"){
+      const rival = (topActiveRivalry(0)||{}).rival || (career.leagueRivals||[]).find(r=>!r.retired);
+      if(rival) renderRivalryEvent(ev, rival);
+    }
     else renderOrgEvent(ev);
   }
   function renderAdminPlayersTab(){

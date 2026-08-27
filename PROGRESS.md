@@ -529,12 +529,89 @@ per-item root causes below, all confirmed as real, verifiable gaps, not just vib
     computes `overflow-x: auto`, and the page body itself stays within the viewport width (no
     page-level horizontal scroll was introduced as a side effect).
 
+17. **Rivalry growth system: a per-rival score that builds from real division/playoff/draft-class
+    history, a new toxic-vs-respectful event pool, and a "spicy" affair-scandal event with its own
+    dark-humor achievement (explicit user ask, sequenced ahead of the separately-requested rival
+    depth-chart/succession expansion, which is scoped as its own future round).** `career.rivalries
+    = { [rivalId]: {score:0-100, meetings, playoffMeetings, lastYear} }`, keyed by the individual
+    rival's own id (not the team) — deliberately, since a rivalry is between two PEOPLE: when a
+    team's starter retires and is succeeded, that specific personal rivalry naturally stops
+    accumulating and a fresh one starts at zero with whoever replaces him, the same way a real
+    division rivalry resets when a franchise QB retires. `bumpRivalry(rival, {playoff, divisionRival,
+    won, close})` is the only writer, called from `simulateRegularSeasonGames` (using
+    `divisionOf(career.teamId, career.year).teams.includes(oppId)` for the division-rival flag) and
+    from `confirmPlayoffRound` — NOT from the 3 playoff bracket-resolution functions that first
+    compute a game's baseline result, since (per the existing architecture note on
+    `confirmRoundAdvancement`) that baseline can still be overridden by a Key Moment swing before the
+    round is actually final; `confirmPlayoffRound` is the one place every round type (Wild Card
+    through Super Bowl) reports `round.won` after that swing has already applied, and it's a single
+    hook point instead of three. Increment formula: `playoff?14:(divisionRival?3:1)`, `+2` if the
+    rival is a draft classmate (`isRival`), `+3` for a close game (≤3 points), `+2` for a loss (losing
+    to the same guy stings more than beating him) — no decay for anyone; a one-off cross-conference
+    opponent only ever gets +1 and the schedule rotation means it rarely repeats, so it never
+    meaningfully develops on its own. Diagnostically swept (pure-math, 200 trials × 20 years per
+    scenario) before committing: a division rival reaches the event-eligible threshold (40) around
+    year 4-5 and a toxic-leaning threshold (65+) around year 5-7, faster for a draft classmate (year
+    3.3 / 5.1); a random cross-conference opponent averages a final score of 11 over 20 years and
+    never crosses 40. Confirmed against REAL gameplay data (not just the sweep) via Playwright: a
+    genuine division rival reached score 43 after exactly 4 real seasons (8 meetings, the correct
+    home-and-home count) — matching the diagnostic prediction closely.
+
+    `topActiveRivalry(minScore)` picks the single most-developed rivalry whose rival hasn't since
+    retired (a high-score rivalry with a now-retired rival is treated as over — no new candidate).
+    New `RIVALRY_EVENTS` pool (10 entries, `tone:"toxic"` or `"respect"`) fires via
+    `rivalryEventCheck()` (checked in both `lifeEventCheck()` and `secondaryLifeEventCheck()`, same
+    as `lifepathCheck`) — only eligible once a rivalry hits score 40, and which tone is more likely
+    scales with how hot it is (`toxicChance = clamp(0.3 + (score-40)*0.01, 0.3, 0.8)`); a toxic event
+    escalates the score further (+6), a respectful one cools it slightly (-4), so the story and the
+    number stay in sync in both directions. Pure narrative/reputation flavor, same convention as
+    `LIFEPATH_EVENTS` — no attribute effects.
+
+    The requested "spicy" event: `rivalryAffairCheck()` needs BOTH an existing relationship AND a
+    genuinely toxic (score≥60) active rivalry to even be eligible (checked only in the primary chain,
+    right after `relationshipCheck()`, at a low 3% roll) — `renderRivalryAffairEvent()` ends the
+    relationship outright (same mechanic as a messy breakup), applies a reputation hit but a bigger
+    popularity gain (drama sells, same convention already used for messy breakups), and escalates
+    that specific rivalry by +30. Logs `achievementId:"two_time_loser"` via the same `hadLifeEvent()`
+    hook the dark-humor scandal achievements use, powering the new **Two-Time Loser** achievement
+    ("Lost to the same guy twice — once on the scoreboard, once at home") — roster is now 39.
+    `RIVALRY_EVENTS` was also added to the Admin panel's force-fire pools (`kind:"rivalry"`, dispatches
+    to `renderRivalryEvent` using `topActiveRivalry(0)` or any active rival as a fallback subject) for
+    the same reason the dark-humor achievements got the same treatment — a 3%-or-lower real trigger
+    chance isn't a practical target for deterministic testing otherwise. The rival profile overlay
+    (`buildRivalProfileHTML`) now shows a `fanMeterRow`-based "Rivalry" meter with a level label
+    (Building / Developing Rivalry / Heated Rivalry / Blood Feud) whenever a rivalry record exists.
+
+    Verified via Playwright against real gameplay (not just diagnostics): after 4 real seasons, at
+    least one rivalry record exists with a real score and meeting count; the top rival's own profile
+    page (opened via its real `data-rival-id` link from the League tab, not a synthetic path) shows
+    the new Rivalry meter; force-firing a rivalry event via the Admin panel renders its real title and
+    Continue button. `renderRivalryAffairEvent` itself was NOT live-triggered end-to-end — its 3%
+    trigger sits behind `relationshipCheck()`'s own unrelated 14% gate in the same tick, and the two
+    checks' RNG thresholds can't both be satisfied by a single forced `Math.random()` value (one needs
+    "roll high enough to skip," the other "roll low enough to fire"), so a naive full-override mock
+    doesn't work without a fragile call-sequence-dependent one. Verified instead by seeding a real
+    `achievementId:"two_time_loser"` lifeEventLog entry onto an active career save and confirming
+    Two-Time Loser correctly unlocks after a season advance (proving the achievement half works via
+    the exact same proven mechanism as the other dark-humor achievements), plus direct code review
+    confirming `renderRivalryAffairEvent`'s structure is otherwise identical to the already
+    live-tested `renderRelationshipEvent`/`renderRivalryEvent` it's built on. Zero page errors across
+    all passes.
+
 Verified end-to-end via Playwright (not just diagnostics) across a real 8-season playthrough: zero
 page errors, opponent QB correctly shown every season in the Schedule tab, League News feed
 populated (23 entries by season 8), team-strength spread stayed realistic (range of 75 points across
 the league, bounds respected). Screenshotted the Schedule and League tabs to confirm the rendering
 matches the data (a 62-grade team fielding a 49-overall rival QB; a 34-grade team's 41-overall QB;
 etc. — genuine, visible mismatches between team grade and QB grade, not just a relabeled team number).
+
+**Deliberately not started yet**: the user also asked for a rival QB depth-chart/succession
+expansion (QB1/2/3 per team, including the player's own team when a backup; underperforming/
+expensive starters getting benched or replaced via draft/FA mid-career, not just at forced
+retirement) at the same time as the rivalry-growth system above. Explicitly sequenced as its own
+future round (user confirmed) since it's a much deeper architectural change — it touches contract
+logic, the draft, and free agency, and needs new UI, versus rivalry growth which mostly reused
+existing event-pool/achievement scaffolding. Not forgotten — just not yet scoped or started.
 
 ### Round 4 — difficulty/realism overhaul, all 3 items shipped
 Triggered by user feedback on the Round 3 build: a 63-overall QB was posting 4,721 yards / 39 TD / 104.7 rating, and a 42-overall team was shown beating a 73-overall team in the conference championship, then facing (and being competitive with) a 96-overall team in the Super Bowl. Three asks: (a) tighten stat production further, (b) make team grade matter much more so lopsided upsets are "very very rare," (c) redesign player development to have boom/bust potential instead of smooth linear progression — explicitly flagged by the user as something to brainstorm together, not implement unilaterally. For item (c), presented 4 concrete mechanic options to the user via AskUserQuestion; the user selected all 4 (rare breakout events, real bust/plateau paths, volatility tied to dev-speed tag, dev speed shifting mid-career) — synthesized into one unified system rather than four bolted-on mechanics (see item 3 below).
@@ -623,3 +700,4 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `TROPHY_ROOM_KEY` / `loadTrophyRoom()` / `saveTrophyRoomEntry(entry)` / `buildTrophyRoomTableHTML(sortKey)` / `TROPHY_ROOM_SORTERS` (Round 5) — the cross-career leaderboard, storage key `gridironlab.trophyroom`, separate from the single-slot `gridironlab.activeCareer`/best-career save. `saveTrophyRoomEntry` is called exactly once, from `finishCareer()`, and is the ONLY writer — any future career-ending path should go through `finishCareer()` rather than writing a trophy-room entry directly, so the cap/truncation logic (`TROPHY_ROOM_CAP=60`, oldest dropped first) stays centralized. Record highlighting (`.tr-record`) is deliberately computed via `maxOf(key)` over the FULL stored list every render, independent of `sortKey` — never derive "is this a record" from position in the current sort, since the current sort is rarely by the column being highlighted.
 - `ACHIEVEMENTS` / `checkAchievements()` / `career.achievements` (Round 5, replaced the original tiered/equipped Playstyle Badges system — see the log entry for why) — 30 one-time, permanent achievements, each just `{key, name, icon, blurb, hint, check(){...}}`, no tiers, no equip slots. `checkAchievements()` is the ONLY writer of `career.achievements.unlocked`, and is idempotent (only ever flips an entry false→true) — safe to call from anywhere; currently called from `generateSeason()`, `finalizePlayoffOutcome()`, and `finishCareer()` so season-level, playoff-final, and career-ending-only conditions are all caught at the right moment. Any new achievement should be a pure `check()` function reading only `career`/`build`, no side effects. `achievementStatusFor(key)`/`achievementFrameHTML(def,unlocked)`/`badgeIconSVG(icon)` are shared by the Achievements tab and the Baseball Card back face — extend these, don't duplicate rendering logic at a new call site. `maxConsecutive(list,pred)` and `reachedTitleGameAndLost(s)` are the two reusable helpers behind every streak/title-game achievement — `reachedTitleGameAndLost` specifically needs its `!wonTitle(s)` guard to avoid misreading a pre-1966 season (ring already won via Conference Championship, then "loses" the meaningless fictional Super Bowl simulated afterward) as a title-game loss. `hadLifeEvent(achievementId)` (Round 5) is the third: a one-line `career.lifeEventLog.some(e=>e.achievementId===id)` scan powering every dark-humor achievement tied to a specific RARE_EVENTS/INFRACTION_EVENTS scandal — `resolveInfraction()` is the ONLY place that stamps `achievementId` onto a lifeEventLog entry (from `ev.achievementId`), so any future scandal event just needs that one field set to get a hookable achievement for free, no engine changes.
 - `buildCardFaceSVG(entry, side)` / `openBaseballCard(entry)` / `exportBaseballCard(entry)` / `CARD_HEX` / `CARD_RARITY` (Round 5) — the Exportable Baseball Card. Takes a Trophy-Room-entry-SHAPED object, not `career` directly, so it works identically whether the source is `lastFinishedCareerEntry` (the career that just ended) or a historical row loaded back out of `loadTrophyRoom()` by id — never pass `career` in directly, build/extend the entry object instead. Every color inside a card face MUST be a literal hex from `CARD_HEX`, never a CSS `var(--...)` — the export path re-parses the SVG string in an isolated context that has no access to the page's custom properties, so a `var()` there would silently render as nothing. Any new field added to a card face should be read as `entry.field || fallback`, since real Trophy Room rows saved before this shipped (or any future round that forgets to set a new field) will be missing it — the "old entry" Playwright pass exists specifically to catch a future field added without a fallback.
+- `career.rivalries` / `bumpRivalry(rival, opts)` / `topActiveRivalry(minScore)` (Round 5) — the rivalry-growth system, keyed by the RIVAL's own id (not team id) so a personal rivalry correctly resets when that rival retires/is succeeded. `bumpRivalry` is the only writer, called from `simulateRegularSeasonGames` (regular season) and `confirmPlayoffRound` (every playoff round) — NOT from the 3 bracket-resolution functions (`resolveConferenceBracket`'s `playMatch`, `stepConferenceBracket`'s `simulateMatch`, `buildSuperBowlRound`) that compute a round's baseline result, since a Key Moment swing can still flip `round.won` before `confirmPlayoffRound` reports the FINAL result — any future rivalry-affecting hook on a playoff game should go through `confirmPlayoffRound` for the same reason. `RIVALRY_EVENTS`/`rivalryEventCheck()` follow the exact same pure-narrative, no-attribute-effects convention as `LIFEPATH_EVENTS`. `rivalryAffairCheck()`/`renderRivalryAffairEvent()` is the one rivalry event with real mechanical teeth (ends the relationship) and is checked ONLY in the primary `lifeEventCheck()` chain, never `secondaryLifeEventCheck()` (same reasoning as `relationshipCheck` itself, to avoid soap-opera pacing) — its low trigger rate sits behind `relationshipCheck()`'s own unrelated gate in the same tick, which is why it isn't in the Admin panel's force-fire pools the way `RIVALRY_EVENTS` is (there's no single event object to pick by id — it needs a live relationship + a qualifying rivalry, not a pool entry).
