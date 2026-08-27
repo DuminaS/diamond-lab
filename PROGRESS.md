@@ -387,6 +387,78 @@ per-item root causes below, all confirmed as real, verifiable gaps, not just vib
     Trading Card" on the HOF screen shows that just-finished career's real data. Zero page errors
     across all passes.
 
+13. **Playstyle Badges reworked into a pure Achievements system — equip removed, roster expanded to
+    30, funnier/more unique conditions (explicit user redirect after playtesting the equip version).**
+    The user's own framing: treat these like achievements, not a loadout — drop the 3-slot equip
+    mechanic entirely, drop the tiered Bronze→Platinum performance-badge concept entirely, and add
+    more distinctive, personality-driven unlock conditions (their examples: "No One Circles the
+    Wagons" for 4 championships in a row, "Quiet Like the Buffalo Bills" for 4 championship-game
+    losses in a row — a nod to the real 1990-93 Bills, fine to reference by name since the game
+    already uses real team names everywhere, unlike the real-*person* restriction `RARE_EVENTS`
+    fictionalizes around).
+
+    `PERF_BADGES`/`LEGEND_BADGES`/`recomputeBadges`/`checkLegendBadges`/`career.badges` (equip
+    slots, live tier recompute) are GONE, replaced by one flat system: `ACHIEVEMENTS` (30 entries,
+    each a one-time permanent `check(career)` boolean, no tiers) / `checkAchievements()` (the only
+    writer of `career.achievements.unlocked`, idempotent — safe to call from `generateSeason()`,
+    `finalizePlayoffOutcome()`, AND `finishCareer()`, since it only ever flips an entry false→true).
+    7 of the old attribute-tiered performance badges were converted into one-time single-season
+    statistical achievements instead (e.g. Gunslinger is now "post a season with 4200+ yards, 32+
+    TD, AND 18+ INT" — a specific bombs-away season, not a live-recomputed attribute score); the 10
+    old Legend badges carried over unchanged, since they were already one-time/permanent and fit the
+    new model exactly. 13 brand-new achievements were added, several needing genuinely new logic:
+    - `maxConsecutive(list, pred)` — longest consecutive run in `seasonLog` satisfying a predicate.
+      Powers "No One Circles the Wagons" (`maxConsecutive(seasonLog, wonTitle)>=4`), "Quiet Like the
+      Buffalo Bills" (`maxConsecutive(seasonLog, reachedTitleGameAndLost)>=4`), "Wire to Wire"
+      (back-to-back MVP), "Juggernaut" (3 straight seasons at 90+ team grade).
+    - `reachedTitleGameAndLost(s)` — the internal round label for the final game is ALWAYS literally
+      `"Super Bowl"` regardless of era (confirmed via `buildSuperBowlRound`, only ever called after a
+      team wins its own Conference Championship), so `last.round==="Super Bowl" && !last.won` looks
+      right at a glance -- but a pre-1966 season can win its ring via the Conference Championship and
+      then lose the fictional exhibition Super Bowl simulated afterward (see `finalizePlayoffOutcome`),
+      so the `&& !wonTitle(s)` guard is required or a real ring-winning season misreads as a title-
+      game loss. Verified with a standalone pure-logic script (`achievement_streak_check.mjs` style)
+      against constructed season logs before wiring it into the real check functions — including
+      that exact pre-1966 edge case, a broken streak that shouldn't count, and a ring breaking up
+      what would otherwise be a 4-loss streak.
+    - Other new achievements: Snake Bitten (3+ title-game losses, 0 rings, non-consecutive), Ring
+      Chaser (rings with 2+ different teams), Dynasty (4+ rings with one team, not necessarily
+      consecutive — distinct from the Wagons streak achievement), Perfect Season (0-loss team
+      record), The Turnaround (join a sub-45-grade team, win it within 3 seasons), Face of the
+      League (3+ career MVPs), One-Man Team (3+ Pro Bowl/All-Pro nods on a sub-45 team), Big Game
+      Hunter (won the Super Bowl as the lower-graded team, using the existing `_defOverall` field
+      already on the SB round object), Ironclad (10+ seasons, never missed a game to injury).
+
+    UI: the "Badges" dash-tab (kept its internal id/data-tab value to limit churn, display label
+    changed to "Achievements") now shows only the full 30-card roster — earned cards gold with their
+    blurb, locked cards greyed with a vague hint, NO equip row, NO click interaction of any kind. The
+    front-office widget's equipped-badge icon strip is gone, replaced by a single "Achievements N/30"
+    line. The equip-picker overlay (`#badgeEquipOverlay`, `buildBadgeEquipHTML`, etc.) is deleted
+    outright, along with its CSS, except `.be-close` — kept because the Baseball Card's close button
+    already shared that class.
+
+    **Baseball Card impact**: the back face's "Equipped Badges" (max 3, cosmetic loadout) became
+    "Achievements Earned" (every achievement actually unlocked that career, up to 12 shown in a 4x3
+    grid with a "+N more" overflow note, since some careers will earn more than fit). Trophy Room
+    entries now save `achievements: [key, key, ...]` (all unlocked keys) instead of `equippedBadges:
+    [{key,tier}]` (3 equipped keys) — read defensively (`entry.achievements || (entry.equippedBadges
+    ||[]).map(b=>b.key) || []`) so a card saved under the OLD equip system still renders correctly
+    instead of showing nothing. Achievement name labels on the card needed a 2-line wrap
+    (`cardWrapTwoLines`, breaks at the nearest space at-or-before a char budget) since several names
+    ("No One Circles the Wagons", "Quiet Like the Buffalo Bills") are too long for a single line at
+    grid-cell width — first-pass single-line truncation cut them down to unreadable fragments like
+    "No One Cir…", caught by a Playwright assertion before shipping.
+
+    Verified via Playwright: the Achievements tab renders all 30 cards with the "Achievements" label
+    and zero equip UI anywhere in the DOM; the front-office widget shows the new N/30 line and not
+    the old wording; a NEW-shaped seeded Trophy Room entry's card back correctly shows "ACHIEVEMENTS
+    EARNED (4)" with full (wrapped, not truncated) achievement names; an OLD-shaped entry (the
+    previous round's `equippedBadges` format) still renders via the fallback mapping with no
+    "undefined" anywhere; a real season played through fires `checkAchievements()` with zero page
+    errors. Streak/title-game boolean logic itself was separately verified with a standalone
+    pure-math script against constructed season logs, including the pre-1966 edge case, before ever
+    touching the real game code.
+
 Verified end-to-end via Playwright (not just diagnostics) across a real 8-season playthrough: zero
 page errors, opponent QB correctly shown every season in the Schedule tab, League News feed
 populated (23 entries by season 8), team-strength spread stayed realistic (range of 75 points across
@@ -479,5 +551,5 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `career.lifeEventLog` entries carry a `legendary` flag (from `RARE_EVENTS`) for retrospective narrative selection.
 - `loadLastBuildProfile()` / `saveLastBuildProfile(picks)` / `renderLastBuildStrip()` / `loadLastBuildIntoCombine()` — the local-profile system, storage key `gridironlab.lastbuild`.
 - `TROPHY_ROOM_KEY` / `loadTrophyRoom()` / `saveTrophyRoomEntry(entry)` / `buildTrophyRoomTableHTML(sortKey)` / `TROPHY_ROOM_SORTERS` (Round 5) — the cross-career leaderboard, storage key `gridironlab.trophyroom`, separate from the single-slot `gridironlab.activeCareer`/best-career save. `saveTrophyRoomEntry` is called exactly once, from `finishCareer()`, and is the ONLY writer — any future career-ending path should go through `finishCareer()` rather than writing a trophy-room entry directly, so the cap/truncation logic (`TROPHY_ROOM_CAP=60`, oldest dropped first) stays centralized. Record highlighting (`.tr-record`) is deliberately computed via `maxOf(key)` over the FULL stored list every render, independent of `sortKey` — never derive "is this a record" from position in the current sort, since the current sort is rarely by the column being highlighted.
-- `PERF_BADGES` / `LEGEND_BADGES` / `recomputeBadges(eff)` / `checkLegendBadges()` / `career.badges` (Round 5) — the Playstyle Badges system. `recomputeBadges` is the ONLY writer of `perfTier`, called from `generateSeason()` BEFORE `developAttributes()` runs (uses this season's attributes, not next season's); `checkLegendBadges` is the ONLY writer of `legendUnlocked`, called from both `finalizePlayoffOutcome()` and `finishCareer()` and is safe to call from both since it only ever flips false→true, never re-checks a badge already earned. Any future badge added to either array should follow the existing shape (`score`/`check` as a pure function of `career`/`build`/`eff`/`recent`, no side effects) so `recomputeBadges`/`checkLegendBadges` stay the single source of truth. `badgeStatusFor(key)`/`badgeFrameHTML(def,st)`/`badgeIconSVG(icon)` are shared by the Badges tab, the equip-picker overlay, and the front-office widget's equipped strip — extend these, don't duplicate badge-rendering logic at a new call site. Attribute-driven `score` functions must run raw `weighted(eff,{...})` through `scoreCurve(...,45,92)` before blending (see the Round 5 log entry's calibration note) — skipping that rescale is what let a mediocre flat-70 build hit Gold for free the first time this was written.
+- `ACHIEVEMENTS` / `checkAchievements()` / `career.achievements` (Round 5, replaced the original tiered/equipped Playstyle Badges system — see the log entry for why) — 30 one-time, permanent achievements, each just `{key, name, icon, blurb, hint, check(){...}}`, no tiers, no equip slots. `checkAchievements()` is the ONLY writer of `career.achievements.unlocked`, and is idempotent (only ever flips an entry false→true) — safe to call from anywhere; currently called from `generateSeason()`, `finalizePlayoffOutcome()`, and `finishCareer()` so season-level, playoff-final, and career-ending-only conditions are all caught at the right moment. Any new achievement should be a pure `check()` function reading only `career`/`build`, no side effects. `achievementStatusFor(key)`/`achievementFrameHTML(def,unlocked)`/`badgeIconSVG(icon)` are shared by the Achievements tab and the Baseball Card back face — extend these, don't duplicate rendering logic at a new call site. `maxConsecutive(list,pred)` and `reachedTitleGameAndLost(s)` are the two reusable helpers behind every streak/title-game achievement — `reachedTitleGameAndLost` specifically needs its `!wonTitle(s)` guard to avoid misreading a pre-1966 season (ring already won via Conference Championship, then "loses" the meaningless fictional Super Bowl simulated afterward) as a title-game loss.
 - `buildCardFaceSVG(entry, side)` / `openBaseballCard(entry)` / `exportBaseballCard(entry)` / `CARD_HEX` / `CARD_RARITY` (Round 5) — the Exportable Baseball Card. Takes a Trophy-Room-entry-SHAPED object, not `career` directly, so it works identically whether the source is `lastFinishedCareerEntry` (the career that just ended) or a historical row loaded back out of `loadTrophyRoom()` by id — never pass `career` in directly, build/extend the entry object instead. Every color inside a card face MUST be a literal hex from `CARD_HEX`, never a CSS `var(--...)` — the export path re-parses the SVG string in an isolated context that has no access to the page's custom properties, so a `var()` there would silently render as nothing. Any new field added to a card face should be read as `entry.field || fallback`, since real Trophy Room rows saved before this shipped (or any future round that forgets to set a new field) will be missing it — the "old entry" Playwright pass exists specifically to catch a future field added without a fallback.
