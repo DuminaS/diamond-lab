@@ -124,6 +124,11 @@
   .stat-row{ display:flex; flex-wrap:wrap; gap: 0.5rem 1.75rem; font-family: var(--mono); font-size: 0.8rem; color: var(--ink-muted); margin-top: 1rem; }
   .stat-row b{ color: var(--ink); }
 
+  .active-career-strip{
+    margin-top: 1.5rem; border: 1.5px solid var(--gold); border-radius: 4px; padding: 0.85rem 1rem;
+    font-family: var(--mono); font-size: 0.8rem; color: var(--ink-muted); display: none; align-items:center; gap: 0.4rem 1rem; flex-wrap:wrap;
+  }
+  .active-career-strip b{ color: var(--gold); }
   .best-strip{
     margin-top: 1.5rem; border: 1px dashed var(--line-strong); border-radius: 4px; padding: 0.85rem 1rem;
     font-family: var(--mono); font-size: 0.8rem; color: var(--ink-muted); display: none; gap: 0.4rem 1.5rem; flex-wrap:wrap;

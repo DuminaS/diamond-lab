@@ -102,9 +102,20 @@ Progress so far:
    persistence, UI-render, app bootstrap) — do this incrementally, chunk by chunk, verified against
    the jsdom regression norm after each chunk, not as one big-bang rewrite. `PROGRESS.md`'s "Key
    architecture notes" section still names the load-bearing functions/invariants to preserve.
-5. ⬜ Not yet started: real save/resume for an in-progress career (today only the best-combine-score
-   and last-build-profile persist; a career is memory-only and is lost if the app is backgrounded/
-   killed by the OS — a bigger deal on mobile than it was on desktop web).
+5. ✅ Real save/resume for an in-progress career shipped: `saveActiveCareer()`/`loadActiveCareer()`/
+   `clearActiveCareer()` persist `{career, build}` (both needed — `build` is the separate top-level
+   variable `developAttributes` mutates each season; `career.originalBuild` is only the frozen
+   draft-day snapshot) to `gridironlab.activeCareer`. Checkpointed once per season, in
+   `playSeasonAndRender()` right after `renderSeasonCard(season)` — deliberately NOT continuous,
+   since that's the one point in the whole advance chain with no mid-event choice pending and no
+   animation half-played; anything lost between checkpoints just means replaying that season's
+   interstitial event once, not real progress. Cleared in `finishCareer()` (first line) whenever a
+   career actually ends. New `#activeCareerStrip` on the menu (gold-bordered, above best/last-build
+   strips) shows a "Resume career →" button when a save exists; `resumeActiveCareer()` restores
+   `career`/`build`, calls `showScreen("career")`, and re-renders the last logged season via the
+   existing `renderSeasonCard(lastSeason)` — no new render path, so a resumed season's actions
+   correctly stay disabled pending a playoff reveal exactly like a freshly-generated one would (see
+   `renderSeasonCard`'s `pending-reveal`/`animatePlayoffQuarters` handling).
 6. ✅ Mock rewarded-ad flow shipped: `src/ads/rewardedAd.js` exports `showRewardedAd({rewardLabel})`,
    a promise resolving `true`/`false` after a 30s countdown modal (`#rewardedAdOverlay`, `.ad-card` —
    skip = false/no reward, claim only enabls once the timer hits 0 = true). Wired to a new

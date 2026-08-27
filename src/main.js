@@ -763,6 +763,46 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     finishCombine();
   }
 
+  // ----- In-progress career save/resume: on a native mobile shell the OS can kill a backgrounded
+  // tab far more readily than a desktop browser ever would, and until now a career lived ONLY in
+  // memory (`career`/`build` above) -- closing or losing the app mid-career meant starting over.
+  // Checkpointed once per season (see playSeasonAndRender) rather than continuously, since that's
+  // the one point in the whole career-advance chain where state is simple and stable: no mid-event
+  // choice pending, no animation half-played. `build` is saved alongside `career` because it's a
+  // separate top-level variable that developAttributes mutates over time -- career.originalBuild
+  // is only the frozen draft-day snapshot, not the current attributes.
+  function saveActiveCareer(){
+    if(!store || !career) return;
+    try{ store.setItem("gridironlab.activeCareer", JSON.stringify({ career, build, savedAt: Date.now() })); }catch(e){}
+  }
+  function loadActiveCareer(){
+    if(!store) return null;
+    try{ const raw = store.getItem("gridironlab.activeCareer"); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
+  }
+  function clearActiveCareer(){
+    if(!store) return;
+    try{ store.removeItem("gridironlab.activeCareer"); }catch(e){}
+  }
+  function renderActiveCareerStrip(){
+    const el = document.getElementById("activeCareerStrip");
+    if(!el) return;
+    const saved = loadActiveCareer();
+    if(!saved || !saved.career || !saved.career.seasonLog || !saved.career.seasonLog.length){ el.style.display="none"; return; }
+    const c = saved.career;
+    const lastSeason = c.seasonLog[c.seasonLog.length-1];
+    el.style.display="flex";
+    el.innerHTML = `In progress: <b>${svgEscape(c.name)}</b>, ${teamNameAt(c.teamId, c.year)} · Age ${c.age} · ${c.seasonLog.length} season${c.seasonLog.length===1?"":"s"} played — saved ${relativeTimeAgo(saved.savedAt)} <button type="button" class="btn-ghost-inline" id="resumeCareerBtn">Resume career →</button>`;
+    const btn = document.getElementById("resumeCareerBtn");
+    if(btn) btn.addEventListener("click", ()=> resumeActiveCareer(saved, lastSeason));
+  }
+  function resumeActiveCareer(saved, lastSeason){
+    career = saved.career;
+    build = saved.build;
+    showScreen("career");
+    updateHeaderCareerTicker();
+    renderSeasonCard(lastSeason);
+  }
+
   // Key Moment mini-game toggle: off by default (an explicit opt-in for a new, still-being-tested
   // mechanic) and persisted the same way as the sound preference, with an in-memory fallback for
   // the same storage-blocked contexts _sessionBest exists for.
@@ -911,7 +951,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   }
 
   document.getElementById("startBtn").addEventListener("click", startCombine);
-  document.getElementById("brandHome").addEventListener("click", ()=>{ renderBestStrip(); renderLastBuildStrip(); showScreen("menu"); });
+  document.getElementById("brandHome").addEventListener("click", ()=>{ renderBestStrip(); renderLastBuildStrip(); renderActiveCareerStrip(); showScreen("menu"); });
   document.getElementById("playAgainBtn").addEventListener("click", startCombine);
 
   function startCombine(){
@@ -3661,6 +3701,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function playSeasonAndRender(){
     const season = generateSeason();
     renderSeasonCard(season);
+    saveActiveCareer();
   }
 
   function renderInjuryEvent(type, dur, injMult, decade, week){
@@ -5118,6 +5159,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   }
 
   function finishCareer(){
+    clearActiveCareer();
     const verdict = hofVerdict();
     SFX.retirement(verdict.tier);
     const best = loadBest();
@@ -5191,7 +5233,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     copyText(lines.join("\n"), document.getElementById("shareCareerBtn"));
   });
   document.getElementById("newCareerBtn").addEventListener("click", ()=>{ chosenDecade=null; chosenDecadeWasRandom=false; renderDecadeGrid(); renderIdentityPanel(); showScreen("careerSetup"); });
-  document.getElementById("careerMenuBtn").addEventListener("click", ()=>{ renderBestStrip(); renderLastBuildStrip(); updateHeaderCareerTicker(); showScreen("menu"); });
+  document.getElementById("careerMenuBtn").addEventListener("click", ()=>{ renderBestStrip(); renderLastBuildStrip(); renderActiveCareerStrip(); updateHeaderCareerTicker(); showScreen("menu"); });
 
   /* ================= Admin / testing panel (V10.1) =================
      A visible, always-on debug panel for browsing the full player and event data and for firing
@@ -5810,6 +5852,7 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
   document.getElementById("howscoreQbCount").textContent = QBS.length;
   renderBestStrip();
   renderLastBuildStrip();
+  renderActiveCareerStrip();
   initSoundToggle();
   initKeyMomentsToggle();
   initAdminPanel();
