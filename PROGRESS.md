@@ -196,6 +196,46 @@ per-item root causes below, all confirmed as real, verifiable gaps, not just vib
    the correct physical attributes take a real hit at the moment it happens, and wear drops
    afterward exactly as designed.
 
+9. **Lifepath events — shipped.** Two new systems, both pure narrative/reputation-adjacent flavor
+   (never attribute effects, so a career's PLAY never depends on its love life or hobbies, only its
+   story does):
+   - **A stateful relationship arc** (`career.relationship`) — single → dating → married, with
+     breakup/divorce branches at each stage, so a partner's NAME and TYPE persist across seasons
+     (`renderRelationshipEvent`/`relationshipCheck`) instead of independent unconnected dice rolls.
+     8 invented celebrity archetypes (`CELEBRITY_ARCHETYPES` — pop star, movie star, supermodel,
+     reality-TV star, R&B singer, late-night host, tech founder, country singer; ~35 invented names
+     total) feed 5 flavor-template pools (start/breakup/marriage/divorce/married-life-aside, ~24
+     variants total) so the same transition rarely reads identically twice. Real names were
+     deliberately never used — same safe convention `RARE_EVENTS` already established for
+     "recognizable but fictional" NFL-moment easter eggs. Effects land on `reputation` and
+     `leaguePopularity` (never attributes), with a nice bit of realism: a messy/public breakup or
+     divorce hurts reputation but actually *raises* popularity (the tabloid-attention effect).
+   - **`LIFEPATH_EVENTS`** — 26 one-off flavor entries independent of the relationship arc: business
+     ventures (restaurant, clothing line, a dead crypto token), hobbies (chess, golf, six rescue
+     dogs), family (buying his parents a house, sibling drama going public), crossover friendships/
+     rivalries, and a run of fictionalized nods to real "you can't make this up" pro-sports anecdotes
+     (mic'd-up segments, a viral touchdown celebration, a disastrous ceremonial first pitch, getting
+     locked out of the facility, mistaken for a different athlete) — same no-real-names convention.
+   - Both check independently each season, at the TOP of `lifeEventCheck()` (ahead of the existing
+     rare/infraction/locker-room/positive/org chain, so they never compete with those for the same
+     season's "slot") — `relationshipCheck()` at 14%, `lifepathCheck()` at 11% — and `lifepathCheck`
+     (not `relationshipCheck`, deliberately, to avoid soap-opera-fast relationship pacing) is also
+     checked in `secondaryLifeEventCheck()` for occasional same-season stacking. Current relationship
+     status (if any) now shows in the front-office widget.
+   - **Investigation note, not a bug**: extensive Playwright testing during this item repeatedly hit
+     a test-harness ceiling, not a feature bug — a bare-bones click-through script that only knows
+     about `.choice-btn`/`playOnBtn`/`continueBtn` will eventually stall on a free-agency offer
+     screen (`.fa-accept`) or a live playoff reveal (`.pq-btn`, e.g. `#pqSimEnd-N`), both pre-existing
+     UI patterns that use different button classes. Direct source-level tracing (temporary
+     `console.log`s in `lifeEventCheck`/`advanceCareer`/`saveActiveCareer`, removed before commit)
+     confirmed clean, correct season-over-season progression with relationship/lifepath events
+     firing, applying correct effects, and resolving normally across multiple separate runs — e.g.
+     one run's save data showed a real, correctly-shaped `career.relationship: {status:"dating",
+     partnerName:"Indigo March", partnerType:"supermodel", startYear:1973}` after the event fired.
+     If a future round wants a fully automated multi-season Playwright harness, it needs a click-
+     through selector that also covers `.fa-accept`/`.fa-negotiate` and `[id^='pqSimEnd-']` (fastest
+     way to resolve a playoff round in one click) — worth building once, not per-round.
+
 Verified end-to-end via Playwright (not just diagnostics) across a real 8-season playthrough: zero
 page errors, opponent QB correctly shown every season in the Schedule tab, League News feed
 populated (23 entries by season 8), team-strength spread stayed realistic (range of 75 points across
@@ -274,6 +314,7 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `findRivalById(id)` / `openRivalProfile(rivalId)` / `buildRivalProfileHTML(rival)` / `rivalCareerFunFacts(rival)` (Round 5) — the rival QB profile page. `findRivalById` (unlike `rivalForTeam`) also matches retired rivals, since a profile opened from an old season's log should resolve to who actually played that game. Every place an opponent QB is generated/displayed carries a matching `...QbId`/`_oppQbId` field alongside name/overall specifically so this can look them up later. The single delegated `[data-rival-id]` click listener lives in the one-time Init block, NOT inside `renderSeasonCard` — `#careerContent` itself is never recreated between seasons (only its innerHTML), so attaching a fresh listener there every render would silently stack duplicates. Any future clickable element added inside a season card that needs the same "works in any tab, any season" behavior should follow this pattern, not add its own per-render listener.
 - `career.oline` / `career.weapons` / `rollSupportingCastGrade(teamStrength)` / `castLetterGrade(value)` (Round 5) — the Supporting Cast system, 20-99 with their own independent noise against team strength (a good team can have a bad line). Reset at all 5 sites the player joins a new team (waiver sign, expansion draft, trade, granted trade request, FA sign); FA offers roll a preview once and store it ON the offer object (`o.oline`/`o.weapons`) so `signFreeAgentOffer` uses the exact value shown, never a fresh re-roll. `ORG_EVENTS` entries can carry a `target:"oline"`/`target:"weapons"` field (only `oline`/`starleaves` currently do) to route their `strengthDelta` at a specific supporting-cast stat instead of generic `career.teamStrength` — `renderOrgEvent` checks this before falling back to the team-wide default. Feeds `sackRate` (oline) and a small completion%/YPA nudge (weapons) in `generateSeason()`, mirrored in the Admin Calc preview per the `STAT_SENSITIVITY` sync convention below.
 - `career.wearAndTear` / `career._hadInjuryThisSeason` (Round 5) — the wear-and-tear economy. Set almost entirely in two places: the wear-add itself in `resolveInjuryChoice` (bigger for `played=true`, i.e. "gut it out," than for sitting out), and the per-season baseline/recovery/breakdown-threshold check in `generateSeason()`, which reads `_hadInjuryThisSeason` (captured into a local BEFORE it's reset alongside `_injuryMissedGames`/`_injuryPenalty`, same pattern as those) to decide whether to apply recovery. `WEAR_BREAKDOWN_THRESHOLD=45` and its coefficients were reached via a pure-math trajectory sweep BEFORE writing any game code (see the Round 5 log entry) — retune with that same method, not by guessing, if this ever needs adjusting. Breakdown decay is scoped to `["ARM","REL","MOB","IMP"]` only — never `DUR`, matching the pre-existing "DUR is fixed for the career" invariant the rare `permanentHit` roll in the same function already respected. This is deliberately a SEPARATE mechanism from `permanentHit` (still present, unchanged) — `permanentHit` is a rare freak-injury flavor, wear-driven breakdown is the real, choice-driven accumulation system.
+- `career.relationship` / `relationshipCheck()` / `renderRelationshipEvent(kind)` / `CELEBRITY_ARCHETYPES` (Round 5) — the relationship-arc state machine. `relationshipCheck()` is the ONLY place that reads/writes `career.relationship`'s status transitions; any future feature touching a player's personal life should go through it (or extend its `kind` branches) rather than mutating `career.relationship` directly elsewhere, so the arc's single/dating/married states stay consistent. Checked at the very top of `lifeEventCheck()`, ahead of the pre-existing rare/infraction/locker-room/positive/org chain. `LIFEPATH_EVENTS`/`lifepathCheck()` is the separate, stateless general-flavor pool — checked both there and in `secondaryLifeEventCheck()` (relationshipCheck deliberately is NOT, to keep relationship pacing from feeling soap-opera-fast). Both are pure reputation/popularity flavor — no attribute effects, unlike POSITIVE_EVENTS/ORG_EVENTS' `boosts`/`strengthDelta`.
 - `STAT_SENSITIVITY = 0.32` (Round 4, was `0.5` from Round 2) / `STAT_BLEND = 0.18` (Round 2, unchanged) — the two stacked stat-production compression dials in `generateSeason()`, mirrored in `computeMetricBreakdown()` for the Admin Calc preview. Keep these two functions' values in sync if either is tuned again.
 - `computeSeasonAwardRows(season)` — shared by `buildLeagueTabHTML` and `buildAwardCeremonyHTML`, one source of truth for "every QB's season this year."
 - `resolveSeasonMVP(season, year)` / `resolveSeasonAllProAndProBowl(season, year)` — the league-wide award decision points, both called once per season from `generateSeason` right after `simulateRivalSeasons`. Same pattern: score+eligibility computed per-QB in `evaluateSeasonAwards`, compared league-wide once everyone's season is locked in.

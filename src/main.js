@@ -1522,6 +1522,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       oline: rollSupportingCastGrade(leagueStrength[team.id]),
       weapons: rollSupportingCastGrade(leagueStrength[team.id]),
       wearAndTear: 0,
+      relationship: null,
       teamScheme,
       gmRelationship: 50,
       fanSupport: 50,
@@ -3049,6 +3050,227 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       flavor:()=>"A new sports-science-driven training regimen reshapes how his body holds up over the length of a full season." },
   ];
 
+  /* ================= Lifepath: relationships & off-field flavor =================
+     Two systems, both pure narrative/reputation-adjacent flavor (no attribute effects) so a
+     career's PLAY never depends on its love life, but its STORY does. Every real name here is
+     invented -- no actual celebrities, same safe convention RARE_EVENTS already established for
+     "recognizable but fictional" NFL-moment easter eggs.
+
+     1) A stateful relationship arc (career.relationship): single -> dating -> married, with
+        breakup/divorce branches at each stage, so a partner's NAME persists across seasons and the
+        story has real continuity instead of independent unconnected dice rolls -- one career's
+        messy public breakup is a completely different story from another's quiet Vegas marriage.
+     2) LIFEPATH_EVENTS: a large, one-off flavor pool (business ventures, hobbies, family, viral
+        moments, a few fictionalized nods to real "how did that happen" pro-sports anecdotes) for
+        sheer variety across a career, independent of the relationship arc. */
+  const CELEBRITY_ARCHETYPES = [
+    { type:"pop star", names:["Wren Delacroix","Journey Vaughn","Nova Sinclair","Bexley Storm","Lyric Monroe"] },
+    { type:"movie star", names:["Vesper Kane","Rhys Callahan","Marlowe Voss","Sabine Wilder","August Reyne"] },
+    { type:"supermodel", names:["Indigo March","Soleil Rousseau","Zara Winthrop","Lennox Fane","Coco Delvaux"] },
+    { type:"reality TV star", names:["Brantley Kesh","Coralie Vance","Dakota Priestly","Harlow Beck","Remy Kingsley"] },
+    { type:"R&B singer", names:["Amara Voss","Kingston Reyel","Selah Duvall","Osei Marchetti","Jolene Sharpe"] },
+    { type:"late-night host", names:["Chip Halloway","Delancy Fox","Ronan Blackwood"] },
+    { type:"tech founder", names:["Priya Kestrel","Wyatt Ashcombe","Neve Callister"] },
+    { type:"country singer", names:["Waylon Cruz","Daisy Rae Holt","Tucker Lane"] },
+  ];
+  function pickCelebrityPartner(){
+    const arche = pick(CELEBRITY_ARCHETYPES);
+    return { name: pick(arche.names), type: arche.type };
+  }
+  const RELATIONSHIP_START_FLAVORS = [
+    (n,t)=>`He's spotted front-row at a show with ${n}, the ${t}, and within a week it's confirmed — they're dating.`,
+    (n,t)=>`A mutual friend sets him up with ${n}. Their first public appearance together, at an afterparty, is all anyone can talk about by morning.`,
+    (n,t)=>`He slides into ${n}'s comments after she reposts one of his highlights. Three months later, they're official, and the tabloids are thrilled.`,
+    (n,t)=>`They meet at a charity gala. A single blurry photo of the two of them talking is enough to spark a thousand headlines, all of which turn out to be true.`,
+    (n,t)=>`A teammate's wedding, an open bar, and a seating chart that puts him next to ${n}. Neither of them saw it coming.`,
+    (n,t)=>`${n} shows up to one of his games in a custom jersey, unannounced. The cameras find her by the second quarter, and the internet does the rest.`,
+  ];
+  const RELATIONSHIP_BREAKUP_FLAVORS = [
+    (n)=>`He and ${n} announce a quiet, mutual split. Both statements use the word "amicable" — and for once, it actually seems true.`,
+    (n)=>`It ends messy — a subtweet, a very-not-vague caption from ${n}, and a week of headlines neither of them wanted.`,
+    (n)=>`${n} is spotted with someone else before he's even confirmed the breakup. The internet does not let him forget it.`,
+    (n)=>`He and ${n} quietly stop showing up to each other's events. No statement, no drama — just over.`,
+    (n)=>`A very public argument at a very public restaurant ends the relationship in front of several people with phones out.`,
+  ];
+  const RELATIONSHIP_MARRIAGE_FLAVORS = [
+    (n,t)=>`A surprise Vegas chapel wedding with ${n} — no guests, no press release, just a photo the next morning that breaks the internet.`,
+    (n,t)=>`He proposes to ${n} at midfield after a win, in front of a sold-out stadium. She says yes. The stadium loses its mind.`,
+    (n,t)=>`A televised wedding to ${n}, the ${t}, becomes the offseason's biggest media event — even people who don't watch football tune in.`,
+    (n,t)=>`A quiet backyard ceremony with ${n} — close friends and family only, and it somehow stays out of the tabloids for almost a full week.`,
+  ];
+  const RELATIONSHIP_DIVORCE_FLAVORS = [
+    (n)=>`He and ${n} file for an amicable divorce after growing apart. Both release near-identical statements asking for privacy, which nobody gives them.`,
+    (n)=>`The divorce from ${n} gets ugly fast — dueling statements, a leaked prenup detail, and a gossip cycle that runs for months.`,
+    (n)=>`${n} files first, and the tabloids spend weeks on "sources say" details neither side confirms.`,
+  ];
+  const RELATIONSHIP_ASIDE_FLAVORS = [
+    (n)=>`He and ${n} welcome their first child. The delivery-room announcement is, briefly, the most-liked post on the internet.`,
+    (n)=>`${n} shows up to one of his games wearing a custom jersey with her own name on the back. The replica sells out by halftime.`,
+    (n)=>`He and ${n} launch a joint business venture. Nobody's totally sure what it does, but the launch party is very well attended.`,
+    (n)=>`${n} casts him in a two-second cameo in her new project. His one line gets more views than the trailer.`,
+    (n)=>`He and ${n} renew their vows somewhere nobody can quite place on a map. The photos are, once again, everywhere.`,
+  ];
+  // Unified renderer for all 5 relationship-arc beats -- kind decides the flavor pool, the
+  // rep/popularity math, and the next career.relationship state.
+  function renderRelationshipEvent(kind){
+    const content = document.getElementById("careerContent");
+    let title, text, repDelta = 0, popDelta = 0;
+    if(kind==="start"){
+      const partner = pickCelebrityPartner();
+      career.relationship = { status:"dating", partnerName:partner.name, partnerType:partner.type, startYear:career.year };
+      title = `Dating ${partner.name}`;
+      text = pick(RELATIONSHIP_START_FLAVORS)(partner.name, partner.type);
+      repDelta = randInt(1,4); popDelta = randInt(4,10);
+    } else if(kind==="breakup"){
+      const partner = career.relationship;
+      text = pick(RELATIONSHIP_BREAKUP_FLAVORS)(partner.partnerName);
+      const messy = /messy|subtweet|spotted with someone else|public argument/i.test(text);
+      title = `Split From ${partner.partnerName}`;
+      repDelta = messy ? -randInt(4,9) : -randInt(0,2);
+      popDelta = messy ? randInt(2,8) : randInt(-2,2); // messy breakups are, perversely, great for buzz
+      career.relationship = null;
+    } else if(kind==="marriage"){
+      const partner = career.relationship;
+      text = pick(RELATIONSHIP_MARRIAGE_FLAVORS)(partner.partnerName, partner.partnerType);
+      title = `Marries ${partner.partnerName}`;
+      career.relationship = { status:"married", partnerName:partner.partnerName, partnerType:partner.partnerType, startYear:career.year };
+      repDelta = randInt(4,9); popDelta = randInt(6,14);
+    } else if(kind==="divorce"){
+      const partner = career.relationship;
+      text = pick(RELATIONSHIP_DIVORCE_FLAVORS)(partner.partnerName);
+      const messy = /ugly fast|files first/i.test(text);
+      title = `Divorces ${partner.partnerName}`;
+      repDelta = messy ? -randInt(8,16) : -randInt(2,6);
+      popDelta = messy ? randInt(3,9) : randInt(-2,3);
+      career.relationship = null;
+    } else { // aside
+      const partner = career.relationship;
+      text = pick(RELATIONSHIP_ASIDE_FLAVORS)(partner.partnerName);
+      title = `Life With ${partner.partnerName}`;
+      repDelta = randInt(2,6); popDelta = randInt(3,8);
+    }
+    career.reputation = clamp(career.reputation + repDelta, 0, 100);
+    career.leaguePopularity = clamp((career.leaguePopularity??50) + popDelta, 0, 100);
+    career.lifeEventLog.push({ year:career.year, title, severity:"relationship" });
+    career.transactions.push(`${career.year}: ${title}.`);
+    content.innerHTML = eraWrap(decadeForYear(career.year), `
+      <div class="ev-eyebrow">${career.year} · Personal Life</div>
+      <h3>${title}</h3>
+      <p>${text}</p>
+      <div class="rep-note">Effect: Reputation ${fmtDelta(repDelta)} · League Popularity ${fmtDelta(popDelta)}.</div>
+      <div class="event-choices"><button class="choice-btn" id="relAck"><div class="cb-title">Continue</div></button></div>
+    `, {tone: repDelta>=0 ? "good" : "bad"});
+    document.getElementById("relAck").addEventListener("click", secondaryLifeEventCheck);
+  }
+  // The relationship arc's own state machine: called independently of (and BEFORE) the usual
+  // infraction/positive/org chain in lifeEventCheck, so it can't be crowded out by them. Returns
+  // whether it actually rendered something, so the caller knows to stop dispatching further.
+  function relationshipCheck(){
+    if(Math.random()>=0.14) return false;
+    const rel = career.relationship;
+    if(!rel){
+      if(Math.random()<0.5){ renderRelationshipEvent("start"); return true; }
+      return false;
+    }
+    if(rel.status==="dating"){
+      const roll = Math.random();
+      if(roll<0.35){ renderRelationshipEvent("breakup"); return true; }
+      if(roll<0.55){ renderRelationshipEvent("marriage"); return true; }
+      return false;
+    }
+    if(rel.status==="married"){
+      const roll = Math.random();
+      if(roll<0.12){ renderRelationshipEvent("divorce"); return true; }
+      if(roll<0.42){ renderRelationshipEvent("aside"); return true; }
+      return false;
+    }
+    return false;
+  }
+
+  // General one-off lifepath flavor -- business ventures, hobbies, family, friendships, viral
+  // moments, and a handful of fictionalized nods to real "you can't make this up" pro-sports
+  // anecdotes (no real names, same convention as RARE_EVENTS). Deliberately mostly small/neutral
+  // effects -- the point is variety and a laugh, not a stat lever.
+  const LIFEPATH_EVENTS = [
+    { id:"restaurant", title:"Opens a Restaurant", repDelta:[1,4],
+      flavor:()=>"He opens a restaurant in the city he plays in. The food is, by all accounts, actually good — which surprises everyone, including the health inspector who keeps getting recognized." },
+    { id:"cryptoflop", title:"Crypto Venture Quietly Dies", repDelta:[-3,0], minYear:2015,
+      flavor:()=>"The token he endorsed a year ago is worth, functionally, nothing. He never brings it up, and neither does anyone in the locker room, to his face." },
+    { id:"clothingline", title:"Launches a Clothing Line", repDelta:[1,5],
+      flavor:()=>"A streetwear line with his logo on it sells out its first drop in nine minutes. Nobody, including him, expected that." },
+    { id:"podcast", title:"Starts a Podcast", repDelta:[2,6], minYear:2004,
+      flavor:()=>"A weekly podcast, mostly him and a rotating cast of teammates arguing about nothing, quietly becomes must-listen inside the league." },
+    { id:"hottakes", title:"Hot Take Goes Viral", repDelta:[-4,4],
+      flavor:()=>"An offhand opinion in a radio interview gets clipped, stripped of all context, and turns into a full news cycle. Reactions are, somehow, extremely mixed." },
+    { id:"golfhobby", title:"Gets Seriously Into Golf", repDelta:[0,2],
+      flavor:()=>"He takes up golf in the offseason and will not stop talking about his handicap. Teammates have started hiding when he brings up his short game." },
+    { id:"chesshobby", title:"Becomes a Serious Chess Guy", repDelta:[1,3],
+      flavor:()=>"He picks up chess to kill time on flights and, unexpectedly, gets genuinely good at it. His online rating is now a bigger point of pride than his completion percentage." },
+    { id:"sixdogs", title:"Adopts Entirely Too Many Dogs", repDelta:[3,7],
+      flavor:()=>"What started as one rescue dog is now, inexplicably, six. His house is reportedly chaos. His Instagram has never been better." },
+    { id:"wildtattoo", title:"Gets a Very Large, Very Public Tattoo", repDelta:[-1,3],
+      flavor:()=>"A new tattoo, taking up most of an arm, leaks before he's ready to show it off. Opinions on it are loud and extremely divided." },
+    { id:"buyparents", title:"Buys His Parents a House", repDelta:[6,13],
+      flavor:()=>"His first big veteran contract goes exactly where everyone hoped: a new house for his parents, handed over as a surprise. The video of the reaction is a permanent tearjerker." },
+    { id:"siblingdrama", title:"Family Drama Goes Public", repDelta:[-6,-1],
+      flavor:()=>"A sibling airs some real family business in an interview nobody asked for. He declines to comment, which somehow makes it a bigger story." },
+    { id:"athletefriend", title:"Unlikely Friendship With a Star From Another Sport", repDelta:[2,6],
+      flavor:()=>"He strikes up a genuine, very public friendship with a star from another sport entirely. Their courtside/rinkside appearances at each other's games become a whole thing." },
+    { id:"mascotbeef", title:"Ongoing Beef With an Opposing Mascot", repDelta:[1,5],
+      flavor:()=>"A pregame staredown with a division rival's mascot escalates into a running, mostly good-natured bit that the league's social team leans into every single time they play." },
+    { id:"danceviral", title:"Touchdown Celebration Goes Viral", repDelta:[3,8],
+      flavor:()=>"A spur-of-the-moment touchdown celebration becomes a genuine cultural moment. Kids in three different countries are doing it in their backyards by the following weekend." },
+    { id:"wrongplayer", title:"Mistaken For a Completely Different Athlete", repDelta:[-1,3],
+      flavor:()=>"He gets stopped in an airport by a fan absolutely convinced he's someone else, entirely different sport. He plays along for the photo. The story gets funnier every time he retells it." },
+    { id:"badpressoutfit", title:"Pregame Outfit Becomes Bigger News Than the Game", repDelta:[0,5],
+      flavor:()=>"His arrival outfit before a nationally televised game is, by kickoff, the single most-discussed thing about the matchup — more than either team's record." },
+    { id:"micdup", title:"Mic'd Up Segment Goes Viral for the Wrong Reasons", repDelta:[-2,4],
+      flavor:()=>"A mic'd-up broadcast segment catches him talking to himself, at length, in the third person. The clip is delightful. He is somewhat mortified." },
+    { id:"chartererror", title:"Locked Out of the Team Facility", repDelta:[-1,2],
+      flavor:()=>"He forgets his keycard, his phone is dead, and he spends twenty minutes locked out of the facility before a rookie finally lets him in. Teammates have not let it go." },
+    { id:"sleepflight", title:"Caught Asleep on the Team Flight", repDelta:[-1,3],
+      flavor:()=>"A photo of him asleep on the team plane, mouth wide open, makes its way around the group chat and then, inevitably, the internet." },
+    { id:"charityrun", title:"Charity Foundation Takes Off", repDelta:[5,11],
+      flavor:()=>"A foundation he started almost as an afterthought turns into a genuinely major operation. The league starts featuring it in broadcasts unprompted." },
+    { id:"badfirstpitch", title:"Throws Out a Comically Bad First Pitch", repDelta:[-2,3],
+      flavor:()=>"Invited to throw a ceremonial first pitch at a baseball game, he bounces it a full ten feet short of the plate. The clip outlives the actual game by years." },
+    { id:"streamer", title:"Becomes an Unexpectedly Popular Video Game Streamer", repDelta:[1,5], minYear:2011,
+      flavor:()=>"An offseason hobby streaming video games picks up a real audience — not huge, but loyal, and mostly there for the trash talk, not the gameplay." },
+    { id:"conspiracy", title:"Accidentally Starts a Minor Conspiracy Theory", repDelta:[-1,4],
+      flavor:()=>"An offhand, joking comment in an interview gets taken completely seriously by a corner of the internet, and now there's a real conspiracy theory with his name on it that he cannot talk his way out of." },
+    { id:"babyannounce", title:"Announces He's Expecting", repDelta:[4,9],
+      flavor:()=>"A pregnancy announcement, posted with zero warning, immediately becomes the most-liked thing he's ever put online — by a wide margin." },
+    { id:"cameoshow", title:"Cameo on a TV Show", repDelta:[2,6],
+      flavor:()=>"He plays a heightened version of himself in a two-episode arc on a network sitcom. His line delivery is, charitably, a work in progress. The internet loves it anyway." },
+  ];
+  function lifepathEventsFor(){
+    const year = career.year;
+    return LIFEPATH_EVENTS.filter(e=> !e.minYear || year>=e.minYear);
+  }
+  function renderLifepathEvent(ev){
+    const content = document.getElementById("careerContent");
+    const repDelta = randInt(ev.repDelta[0], ev.repDelta[1]);
+    career.reputation = clamp(career.reputation + repDelta, 0, 100);
+    career.leaguePopularity = clamp((career.leaguePopularity??50) + Math.round(repDelta*0.7), 0, 100);
+    career.lifeEventLog.push({ year:career.year, title:ev.title, severity:"lifepath" });
+    career.transactions.push(`${career.year}: ${ev.title}.`);
+    content.innerHTML = eraWrap(decadeForYear(career.year), `
+      <div class="ev-eyebrow">${career.year} · Off the Field</div>
+      <h3>${ev.title}</h3>
+      <p>${ev.flavor()}</p>
+      <div class="rep-note">Effect: Reputation ${fmtDelta(repDelta)}.</div>
+      <div class="event-choices"><button class="choice-btn" id="lifepathAck"><div class="cb-title">Continue</div></button></div>
+    `, {tone: repDelta>=0 ? "good" : "bad"});
+    document.getElementById("lifepathAck").addEventListener("click", secondaryLifeEventCheck);
+  }
+  function lifepathCheck(){
+    if(Math.random()>=0.11) return false;
+    const pool = lifepathEventsFor();
+    if(!pool.length) return false;
+    renderLifepathEvent(pick(pool));
+    return true;
+  }
+
   const ORG_EVENTS = [
     { id:"coachfired", title:"His Coach Gets Fired", repDelta:0, strengthDelta:[-10,-4], gmDelta:[-6,2], setFlag:"_orgTurmoil", schemeChangeChance:0.5,
       flavor:()=>"The coach who believed in him is out after a rough stretch. The new regime doesn't owe him anything." },
@@ -3267,6 +3489,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function lifeEventCheck(){
     if(career.seasonNumber<2){ waiverCheck(); return; }
     const decade = decadeForYear(career.year);
+    // Relationship arc and general lifepath flavor get first priority, ahead of the rest of the
+    // chain below -- they're pure narrative/reputation beats, never competing with an actual
+    // infraction or org-news roll for the same season's "slot."
+    if(relationshipCheck()) return;
+    if(lifepathCheck()) return;
     // Very-low-odds roll for a bizarre, career-altering easter egg, checked independently and
     // ahead of the ordinary infraction roll -- roughly 1-in-165 seasons, so most careers never see
     // one and a handful of very long careers might see exactly one.
@@ -3293,6 +3520,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // more instead of always capping at exactly one, without the complexity (or piling-on) of
   // letting a second infraction/suspension land on top of the first one this same season.
   function secondaryLifeEventCheck(){
+    if(lifepathCheck()) return;
     if(Math.random() < 0.12){
       const roll = Math.random();
       if(roll<0.4){ renderPositiveEvent(pick(POSITIVE_EVENTS)); return; }
@@ -4603,6 +4831,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <div class="fo-row-sub">${career.oline<48 ? "A shaky line means more hits taken and a real bump to injury risk. " : career.oline>=82 ? "One of the best lines in the league — extra time in the pocket every week. " : ""}${career.weapons<48 ? "Thin at the skill positions — every rep gets a little harder to complete." : career.weapons>=82 ? "A genuinely stacked group of targets makes every throw a little easier." : ""}</div>
         </div>
         ${scheme ? `<div class="fo-scheme-line">Running <b>${scheme.name}</b> — ${schemeFavorText(schemeId) || "no strong lean"}. <span class="fo-scheme-link" data-goto-scheme="1">See details →</span></div>` : ""}
+        ${career.relationship ? `<div class="fo-scheme-line">${career.relationship.status==="married"?"Married to":"Dating"} <b>${svgEscape(career.relationship.partnerName)}</b>, the ${svgEscape(career.relationship.partnerType)}, since ${career.relationship.startYear}.</div>` : ""}
       </div>`;
   }
 
