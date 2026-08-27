@@ -3125,7 +3125,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         teamId: t.id,
         talent: clamp(teamGrade + randInt(-15, 15), 20, 99),
         age,
-        retireAge: randInt(30, 40),
+        // Guarantee at least a few seasons of runway from age -- age alone can already be as high
+        // as 34 here, and an unguarded randInt(30,40) could land BELOW that, retiring a rival on the
+        // very first simulateRivalSeasons() tick before he's ever played a game (zero career stats,
+        // yet still shown as that team's real starter in that season's schedule/playoff matchups,
+        // since rivalForTeam() only checks `retired`, not games played -- a "phantom starter" bug).
+        retireAge: clamp(age + randInt(3, 12), 30, 45),
         draftYear: career.year - (age-22),
         seasons: [],
         totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0 },
@@ -5161,16 +5166,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const classHtml = classmates.length ? `
       <div class="league-classmates">
         <h4>Your Draft Class</h4>
-        <table class="standings-table">
-          <thead><tr><th>Name</th><th>Team</th><th>Career Yds</th><th>Career TD</th><th>Rating</th><th>PB</th><th>AP</th><th>MVP</th></tr></thead>
-          <tbody>
-            <tr class="me"><td>${svgEscape(career.name)} (you)</td><td>${svgEscape(teamNameAt(career.teamId, year))}</td>
-              <td class="tabular">${career.totals.yards.toLocaleString()}</td><td class="tabular">${career.totals.td}</td>
-              <td class="tabular">${myCareerRating.toFixed(1)}</td>
-              <td class="tabular">${career.totals.proBowls}</td><td class="tabular">${career.totals.allPros}</td><td class="tabular">${career.totals.mvps}</td></tr>
-            ${classmateRows}
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table class="standings-table">
+            <thead><tr><th>Name</th><th>Team</th><th>Career Yds</th><th>Career TD</th><th>Rating</th><th>PB</th><th>AP</th><th>MVP</th></tr></thead>
+            <tbody>
+              <tr class="me"><td>${svgEscape(career.name)} (you)</td><td>${svgEscape(teamNameAt(career.teamId, year))}</td>
+                <td class="tabular">${career.totals.yards.toLocaleString()}</td><td class="tabular">${career.totals.td}</td>
+                <td class="tabular">${myCareerRating.toFixed(1)}</td>
+                <td class="tabular">${career.totals.proBowls}</td><td class="tabular">${career.totals.allPros}</td><td class="tabular">${career.totals.mvps}</td></tr>
+              ${classmateRows}
+            </tbody>
+          </table>
+        </div>
         <div class="calc-refnote">Three QBs from your own draft class — same rookie year, same age curve, tracked stat-for-stat alongside you all career long. The foundation for a future head-to-head rivals mechanic — for now, a running comparison.</div>
       </div>` : "";
 

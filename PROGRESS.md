@@ -499,6 +499,36 @@ per-item root causes below, all confirmed as real, verifiable gaps, not just vib
     stayed locked (proof a different event firing doesn't cross-unlock an unrelated achievement);
     confirmed the roster count reached 38. Zero page errors.
 
+15. **Bug fix: a rival QB could retire with zero career games ever played, yet still show up as
+    that season's real opposing starter in the schedule/playoffs (user-reported, with screenshots
+    of a "Damon Winslow — 87 overall" schedule row whose own profile card read RETIRED / 0-0 / 0
+    games / "retired after the 1987 season," his draft year).** Root cause: `generateLeagueRivals()`
+    rolled `age: randInt(23,34)` and `retireAge: randInt(30,40)` completely independently — nothing
+    stopped `age` (up to 34) from landing ABOVE `retireAge` (as low as 30) at the moment a rival was
+    first created. `simulateRivalSeasons()` checks `r.age > r.retireAge` and immediately retires
+    (replacing with a fresh rookie) BEFORE generating that year's season stat line — so a rival
+    created already past his own retirement age would retire on the very first tick, with zero
+    recorded games, while still having been the team's legitimate active starter (per
+    `rivalForTeam()`, which only checks `!r.retired`, not games played) for every one of that
+    season's games the player actually played against him. From the player's side this reads exactly
+    like "a retired player is still being used in matchups," even though the mechanism is really
+    "a rival's very first season doubled as his retirement, with no stats to show for it." Fixed by
+    guaranteeing runway at creation: `retireAge: clamp(age + randInt(3,12), 30, 45)` instead of an
+    unguarded independent roll — verified with a 200,000-roll pure-math sweep confirming zero
+    immediate-retirement cases and a minimum 3-season runway. Same root cause would explain the
+    identical symptom in playoff matchups (not just regular season), since `buildSuperBowlRound`/
+    `resolveConferenceBracket` resolve the opponent through the exact same `rivalForTeam()`.
+16. **Bug fix: the League tab's "Your Draft Class" table wasn't horizontally scrollable on mobile,
+    cutting off columns (user-reported, screenshot from an actual phone).** The main passing-
+    leaderboard table right above it was correctly wrapped in `<div class="table-wrap">` (which
+    supplies `overflow-x:auto`), but the draft-class comparison table (`buildLeagueTabHTML`'s
+    `classHtml` block) was missing that wrapper entirely, so on a narrow viewport its `width:100%`
+    table just got visually clipped by its container instead of scrolling. Wrapped it in the same
+    `.table-wrap` div. Verified via Playwright at a 390px mobile viewport: the table is confirmed
+    wider than its wrapper (so a real scroll is actually needed, not a no-op fix), the wrapper now
+    computes `overflow-x: auto`, and the page body itself stays within the viewport width (no
+    page-level horizontal scroll was introduced as a side effect).
+
 Verified end-to-end via Playwright (not just diagnostics) across a real 8-season playthrough: zero
 page errors, opponent QB correctly shown every season in the Schedule tab, League News feed
 populated (23 entries by season 8), team-strength spread stayed realistic (range of 75 points across
