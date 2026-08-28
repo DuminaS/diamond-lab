@@ -3392,9 +3392,22 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function spawnNewFranchiseRivals(year){
     if(!career.leagueRivals) return;
     const decade = decadeForYear(year);
+    // Self-heal: an ALREADY-in-progress save started before this filtering existed (or before this
+    // whole system existed) can still have an active rival sitting on a team that hasn't joined
+    // the league yet as of `year` -- generateLeagueRivals() only stops the bug for careers
+    // generated from here on, it can't retroactively clean data a save already has. Retiring it the
+    // moment its team is found not to exist yet means an existing save self-corrects on its very
+    // next season instead of needing a fresh career, the same "repair going forward" approach as
+    // the Round 11 safeNum fix. Once its team's real start year arrives, the block below spawns it
+    // a brand-new (correctly-aged) rival exactly like any other new franchise.
+    career.leagueRivals.forEach(r=>{
+      if(r.retired) return;
+      const t = TEAMS.find(x=>x.id===r.teamId);
+      if(t && t.start>year){ r.retired = true; r.exitReason = "not-yet-founded"; }
+    });
     TEAMS.forEach(t=>{
       if(t.start!==year || t.id===career.teamId) return;
-      if(career.leagueRivals.some(r=>r.teamId===t.id)) return;
+      if(career.leagueRivals.some(r=>r.teamId===t.id && !r.retired)) return;
       career.leagueRivals.push(spawnFreshRival(t.id, decade, year, "new"+year));
     });
   }
@@ -3493,6 +3506,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function simulateDepthChartSeasons(decade, league, year){
     if(!career.leagueDepthCharts) return;
     Object.keys(career.leagueDepthCharts).forEach(teamId=>{
+      // Same self-heal as spawnNewFranchiseRivals: an existing save from before that filtering
+      // existed can still have a depth chart keyed under a team that hasn't joined the league yet
+      // as of `year` -- just leave it dormant (don't age/simulate bench players for a team that
+      // doesn't exist) rather than deleting it, since spawnFreshRival will overwrite it correctly
+      // once that team's real start year arrives.
+      const t = TEAMS.find(x=>x.id===teamId);
+      if(t && t.start>year) return;
       const chart = career.leagueDepthCharts[teamId];
       ["qb2","qb3"].forEach(slot=>{
         const p = chart[slot];
