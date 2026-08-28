@@ -5663,6 +5663,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     (career.leagueRivals||[]).forEach(r=>{
       const s = r.seasons.find(x=>x.year===year);
       if(!s) return;
+      // Belt-and-suspenders: generateLeagueRivals()/spawnNewFranchiseRivals prevent a rival from
+      // being CREATED for a team before it exists, and self-heal an already-corrupted save on its
+      // next season advance -- but neither of those retroactively rewrites a season entry a
+      // corrupted save already recorded before the fix existed. This is the actual display
+      // boundary: a team whose t.start is still after this exact season's year never appears on
+      // the leaderboard, full stop, regardless of what's sitting in saved data or whether a
+      // self-heal has run yet.
+      const t = TEAMS.find(x=>x.id===r.teamId);
+      if(t && t.start>year) return;
       rows.push({ name:r.name, teamId:r.teamId, age:s.age, mine:false, att:s.att, pct:s.pct,
         yards:s.yards, td:s.td, int:s.int, rating:s.rating, awards:s.awards, isRival:r.isRival, id:r.id });
     });
