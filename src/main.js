@@ -974,10 +974,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // finishCareer() (so a career-ending-only condition, like retiring loyal to one team, can fire).
   function checkAchievements(){
     ensureAchievementState();
+    const newlyUnlocked = [];
     ACHIEVEMENTS.forEach(a=>{
       if(career.achievements.unlocked[a.key]) return;
-      if(a.check()) career.achievements.unlocked[a.key] = true;
+      if(a.check()){ career.achievements.unlocked[a.key] = true; newlyUnlocked.push(a); }
     });
+    if(newlyUnlocked.length) queueAchievementToasts(newlyUnlocked);
   }
 
   function achievementStatusFor(key){
@@ -989,6 +991,34 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
   function achievementFrameHTML(def, unlocked){
     return `<div class="pb-frame ${unlocked?"unlocked":"locked"}">${badgeIconSVG(def.icon)}</div>`;
+  }
+
+  // QOL: a Steam-style "Achievement Unlocked" toast, bottom-right, non-interactive, auto-dismissing.
+  // Multiple unlocks in the same tick queue up and show one at a time (never stacked) so a season
+  // that happens to earn 2-3 achievements at once doesn't dump a wall of popups simultaneously.
+  let achievementToastQueue = [];
+  let achievementToastShowing = false;
+  function queueAchievementToasts(defs){
+    achievementToastQueue.push(...defs);
+    if(!achievementToastShowing) showNextAchievementToast();
+  }
+  function showNextAchievementToast(){
+    const def = achievementToastQueue.shift();
+    const container = document.getElementById("achievementToastContainer");
+    if(!def || !container){ achievementToastShowing = false; return; }
+    achievementToastShowing = true;
+    const toast = document.createElement("div");
+    toast.className = "achievement-toast";
+    toast.innerHTML = `<div class="at-frame">${badgeIconSVG(def.icon)}</div>
+      <div class="at-text"><div class="at-label">Achievement Unlocked</div><div class="at-name">${svgEscape(def.name)}</div></div>`;
+    container.appendChild(toast);
+    requestAnimationFrame(()=> requestAnimationFrame(()=> toast.classList.add("show")));
+    const dwell = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 2200 : 3500;
+    setTimeout(()=>{
+      toast.classList.remove("show");
+      toast.classList.add("hide");
+      setTimeout(()=>{ toast.remove(); showNextAchievementToast(); }, 450);
+    }, dwell);
   }
 
   function safeStorage(){ try{ const k="__glab__"; localStorage.setItem(k,"1"); localStorage.removeItem(k); return window.localStorage; }catch(e){ return null; } }
@@ -6753,6 +6783,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   }
 
   function nextSeason(){
+    // QOL: whatever renders next (a fresh season card, or an interstitial life event) should
+    // always start the player at the top of the page, not wherever they'd scrolled to reading the
+    // previous season's tabs.
+    window.scrollTo(0, 0);
     career.age++; career.year++; career.seasonNumber++;
     if(career._tradeRequestCooldown>0) career._tradeRequestCooldown--;
     advanceCareer();
