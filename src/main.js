@@ -1088,10 +1088,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const sorted = list.slice().sort(TROPHY_ROOM_SORTERS[sortKey]||TROPHY_ROOM_SORTERS.recent);
     // Records are computed across the WHOLE room, independent of the current sort, so which cell
     // is gold never changes just because you're looking at a different order.
-    const maxOf = key => list.reduce((m,e)=>Math.max(m,e[key]), 0);
+    const maxOf = key => list.reduce((m,e)=>Math.max(m,safeNum(e[key],0)), 0);
     const maxRings = maxOf("rings"), maxYards = maxOf("yards"), maxRating = maxOf("rating"),
       maxEarnings = maxOf("earnings"), maxSeasons = maxOf("seasons"), maxTd = maxOf("td");
-    const cell = (value, isMax, fmt) => `<td class="tabular${isMax && value>0 ? " tr-record" : ""}">${fmt?fmt(value):value}</td>`;
+    // safeNum guards every cell here, not just the ones that are visibly wrong -- a career saved
+    // to the Trophy Room while its stats were NaN (e.g. the post-scandal team-reassignment bug,
+    // see PROGRESS.md Round 11) round-trips through localStorage as `null` (JSON has no NaN), and
+    // `null.toLocaleString()`/`null.toFixed()` throw. That throw happened INSIDE this function,
+    // which renderTrophyRoomScreen() calls BEFORE showScreen("trophyroom") -- so the screen never
+    // showed at all, which is exactly what "clicked Trophy Room, nothing happens" looks like from
+    // the outside. A single already-corrupted entry from before this fix was in place was enough
+    // to permanently block the whole room from ever opening again.
+    const cell = (value, isMax, fmt) => { const v = safeNum(value,0); return `<td class="tabular${isMax && v>0 ? " tr-record" : ""}">${fmt?fmt(v):v}</td>`; };
     const rows = sorted.map(e=>`<tr>
         <td>${svgEscape(e.name)} <span style="color:var(--ink-muted);">— ${svgEscape(e.decade)}</span></td>
         <td>${svgEscape(e.verdict)}</td>
@@ -3326,39 +3334,86 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       retired: false, contract: rollRivalContract(decade, talent), entrenchedYears: rollEntrenchedYears(talent),
     };
   }
+  // Builds one fresh rival (+ that team's depth chart) for a team that currently has neither --
+  // shared by draft night (generateLeagueRivals), a new franchise's first season
+  // (spawnNewFranchiseRivals), and whenever the player's own team change leaves a team without a
+  // starter (reassignRivalsForTeamChange). Age skews veteran-ish (23-34) rather than rookie-only,
+  // matching how a real roster -- whether a fresh expansion team or a team that just lost its guy
+  // in a trade -- is stocked from a mix of available veterans, not exclusively rookies.
+  function spawnFreshRival(teamId, decade, year, idSuffix){
+    const teamGrade = career.leagueStrength[teamId] ?? 60;
+    const age = randInt(23, 34);
+    const talent = clamp(teamGrade + randInt(-15, 15), 20, 99);
+    if(!career.leagueDepthCharts) career.leagueDepthCharts = {};
+    career.leagueDepthCharts[teamId] = generateDepthChart(teamId, decade, year, teamGrade);
+    return {
+      id: "riv_"+teamId+"_"+idSuffix,
+      name: randomFullName(),
+      teamId,
+      talent,
+      age,
+      // Guarantee at least a few seasons of runway from age -- age alone can already be as high
+      // as 34 here, and an unguarded randInt(30,40) could land BELOW that, retiring a rival on the
+      // very first simulateRivalSeasons() tick before he's ever played a game (zero career stats,
+      // yet still shown as that team's real starter in that season's schedule/playoff matchups,
+      // since rivalForTeam() only checks `retired`, not games played -- a "phantom starter" bug).
+      retireAge: clamp(age + randInt(3, 12), 30, 45),
+      draftYear: year - (age-22),
+      seasons: [],
+      totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0 },
+      retired: false,
+      contract: rollRivalContract(decade, talent),
+      entrenchedYears: rollEntrenchedYears(talent),
+    };
+  }
   function generateLeagueRivals(){
     career.leagueDepthCharts = {};
-    const rivals = TEAMS.filter(t=>t.id!==career.teamId).map((t,i)=>{
-      const teamGrade = career.leagueStrength[t.id] ?? 60;
-      const age = randInt(23, 34);
-      const talent = clamp(teamGrade + randInt(-15, 15), 20, 99);
-      career.leagueDepthCharts[t.id] = generateDepthChart(t.id, career.decade, career.year, teamGrade);
-      return {
-        id: "riv_"+t.id+"_"+i,
-        name: randomFullName(),
-        teamId: t.id,
-        talent,
-        age,
-        // Guarantee at least a few seasons of runway from age -- age alone can already be as high
-        // as 34 here, and an unguarded randInt(30,40) could land BELOW that, retiring a rival on the
-        // very first simulateRivalSeasons() tick before he's ever played a game (zero career stats,
-        // yet still shown as that team's real starter in that season's schedule/playoff matchups,
-        // since rivalForTeam() only checks `retired`, not games played -- a "phantom starter" bug).
-        retireAge: clamp(age + randInt(3, 12), 30, 45),
-        draftYear: career.year - (age-22),
-        seasons: [],
-        totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0 },
-        retired: false,
-        contract: rollRivalContract(career.decade, talent),
-        entrenchedYears: rollEntrenchedYears(talent),
-      };
-    });
+    // Only teams that actually exist as of draft night get a rival here -- a franchise born LATER
+    // (a real expansion year, e.g. 1976 Seahawks/Buccaneers, 1995 Panthers/Jaguars, 1996 Ravens,
+    // 2002 Texans) gets its starter spawned lazily by spawnNewFranchiseRivals() the season it
+    // actually joins instead. Pre-generating one for every team in TEAMS regardless of era used to
+    // let a not-yet-founded team's "QB" rack up seasons, stats, and awards for years before the
+    // team existed -- a real, user-reported bug (a 1965-decade league table listing the Seattle
+    // Seahawks and Tampa Bay Buccaneers, both 11 years from existing).
+    const rivals = TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).map((t,i)=>
+      spawnFreshRival(t.id, career.decade, career.year, i));
     // Three marked "rivals" (distinct from the other ~28 background league QBs) get their draft
     // year pinned to the SAME year the player was drafted -- a true draft classmate, the natural
     // seed for a future head-to-head rivalry mechanic (shared history, same age curve, same era).
     const classmates = rivals.slice().sort(()=>Math.random()-0.5).slice(0, Math.min(3, rivals.length));
     classmates.forEach(r=>{ r.isRival = true; r.age = 22; r.draftYear = career.year; r.retireAge = randInt(32, 42); });
     return rivals;
+  }
+  // A new franchise joining the league THIS season needs a starter too, same as any other team --
+  // generateLeagueRivals() only seeds teams that already existed at draft night (see above), so a
+  // team born mid-career needs to be picked up here the exact season it arrives. Skips the
+  // player's own team: if they were just expansion-drafted onto this exact franchise this exact
+  // season, they ARE its starter, not an AI rival sharing the slot.
+  function spawnNewFranchiseRivals(year){
+    if(!career.leagueRivals) return;
+    const decade = decadeForYear(year);
+    TEAMS.forEach(t=>{
+      if(t.start!==year || t.id===career.teamId) return;
+      if(career.leagueRivals.some(r=>r.teamId===t.id)) return;
+      career.leagueRivals.push(spawnFreshRival(t.id, decade, year, "new"+year));
+    });
+  }
+  // Called at every site where the PLAYER changes teams (trade, waiver pickup, free-agent sign,
+  // expansion draft) -- career.leagueRivals means "the other teams' starters," one per team, with
+  // the player filling whichever slot is their own. Without this, the AI rival who already
+  // occupied the team the player is JOINING kept generating a full starter's stats/awards
+  // alongside the player for the very same team (the reported "another Miami Dolphins QB got a
+  // Pro Bowl over me" bug), while the team the player just LEFT was quietly left with no starter
+  // at all. Skipped while career.isBackup is true -- that's the one deliberate exception where an
+  // incumbent is SUPPOSED to share the player's own team slot (see Round 7 notes).
+  function reassignRivalsForTeamChange(oldTeamId, newTeamId){
+    if(!career.leagueRivals || career.isBackup) return;
+    const decade = decadeForYear(career.year);
+    const incoming = career.leagueRivals.find(r=>r.teamId===newTeamId && !r.retired);
+    if(incoming){ incoming.retired = true; incoming.exitReason = "displaced"; }
+    if(oldTeamId && oldTeamId!==newTeamId && !career.leagueRivals.some(r=>r.teamId===oldTeamId && !r.retired)){
+      career.leagueRivals.push(spawnFreshRival(oldTeamId, decade, career.year, "repl"+career.year));
+    }
   }
   // Shared per-player season-stat math -- originally inline in simulateRivalSeasons, extracted so
   // depth-chart bench players (simulateDepthChartSeasons) can run the IDENTICAL formula instead of
@@ -3754,6 +3809,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // has actually played the run out -- see finalizePlayoffOutcome, called once the reveal ends.
 
     career.seasonLog.push(season);
+    spawnNewFranchiseRivals(career.year);
     simulateRivalSeasons(decade, league, career.year);
     simulateDepthChartSeasons(decade, league, career.year);
     TEAMS.filter(t=>t.id!==career.teamId).forEach(t=> evaluateSuccession(t.id, decade, career.year));
@@ -4948,6 +5004,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const signBtn = document.getElementById("waSign");
     if(signBtn) signBtn.addEventListener("click", ()=>{
       career.transactions.push(`${career.year}: Released by the ${oldTeam}, signed by the ${teamNameAt(offerTeam.id,career.year)} on a minimum deal.`);
+      reassignRivalsForTeamChange(career.teamId, offerTeam.id);
       career.teamId = offerTeam.id; career.teamStrength = safeNum(career.leagueStrength[offerTeam.id], 60); career.leagueStrength[offerTeam.id] = career.teamStrength; career.seasonsWithTeam = 0;
       career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
       career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
@@ -4967,8 +5024,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
      current team can't protect everyone — the more he actually means to the roster, the safer
      he is, but exposure alone doesn't guarantee the new team actually spends a pick on him. ----- */
   function expansionDraftCheck(){
-    const nextYear = career.year+1;
-    const newTeams = TEAMS.filter(t=>t.start===nextYear && t.id!==career.teamId);
+    // Fires as part of the SAME offseason transaction chain (waiver -> expansion -> trade -> free
+    // agency) that runs every call to nextSeason() -- and nextSeason() already increments
+    // career.year BEFORE this chain runs (see advanceCareer()). So a new franchise joining the
+    // league for the season about to be played has t.start===career.year right now, not
+    // career.year+1 -- that off-by-one used to attach the player to a team divisionsForYear(year)
+    // (and therefore standings/conference-rank lookups) wouldn't recognize as existing yet for
+    // this exact season, producing the "team not in standings, #0 of N in the conference" bug.
+    const newTeams = TEAMS.filter(t=>t.start===career.year && t.id!==career.teamId);
     if(!newTeams.length){ tradeCheck(); return; }
     const decade = decadeForYear(career.year);
     const effOverall = computeEffOverall(career.age, decade);
@@ -4983,7 +5046,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function renderExpansionDraftEvent(newTeam){
     const content = document.getElementById("careerContent");
     const oldTeam = teamNameAt(career.teamId, career.year);
-    const newTeamName = teamNameAt(newTeam.id, career.year+1);
+    const newTeamName = teamNameAt(newTeam.id, career.year);
     content.innerHTML = eraWrap(decadeForYear(career.year), `
         <div class="ev-eyebrow">Expansion Draft · ${career.year}</div>
         <h3>Left unprotected — and the ${newTeamName} want him.</h3>
@@ -4992,6 +5055,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       `);
     document.getElementById("expAck").addEventListener("click", ()=>{
       career.transactions.push(`${career.year}: Left unprotected, selected by the expansion ${newTeamName}.`);
+      reassignRivalsForTeamChange(career.teamId, newTeam.id);
       career.teamId = newTeam.id;
       career.teamStrength = safeNum(career.leagueStrength[newTeam.id], 45);
       career.leagueStrength[newTeam.id] = career.teamStrength;
@@ -5020,6 +5084,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const team = pickTeamByStrength(career.year, career.teamId, 55, 95);
     const newTeamName = teamNameAt(team.id, career.year);
     career.transactions.push(`${career.year}: Traded from the ${oldTeam} to the ${newTeamName}.`);
+    reassignRivalsForTeamChange(career.teamId, team.id);
     career.teamId = team.id; career.teamStrength = safeNum(career.leagueStrength[team.id], 60); career.leagueStrength[team.id] = career.teamStrength; career.seasonsWithTeam = 0;
     career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
     career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
@@ -5076,6 +5141,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const team = pickTeamByStrength(career.year, career.teamId, 35, 92);
       const newTeamName = teamNameAt(team.id, career.year);
       career.transactions.push(`${career.year}: Requested a trade — dealt from the ${oldTeam} to the ${newTeamName}.`);
+      reassignRivalsForTeamChange(career.teamId, team.id);
       career.teamId = team.id; career.teamStrength = safeNum(career.leagueStrength[team.id], 60); career.leagueStrength[team.id] = career.teamStrength; career.seasonsWithTeam = 0;
       career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
       career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
@@ -5283,6 +5349,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       // narrative line (gated on seasonsWithTeam===1) doesn't fire for a guy who never left.
     } else {
       career.transactions.push(`${career.year}: Signed with the ${teamName} (${fmtMoney(o.apy)}/yr).`);
+      reassignRivalsForTeamChange(career.teamId, o.teamId);
       career.teamId = o.teamId;
       career.teamStrength = safeNum(career.leagueStrength[o.teamId], 60);
       career.leagueStrength[o.teamId] = career.teamStrength;
