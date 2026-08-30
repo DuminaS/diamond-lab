@@ -7860,4 +7860,10 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
     const entry = loadTrophyRoom().find(x=>x.id===btn.dataset.cardId);
     if(entry) openBaseballCard(entry);
   });
+
+  // __BUILD_TIME__ is a Vite `define` (see vite.config.js), baked in at BUILD time -- a stale PWA/
+  // browser cache serving an old bundle shows an old timestamp here, making that mismatch visible
+  // at a glance instead of silently serving pre-fix logic while looking identical to the live site.
+  const buildStampEl = document.getElementById("buildStamp");
+  if(buildStampEl) buildStampEl.textContent = "build " + __BUILD_TIME__.replace("T"," ").replace(/\.\d+Z$/, "Z");
 })();

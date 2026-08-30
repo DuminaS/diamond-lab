@@ -6,8 +6,16 @@ import { VitePWA } from "vite-plugin-pwa";
 // only when building for Pages, everything else (npm run dev/build/android) is unaffected.
 const isPagesDeploy = process.env.DEPLOY_TARGET === "pages";
 
+// Stamped into the corner of the menu screen (see index.html/style.css) so a stale PWA/browser
+// cache is immediately visible as a mismatch instead of silently serving old logic while looking
+// identical -- baked in at BUILD time, not runtime, so it genuinely reflects what bundle shipped.
+const buildTime = new Date().toISOString();
+
 export default defineConfig({
   base: isPagesDeploy ? "/gridiron-export/" : "/",
+  define: {
+    __BUILD_TIME__: JSON.stringify(buildTime),
+  },
   plugins: [
     VitePWA({
       registerType: "autoUpdate",
