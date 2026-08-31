@@ -2521,7 +2521,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
      (starter + backup starts combined) afterward. Division winners + best-record wildcards
      seed the playoffs, so a team's seed and its "made/missed" status can never contradict
      each other, and both the bracket shape and the division map are era-accurate by year. ----- */
-  function simpleWinProb(aStrength, bStrength){ return clamp(0.5 + (aStrength-bStrength)*0.012, 0.06, 0.94); }
+  // Coefficient/clamp tuned via winprob_tune2.mjs sweep: the prior 0.012/[0.06,0.94] pair averaged
+  // 7-8 of 31 teams at 12+ wins in a single season (matching a reported screenshot of an absurdly
+  // bimodal standings page) -- 0.006/[0.10,0.90] cuts that to ~4 while still leaving real spread.
+  function simpleWinProb(aStrength, bStrength){ return clamp(0.5 + (aStrength-bStrength)*0.006, 0.10, 0.90); }
   function simpleGameWinner(idA, sA, idB, sB){ return Math.random() < simpleWinProb(sA, sB) ? idA : idB; }
 
   function buildScheduleResults(season){
@@ -2653,7 +2656,17 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // pull -- the one thing that can outrun it is the QB actually playing at an elite level himself
   // (the existing effOverall-vs-neutral nudge), which is the "team stays great because ITS QB is
   // legitimately elite" case asked for, instead of a dynasty just being free to sit at 95 forever.
-  const CONTENDER_DECLINE_THRESHOLD = 76;
+  // Per-decade volatility multiplier for team-strength churn -- older, roster-continuity-heavy
+  // eras (reserve-clause/pre-free-agency) turn over more slowly than the modern free-agency era.
+  // Mirrors the existing ERA_ATTR_MULT.injury precedent (1.45x in the 1960s down to 0.85x in the
+  // 2020s) for the same kind of era-scaled multiplier, applied to: the flat per-season noise term,
+  // the decline/rebuild pull's RATE (not its threshold, which stays absolute), rollLeagueNews'
+  // headline swings, and a rival's succession-nudge jump when a starter retires.
+  const ERA_TEAM_VOLATILITY = {
+    "1960s": 0.55, "1970s": 0.65, "1980s": 0.75, "1990s": 0.85,
+    "2000s": 1.0, "2010s": 1.15, "2020s": 1.3,
+  };
+  const CONTENDER_DECLINE_THRESHOLD = 72;
   // Diagnostically tuned (see PROGRESS.md-style reasoning in commit notes): 0.05 was far too weak
   // against even a modest positive skill nudge -- ANY QB better than dead-average (even a merely
   // "good," non-elite one) rocketed straight to the 97 hard cap within 2-3 seasons and froze there
@@ -2663,7 +2676,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // a truly elite QB's team plateaus around 90-93 (great, but still has to hold that level, not
   // just arrive at 97 and stop), and a bad team with an elite QB takes a believable ~decade to
   // build into a real contender rather than an instant jump.
-  const CONTENDER_DECLINE_RATE = 0.22;
+  const CONTENDER_DECLINE_RATE = 0.32;
   function contenderDeclinePull(strength){
     return strength>CONTENDER_DECLINE_THRESHOLD ? (strength-CONTENDER_DECLINE_THRESHOLD)*CONTENDER_DECLINE_RATE : 0;
   }
@@ -2676,8 +2689,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // doubles the middle-band share, while still letting a team sit at an extreme for a while (a real
   // tank or a real early dynasty can still exist -- it just can't get stuck there permanently, the
   // same relationship the existing decline pull already has with a dynasty at the top end).
-  const REBUILD_THRESHOLD = 45;
-  const REBUILD_RATE = 0.22;
+  const REBUILD_THRESHOLD = 48;
+  const REBUILD_RATE = 0.32;
   function rebuildPull(strength){
     return strength<REBUILD_THRESHOLD ? (REBUILD_THRESHOLD-strength)*REBUILD_RATE : 0;
   }
@@ -3469,7 +3482,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // depth-chart bench players (simulateDepthChartSeasons) can run the IDENTICAL formula instead of
   // a parallel copy. Mutates entity.seasons/totals/age and returns the season object (callers that
   // need "how did he actually play this year" for a succession decision use the return value).
-  function simulatePlayerSeasonStats(entity, decade, league, year, forcedGames){
+  function simulatePlayerSeasonStats(entity, decade, league, year, forcedGames, teamRecord){
     const talentEdge = entity.talent - 65;
     const ageMult = primeMultiplier(entity.age);
     const delta = talentEdge*ageMult;
@@ -3491,11 +3504,25 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const td = Math.max(0, Math.round(attempts*tdRate));
     const interceptions = Math.max(0, Math.round(attempts*intRate));
     const rating = passerRating(completions, attempts, yards, td, interceptions);
-    const teamGrade = career.leagueStrength[entity.teamId] ?? 60;
-    const winProb = clamp(0.5 + talentEdge*ageMult*0.009 + (teamGrade-65)*0.009, 0.08, 0.92);
-    let wins = 0;
-    for(let i=0;i<gamesPlayed;i++){ if(Math.random()<winProb) wins++; }
-    const losses = gamesPlayed-wins;
+    // wins/losses now derive from the SAME shared schedule simulation (buildScheduleResults) that
+    // produces the Standings tab, instead of an independent per-game coin flip -- previously the
+    // same team-season had two disconnected win/loss numbers (one for standings, one for the
+    // rival's own stat line). teamRecord is that team's already-simulated {wins,losses} for this
+    // season; a partial-season entity (e.g. a bench QB with only relief-duty games) gets a
+    // proportional share of it rather than its own independently-rolled record. The old formula
+    // survives only as a fallback for the (should-never-happen) case a caller has no standings yet.
+    let wins, losses;
+    if(teamRecord && (teamRecord.wins + teamRecord.losses) > 0){
+      const teamWinPct = teamRecord.wins / (teamRecord.wins + teamRecord.losses);
+      wins = Math.round(teamWinPct * gamesPlayed);
+      losses = gamesPlayed - wins;
+    } else {
+      const teamGrade = career.leagueStrength[entity.teamId] ?? 60;
+      const winProb = clamp(0.5 + talentEdge*ageMult*0.009 + (teamGrade-65)*0.009, 0.08, 0.92);
+      wins = 0;
+      for(let i=0;i<gamesPlayed;i++){ if(Math.random()<winProb) wins++; }
+      losses = gamesPlayed-wins;
+    }
     const winPct = gamesPlayed>0 ? wins/gamesPlayed : 0;
     const { awards, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = evaluateSeasonAwards({
       rating, td, winPct, attempts, gamesPlayed, leagueGames: league.games, decade,
@@ -3514,7 +3541,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     entity.age++;
     return season;
   }
-  function simulateRivalSeasons(decade, league, year){
+  function simulateRivalSeasons(decade, league, year, leagueStandings){
     if(!career.leagueRivals) return;
     career.leagueRivals.forEach(r=>{
       if(r.retired) return;
@@ -3526,8 +3553,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const newTalent = clamp(teamGrade + randInt(-15,15), 20, 99);
         // A concrete, legible reason a team's grade moves: losing a known, age-adjusted starter
         // for an unproven rookie is a real transition, not neutral -- how big a deal it is depends
-        // on how much the succession actually downgrades (or upgrades) the position.
-        const successionNudge = Math.round((newTalent - rivalEffTalent(r)) * 0.3);
+        // on how much the succession actually downgrades (or upgrades) the position. Scaled by era
+        // volatility too -- an unscaled succession jump was a real, previously era-blind source of
+        // sudden large team-strength swings.
+        const successionNudge = Math.round((newTalent - rivalEffTalent(r)) * 0.3 * (ERA_TEAM_VOLATILITY[decade] ?? 1.0));
         career.leagueStrength[r.teamId] = clamp(teamGrade + successionNudge, 20, 96);
         career.leagueRivals.push({
           id: "riv_"+r.teamId+"_"+year, name: randomFullName(), teamId: r.teamId,
@@ -3537,7 +3566,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         });
         return;
       }
-      const seasonResult = simulatePlayerSeasonStats(r, decade, league, year);
+      const teamRecord = leagueStandings && leagueStandings.results ? leagueStandings.results[r.teamId] : null;
+      const seasonResult = simulatePlayerSeasonStats(r, decade, league, year, undefined, teamRecord);
       developEntityTalent(r, decade);
       // Part C of the bench-realism fix: whatever games the starter's OWN missed-games roll took
       // away from him this season are real, actually-played relief snaps for QB2 -- never QB3,
@@ -3563,7 +3593,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // didn't play, so he gets no season entry at all (not a zero-stat one), matching "no stats
   // because he didn't play." He still ages and develops either way -- prospects don't stop growing
   // just because they didn't see the field this year.
-  function simulateDepthChartSeasons(decade, league, year){
+  function simulateDepthChartSeasons(decade, league, year, leagueStandings){
     if(!career.leagueDepthCharts) return;
     Object.keys(career.leagueDepthCharts).forEach(teamId=>{
       // Same self-heal as spawnNewFranchiseRivals: an existing save from before that filtering
@@ -3583,7 +3613,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           return;
         }
         if(p._reliefGames>0){
-          simulatePlayerSeasonStats(p, decade, league, year, p._reliefGames);
+          const teamRecord = leagueStandings && leagueStandings.results ? leagueStandings.results[teamId] : null;
+          simulatePlayerSeasonStats(p, decade, league, year, p._reliefGames, teamRecord);
         } else {
           p.age++;
         }
@@ -4110,8 +4141,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
     career.seasonLog.push(season);
     spawnNewFranchiseRivals(career.year);
-    simulateRivalSeasons(decade, league, career.year);
-    simulateDepthChartSeasons(decade, league, career.year);
+    simulateRivalSeasons(decade, league, career.year, season.leagueStandings);
+    simulateDepthChartSeasons(decade, league, career.year, season.leagueStandings);
     TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateSuccession(t.id, decade, career.year));
     // Phase 2 of the QB-entity redesign: real bench mobility (trade/waive) and free-agent-pool
     // resolution (retirement hazard + teams signing off the pool), both once per team per season,
@@ -4133,26 +4164,27 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // be explainable, not just dice). rollLeagueNews layers headline-driven swings for a handful of
     // teams a season on top of this, same idea ORG_EVENTS already gives the player's own team.
     const decadeAvgRating = leagueAvgRatingForDecade(decade);
+    const volMult = ERA_TEAM_VOLATILITY[decade] ?? 1.0;
     career.leagueRivals.forEach(r=>{
       const justSeason = r.seasons.length ? r.seasons[r.seasons.length-1] : null;
       if(!justSeason || justSeason.year!==career.year) return; // retired/succeeded this same year -- handled at the point of succession instead
       const s = career.leagueStrength[r.teamId] ?? 60;
-      let nudge = randInt(-2,2);
+      let nudge = randInt(-2,2)*volMult;
       if(justSeason.awards && justSeason.awards.length) nudge += justSeason.awards.length*1.5;
       else if(justSeason.rating < decadeAvgRating-8) nudge -= 2;
-      nudge -= contenderDeclinePull(s);
-      nudge += rebuildPull(s);
+      nudge -= contenderDeclinePull(s)*volMult;
+      nudge += rebuildPull(s)*volMult;
       career.leagueStrength[r.teamId] = clamp(s + Math.round(nudge), 20, 96);
     });
-    rollLeagueNews(career.year);
+    rollLeagueNews(career.year, decade);
     // The player's own team faces identical decline/rebuild pressure -- the counteracting force is
     // the same skill-linked nudge this always had (how far above/below neutral effOverall actually
     // played this season), unchanged from before this pass.
-    const teamNoise = randInt(-2,2);
+    const teamNoise = randInt(-2,2)*volMult;
     const teamSkillNudge = Math.round((effOverall-neutralOverall)*primeMult*0.14);
-    const teamDeclinePull = Math.round(contenderDeclinePull(safeNum(career.teamStrength,60)));
-    const teamRebuildPull = Math.round(rebuildPull(safeNum(career.teamStrength,60)));
-    career.teamStrength = clamp(safeNum(career.teamStrength,60) + teamNoise + teamSkillNudge - teamDeclinePull + teamRebuildPull, 20, 97);
+    const teamDeclinePull = Math.round(contenderDeclinePull(safeNum(career.teamStrength,60))*volMult);
+    const teamRebuildPull = Math.round(rebuildPull(safeNum(career.teamStrength,60))*volMult);
+    career.teamStrength = clamp(safeNum(career.teamStrength,60) + Math.round(teamNoise) + teamSkillNudge - teamDeclinePull + teamRebuildPull, 20, 97);
     career.leagueStrength[career.teamId] = career.teamStrength;
     // Supporting cast drifts on its own light noise -- most of its real movement comes from the
     // "oline"/"starleaves" ORG_EVENTS above, this just keeps it from being permanently frozen
@@ -4758,7 +4790,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     { id:"injurywave", title:"Rash of Injuries in Camp", weight:5, strengthDelta:[-3,-1],
       flavor:(team)=>`An unusually bad run of camp injuries has already thinned the ${team}' depth chart before Week 1.` },
   ];
-  function rollLeagueNews(year){
+  function rollLeagueNews(year, decade){
     const totalWeight = LEAGUE_NEWS_EVENTS.reduce((s,e)=>s+e.weight, 0);
     function pickWeighted(){
       let r = Math.random()*totalWeight;
@@ -4771,11 +4803,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // unguarded `TEAMS.filter(t=>t.id!==career.teamId)` site found (after generateLeagueRivals and
     // computeSeasonAwardRows), the exact cause of "Around the League" showing a headline for the
     // Houston Texans in a 1960s-decade career.
+    const volMult = ERA_TEAM_VOLATILITY[decade] ?? 1.0;
     const others = TEAMS.filter(t=>t.id!==career.teamId && t.start<=year);
     others.forEach(t=>{
       if(Math.random()>=0.1) return;
       const ev = pickWeighted();
-      const delta = randInt(ev.strengthDelta[0], ev.strengthDelta[1]);
+      // Scaled by era volatility -- these headline swings were previously era-blind, a real
+      // (unclamped) jump source that made older/roster-continuity decades just as churny as modern
+      // free agency, contrary to the intent of ERA_TEAM_VOLATILITY.
+      const delta = Math.round(randInt(ev.strengthDelta[0], ev.strengthDelta[1]) * volMult);
       career.leagueStrength[t.id] = clamp((career.leagueStrength[t.id]??60)+delta, 20, 96);
       career.leagueNewsLog.push({ year, teamId: t.id, title: ev.title, delta, flavor: ev.flavor(teamNameAt(t.id, year)) });
     });
@@ -5956,11 +5992,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function buildStandingsTabHTML(season){
     const ls = season.leagueStandings;
     if(!ls) return `<p style="color:var(--ink-muted);">Standings aren't available for this season.</p>`;
+    // Same values driving buildScheduleResults/simpleWinProb -- surfaced here so a lopsided-looking
+    // record has a visible cause instead of reading as arbitrary.
+    const teamOverall = id => Math.round(id===career.teamId ? career.teamStrength : (career.leagueStrength[id] ?? 60));
     function seedList(conf){
       return `<ol class="seed-list">` + ls.seeded[conf].map(t=>{
         const name = teamNameAt(t.id, season.year);
         const mine = t.id===career.teamId;
-        return `<li class="${mine?"me":""}">${name}<span class="tabular">${t.wins}-${t.losses}</span></li>`;
+        return `<li class="${mine?"me":""}">${name} <span class="team-ovr">${teamOverall(t.id)} OVR</span><span class="tabular">${t.wins}-${t.losses}</span></li>`;
       }).join("") + `</ol>`;
     }
     function divTables(conf){
@@ -5968,7 +6007,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const rows = d.teams.map(id=>ls.results[id]).sort((a,b)=>b.winPct-a.winPct).map(r=>{
           const name = teamNameAt(r.id, season.year);
           const mine = r.id===career.teamId;
-          return `<tr class="${mine?"me":""}"><td class="team-cell">${name}${mine?" (you)":""}</td><td>${r.wins}-${r.losses}</td></tr>`;
+          return `<tr class="${mine?"me":""}"><td class="team-cell">${name}${mine?" (you)":""} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td>${r.wins}-${r.losses}</td></tr>`;
         }).join("");
         return `<div class="standings-div"><div class="standings-div-name">${confLabel(conf, season.year)} ${d.name}</div><table class="standings-table"><tbody>${rows}</tbody></table></div>`;
       }).join("");
@@ -5987,10 +6026,36 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // per-QB season rows (the player plus every rival with a season logged this year), sorted by
   // passer rating -- one source of truth for "who did what this season," not two formulas that
   // could quietly drift apart.
+  // League tab click-to-sort: generalizes the existing Trophy Room comparator-map pattern
+  // (TROPHY_ROOM_SORTERS) to clickable column headers instead of external toggle buttons. Two
+  // independent sort states since the active and inactive tables have different columns.
+  let leagueActiveSortKey = "rating", leagueActiveSortDir = -1;
+  let leagueInactiveSortKey = "overall", leagueInactiveSortDir = -1;
+  let leagueTabSeason = null;
+  const LEAGUE_ACTIVE_SORTERS = {
+    name: (a,b)=> a.name.localeCompare(b.name),
+    age: (a,b)=> a.age-b.age,
+    games: (a,b)=> a.games-b.games,
+    pct: (a,b)=> a.pct-b.pct,
+    att: (a,b)=> a.att-b.att,
+    yards: (a,b)=> a.yards-b.yards,
+    td: (a,b)=> a.td-b.td,
+    int: (a,b)=> a.int-b.int,
+    rating: (a,b)=> a.rating-b.rating,
+  };
+  const LEAGUE_INACTIVE_SORTERS = {
+    name: (a,b)=> a.name.localeCompare(b.name),
+    age: (a,b)=> a.age-b.age,
+    overall: (a,b)=> a.overall-b.overall,
+  };
+  function sortIndicator(key, activeKey, dir){
+    if(key!==activeKey) return "";
+    return ` <span class="sort-arrow">${dir===-1?"▼":"▲"}</span>`;
+  }
   function computeSeasonAwardRows(season){
     const year = season.year;
     const rows = [{
-      name: career.name, teamId: career.teamId, age: season.age, mine:true,
+      name: career.name, teamId: career.teamId, age: season.age, mine:true, games: season.games,
       att: season.att, pct: season.pct, yards: season.yards, td: season.td, int: season.int,
       rating: season.rating, awards: season.awards,
     }];
@@ -6006,7 +6071,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       // self-heal has run yet.
       const t = TEAMS.find(x=>x.id===r.teamId);
       if(t && t.start>year) return;
-      rows.push({ name:r.name, teamId:r.teamId, age:s.age, mine:false, att:s.att, pct:s.pct,
+      rows.push({ name:r.name, teamId:r.teamId, age:s.age, mine:false, games:s.games, att:s.att, pct:s.pct,
         yards:s.yards, td:s.td, int:s.int, rating:s.rating, awards:s.awards, isRival:r.isRival, id:r.id });
     });
     // A bench player who actually started games this season (games>0 -- simulatePlayerSeasonStats
@@ -6024,7 +6089,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         if(!p) return;
         const s = p.seasons.find(x=>x.year===year);
         if(!s || !(s.games>0)) return;
-        rows.push({ name:p.name, teamId:p.teamId, age:s.age, mine:false, att:s.att, pct:s.pct,
+        rows.push({ name:p.name, teamId:p.teamId, age:s.age, mine:false, games:s.games, att:s.att, pct:s.pct,
           yards:s.yards, td:s.td, int:s.int, rating:s.rating, awards:s.awards, isBench:true, id:p.id });
       });
     });
@@ -6118,18 +6183,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       </div>`;
   }
 
-  function buildLeagueTabHTML(season){
-    const year = season.year;
+  function buildLeagueActiveRowsHtml(season){
     const rows = computeSeasonAwardRows(season);
-    const myRank = rows.findIndex(r=>r.mine)+1;
-    const proBowlCount = rows.filter(r=>r.awards.includes("Pro Bowl")).length;
-    const allProCount = rows.filter(r=>r.awards.some(a=>a.endsWith("All-Pro"))).length;
-    const mvpCount = rows.filter(r=>r.awards.includes("MVP")).length;
-
-    const rowsHtml = rows.map((r,i)=> `<tr class="${r.mine?"me":""}">
+    const sorter = LEAGUE_ACTIVE_SORTERS[leagueActiveSortKey] || LEAGUE_ACTIVE_SORTERS.rating;
+    rows.sort((a,b)=> sorter(a,b)*leagueActiveSortDir);
+    return rows.map((r,i)=> `<tr class="${r.mine?"me":""}">
         <td class="tabular">${i+1}</td>
-        <td>${r.mine ? svgEscape(r.name)+" (you)" : `<button type="button" class="rival-link" data-rival-id="${r.id}">${svgEscape(r.name)}</button>${r.isRival?" ★":""}`} <span style="color:var(--ink-muted);">— ${svgEscape(teamNameAt(r.teamId, year))}</span></td>
+        <td>${r.mine ? svgEscape(r.name)+" (you)" : `<button type="button" class="rival-link" data-rival-id="${r.id}">${svgEscape(r.name)}</button>${r.isRival?" ★":""}`} <span style="color:var(--ink-muted);">— ${svgEscape(teamNameAt(r.teamId, season.year))}</span></td>
         <td class="tabular">${r.age}</td>
+        <td class="tabular">${r.games}</td>
         <td class="tabular">${(r.pct*100).toFixed(1)}%</td>
         <td class="tabular">${r.att}</td>
         <td class="tabular">${r.yards.toLocaleString()}</td>
@@ -6138,6 +6200,46 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <td class="tabular"><b>${r.rating.toFixed(1)}</b></td>
         <td>${r.awards.map(a=>`<span class="badge ${a==="MVP"?"gold":"good"}" style="margin-right:0.25rem;">${a}</span>`).join("")}</td>
       </tr>`).join("");
+  }
+  function buildLeagueInactiveRowsHtml(year){
+    const rows = computeInactiveQbRows(year);
+    const sorter = LEAGUE_INACTIVE_SORTERS[leagueInactiveSortKey] || LEAGUE_INACTIVE_SORTERS.overall;
+    rows.sort((a,b)=> sorter(a,b)*leagueInactiveSortDir);
+    return rows.map(r=>`<tr>
+        <td><button type="button" class="rival-link" data-rival-id="${r.id}">${svgEscape(r.name)}</button></td>
+        <td class="tabular">${r.age}</td>
+        <td class="tabular">${r.overall}</td>
+        <td>${svgEscape(r.tag)}</td>
+      </tr>`).join("");
+  }
+  // Re-renders just the two League-tab tbodies in place (called after a header-click re-sort), so
+  // the active/inactive sub-tab toggle state and everything else on the season card is undisturbed.
+  function reRenderLeagueTables(){
+    if(!leagueTabSeason) return;
+    const container = document.getElementById("careerContent");
+    if(!container) return;
+    const activeBody = container.querySelector('[data-league-panel="active"] table.league-table tbody');
+    if(activeBody) activeBody.innerHTML = buildLeagueActiveRowsHtml(leagueTabSeason);
+    const inactiveBody = container.querySelector('[data-league-panel="inactive"] table.league-table tbody');
+    if(inactiveBody) inactiveBody.innerHTML = buildLeagueInactiveRowsHtml(leagueTabSeason.year);
+    container.querySelectorAll('[data-league-sort]').forEach(th=>{
+      const key = th.dataset.leagueSort, table = th.dataset.leagueSortTable;
+      const activeKey = table==="active" ? leagueActiveSortKey : leagueInactiveSortKey;
+      const dir = table==="active" ? leagueActiveSortDir : leagueInactiveSortDir;
+      const label = th.dataset.leagueSortLabel || th.textContent.replace(/\s*[▲▼]\s*$/, "").trim();
+      th.innerHTML = label + sortIndicator(key, activeKey, dir);
+    });
+  }
+  function buildLeagueTabHTML(season){
+    const year = season.year;
+    leagueTabSeason = season;
+    const rows = computeSeasonAwardRows(season);
+    const myRank = rows.findIndex(r=>r.mine)+1;
+    const proBowlCount = rows.filter(r=>r.awards.includes("Pro Bowl")).length;
+    const allProCount = rows.filter(r=>r.awards.some(a=>a.endsWith("All-Pro"))).length;
+    const mvpCount = rows.filter(r=>r.awards.includes("MVP")).length;
+
+    const rowsHtml = buildLeagueActiveRowsHtml(season);
 
     const classmates = (career.leagueRivals||[]).filter(r=>r.isRival);
     const myCareerRating = passerRating(career.totals.comp, career.totals.att, career.totals.yards, career.totals.td, career.totals.int);
@@ -6170,12 +6272,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // roster at all -- lives on a separate sub-tab instead of cluttering the main leaderboard, which
     // is now genuinely "QBs who took real snaps this year" (see Part C of the bench-realism fix).
     const inactiveRows = computeInactiveQbRows(year);
-    const inactiveRowsHtml = inactiveRows.map(r=>`<tr>
-        <td><button type="button" class="rival-link" data-rival-id="${r.id}">${svgEscape(r.name)}</button></td>
-        <td class="tabular">${r.age}</td>
-        <td class="tabular">${r.overall}</td>
-        <td>${svgEscape(r.tag)}</td>
-      </tr>`).join("");
+    const inactiveRowsHtml = buildLeagueInactiveRowsHtml(year);
+    // Click-to-sort headers: data-league-sort-label preserves the plain column label so
+    // reRenderLeagueTables can rebuild "label + arrow" without re-parsing prior arrow HTML.
+    function activeTh(key, label, extraClass){
+      return `<th class="${extraClass||""}" data-league-sort="${key}" data-league-sort-table="active" data-league-sort-label="${label}">${label}${sortIndicator(key, leagueActiveSortKey, leagueActiveSortDir)}</th>`;
+    }
+    function inactiveTh(key, label, extraClass){
+      return `<th class="${extraClass||""}" data-league-sort="${key}" data-league-sort-table="inactive" data-league-sort-label="${label}">${label}${sortIndicator(key, leagueInactiveSortKey, leagueInactiveSortDir)}</th>`;
+    }
 
     return `<div class="league-tab">
         <div class="mode-toggle league-subtabs">
@@ -6186,7 +6291,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <div class="calc-refnote">${year} passing leaderboard — every QB who actually played real games for their team this season, judged by the exact same Pro Bowl / All-Pro / MVP rules as you (see the Stat Calculator tab in Admin &amp; Testing for the formulas). You ranked <b>#${myRank}</b> of ${rows.length} in passer rating. League-wide this season: Pro Bowl ×${proBowlCount}, All-Pro ×${allProCount}, MVP ×${mvpCount}.</div>
           <div class="table-wrap">
             <table class="league-table">
-              <thead><tr><th>#</th><th>QB</th><th class="tabular">Age</th><th class="tabular">Comp%</th><th class="tabular">Att</th><th class="tabular">Yds</th><th class="tabular">TD</th><th class="tabular">INT</th><th class="tabular">Rating</th><th>Awards</th></tr></thead>
+              <thead><tr><th>#</th>${activeTh("name","QB")}${activeTh("age","Age","tabular")}${activeTh("games","GP","tabular")}${activeTh("pct","Comp%","tabular")}${activeTh("att","Att","tabular")}${activeTh("yards","Yds","tabular")}${activeTh("td","TD","tabular")}${activeTh("int","INT","tabular")}${activeTh("rating","Rating","tabular")}<th>Awards</th></tr></thead>
               <tbody>${rowsHtml}</tbody>
             </table>
           </div>
@@ -6196,7 +6301,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <div class="calc-refnote">${inactiveRows.length ? "Bench QBs who didn't get real snaps this season, plus every QB currently unsigned — nobody here has stats to show because none of them actually played." : "Nobody's sitting inactive right now — every bench QB in the league got at least a look this season."}</div>
           ${inactiveRows.length ? `<div class="table-wrap">
             <table class="league-table">
-              <thead><tr><th>QB</th><th class="tabular">Age</th><th class="tabular">Overall</th><th>Status</th></tr></thead>
+              <thead><tr>${inactiveTh("name","QB")}${inactiveTh("age","Age","tabular")}${inactiveTh("overall","Overall","tabular")}<th>Status</th></tr></thead>
               <tbody>${inactiveRowsHtml}</tbody>
             </table>
           </div>` : ""}
@@ -8258,6 +8363,20 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
         container.querySelectorAll(".league-subtab-btn").forEach(b=> b.classList.toggle("active", b===subtabBtn));
         container.querySelectorAll(".league-subtab-panel").forEach(p=> p.classList.toggle("active", p.dataset.leaguePanel===key));
       }
+    }
+    // League tab column-header sort -- same delegated-listener idiom as the subtab toggle above.
+    // Clicking the already-active column flips direction; clicking a new column resets to descending.
+    const sortTh = e.target.closest("[data-league-sort]");
+    if(sortTh){
+      const key = sortTh.dataset.leagueSort, table = sortTh.dataset.leagueSortTable;
+      if(table==="active"){
+        leagueActiveSortDir = (leagueActiveSortKey===key) ? -leagueActiveSortDir : -1;
+        leagueActiveSortKey = key;
+      } else {
+        leagueInactiveSortDir = (leagueInactiveSortKey===key) ? -leagueInactiveSortDir : -1;
+        leagueInactiveSortKey = key;
+      }
+      reRenderLeagueTables();
     }
   });
 

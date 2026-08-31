@@ -711,6 +711,8 @@
   .seed-list li{ padding: 0.2rem 0; }
   .seed-list li.me{ font-weight: 700; color: var(--good); }
   .seed-list li span{ float: right; }
+  .seed-list li span.team-ovr{ float: none; }
+  .team-ovr{ font-family: var(--mono); font-size: 0.72rem; color: var(--ink-muted); }
   .standings-div{ margin-bottom: 0.9rem; }
   .standings-div-name{ font-family: var(--mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); margin-bottom: 0.25rem; }
   table.standings-table{ width:100%; border-collapse: collapse; font-size: 0.82rem; }
@@ -727,6 +729,9 @@
   table.league-table tr.me td{ font-weight: 700; color: var(--good); }
   table.league-table td.good{ color: var(--good); }
   table.league-table td.bad{ color: var(--danger); }
+  table.league-table th[data-league-sort]{ cursor: pointer; user-select: none; }
+  table.league-table th[data-league-sort]:hover{ color: var(--ink); }
+  .sort-arrow{ font-size: 0.6rem; }
   .league-classmates{ margin-top: 1.3rem; }
   .league-classmates h4{ margin: 0 0 0.5rem; }
   .league-subtabs{ margin-bottom: 0.9rem; }

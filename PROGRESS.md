@@ -944,6 +944,69 @@ that line to the front of the returned string instead. Verified via Playwright: 
 real seasons (so more than one transaction exists) and confirmed "— present day" renders as the
 FIRST line in the feed, not the last.
 
+### Round 19 — single-season parity, unified QB win/loss, Standings/League UI, era-aware rubberbanding
+
+Follow-up report after Round 18 shipped: screenshots showed ~8 of 32 teams at 12+ wins in a single
+season alongside several 2-5 win teams — a bimodal, absurd-looking spread distinct from Round 18
+Part A's MULTI-season drift fix, since this was happening WITHIN one season's schedule simulation.
+Bundled with several UI/data asks and a request for stronger, era-dependent team-strength volatility.
+
+**Part A — single-season win distribution too extreme.** A sweep (`winprob_tune2.mjs`) against the
+real `simpleWinProb`/`buildScheduleResults` formula confirmed it: at the old `0.5+(a-b)*0.012`
+coefficient with a `[0.06,0.94]` clamp, a 31-team season averages 7-8 teams at 12+ wins, matching the
+screenshots. Retuned to `0.5+(a-b)*0.006` with a tighter `[0.10,0.90]` clamp — drops the 12+-win count
+to ~4, cuts 14+-win teams from ~3.4 to ~1, still leaves real season-to-season spread.
+
+**Part B — rival/bench QB win-loss unified with the real shared schedule sim.** Code reading found
+`buildScheduleResults` already simulates a real, shared, division-aware schedule for every team
+(exactly the "simulate every team's game" the user asked for) and caches it once per season on
+`season.leagueStandings` — but `simulatePlayerSeasonStats` (every rival's/bench player's own stat
+line) was rolling a SECOND, independent per-game Bernoulli win/loss, completely disconnected from it.
+Same team-season, two different win/loss numbers. Fixed: `simulatePlayerSeasonStats` now takes an
+optional `teamRecord` (that team's already-simulated `{wins,losses}` for the season) and, when
+present, allocates a proportional share of it to the entity based on how many games he actually
+played (`Math.round(winPct*gamesPlayed)`) instead of re-flipping independent coins. `season.leagueStandings`
+is already computed (inside `resolvePlayoffs`) before `simulateRivalSeasons`/`simulateDepthChartSeasons`
+run in `generateSeason()`'s existing call order, so no reordering was needed — just threaded through
+as a 4th param on both. Verified via Playwright + a direct localStorage data check: every rival who
+played a full season this year matched the shared schedule record exactly (32/32 in the test run).
+
+**Part C — Standings tab shows each team's overall.** `buildStandingsTabHTML` now renders a small
+`.team-ovr` badge (e.g. "78 OVR") next to every team name in both the playoff-seed list and the
+division tables, reading the exact same `career.teamStrength`/`career.leagueStrength[id]` values that
+drive win probability — a lopsided-looking record now has a visible cause.
+
+**Part D — League tab: Games Played column + click-to-sort headers.** `computeSeasonAwardRows` now
+copies `games` onto every row (player/rival/bench); the active table shows a new GP column. Generalized
+the existing Trophy Room `TROPHY_ROOM_SORTERS` comparator-map idiom to clickable `<th>` headers
+instead of external toggle buttons — `LEAGUE_ACTIVE_SORTERS`/`LEAGUE_INACTIVE_SORTERS`, wired through
+the same delegated `#careerContent` click listener already handling `[data-rival-id]`/
+`[data-league-subtab]`. Clicking a header toggles ascending/descending (flips on repeat click, resets
+to descending on a new column); `reRenderLeagueTables()` regenerates just the two `<tbody>`s in place
+so the active/inactive sub-tab toggle survives a sort click. Verified via Playwright (GP values sane,
+sort order correct both directions, arrow indicator, sub-tab state preserved).
+
+**Part E — stronger, era-dependent team-strength rubberbanding.** `CONTENDER_DECLINE_THRESHOLD`
+76→72, `RATE` 0.22→0.32; `REBUILD_THRESHOLD` 45→48, `RATE` 0.22→0.32 (tighter thresholds, stronger
+pull). New `ERA_TEAM_VOLATILITY` per-decade multiplier (0.55 in the 1960s ramping to 1.3 in the
+2020s, mirroring the existing `ERA_ATTR_MULT.injury` precedent) applied to every churn source found:
+the flat per-season noise term, the decline/rebuild pull's rate (not its threshold), `rollLeagueNews`'
+headline swings (previously an unclamped, era-blind ±4-to-8 jump on ~10% of teams a season), and a
+rival's succession-nudge jump when a starter retires. Verification caveat, confirmed empirically during
+planning: a simplified noise+pull-only proxy sweep produced ZERO teams at either extreme even at the
+OLD, weaker rates — meaning the real game's visible extremes are very likely driven substantially by
+the two lumpy, non-continuous events this part also scales (news swings, succession jumps), not the
+smooth per-season noise/pull terms alone. A real 12-season Playwright run in each of a 1960s-start and
+a 2010s-start career completed cleanly post-fix (0-1 teams at either extreme out of 32 in both single
+runs) — a single-trial comparison is too noisy to confirm the era-scaling DIRECTION specifically, so
+that remains an open, lower-confidence part of this fix if a future report suggests it isn't working.
+
+Regression: ran `pw_bugfix_regression`, `pw_partd_test`, `pw_presentday_test`, `pw_career_save`,
+`pw_depthchart_test`, `pw_rival_test` — all pass. `pw_phase4_test`/`pw_phase4_test2` failed
+intermittently, but a controlled 3-old-vs-3-new-code comparison confirmed the SAME failure rate on
+the pre-Round-19 baseline (2/3 and prior sessions' own notes) — pre-existing test-rigging fragility,
+not a regression from this round; see the Round 18 entry's testing-methodology note in CLAUDE.md.
+
 ### Round 18 — league parity, elite-QB stat inflation, and honest bench-stat generation
 
 Three more reports, all confirmed or partially confirmed via diagnostic sweeps BEFORE touching any
@@ -1118,3 +1181,8 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `rebuildPull(strength)` / `REBUILD_THRESHOLD=45` / `REBUILD_RATE=0.22` (Round 18) — the symmetric counterpart `contenderDeclinePull` never had. Applied alongside `contenderDeclinePull` at BOTH sites in `generateSeason()`'s team-strength block (the per-rival loop AND the player's own team-strength line) — if a future change ever adds a THIRD site that drifts team strength on a similar cadence (not a one-off org-event nudge, an ongoing per-season baseline), it needs this pull too, or that team can silently re-develop the pinned-at-extremes problem this round fixed (confirmed via `team_parity_sweep.js`: ~48% of the league at the extremes with no rebuild pull vs. ~0.6% with it, re-verified against the actual post-fix formula). Deliberately kept at the SAME threshold/rate magnitude as the existing decline pull for symmetry — re-verify with a fresh sweep before changing either number independently.
 - `forcedGames` param on `simulatePlayerSeasonStats` / `chart.qb2._reliefGames` (Round 18) — this is now the ONLY path by which a bench player gets a real season entry: `simulateDepthChartSeasons` skips the stats call entirely (just ages/develops) unless `_reliefGames>0`, which only `simulateRivalSeasons` ever sets (derived from the team's actual starter's own missed-games roll that season). A bench player's `.seasons` array being SHORTER than his real age/career length is correct and expected now — don't "fix" a bench player with gaps in his season history, that gap IS him not playing that year. QB3 NEVER gets `_reliefGames` (only qb2) — a future change that wants QB3 to ever play (e.g. QB2 also hurt) needs new logic, this doesn't fall out of the existing mechanism automatically.
 - `teamCompetitiveWindow(teamId)` / the age-based carve-outs in `buildFreeAgentOffers` (Round 16, Phase 4, the LAST phase of the QB-entity redesign — see Round 13-16 for the full arc) — `isYoungPlayer`/`isOldAccomplished` are computed from `career.age`/`tier` fresh at the top of `buildFreeAgentOffers`, not stored anywhere; don't try to read them from `career` elsewhere. The rebuild-youth carve-out (`rebuildYouthFit`) BYPASSES the normal `Math.abs(needRank-rank)>1` gate entirely and forces `role:"starter"` — if this function is ever restructured, keep that bypass explicit and early (before the normal gate check), not folded into the gate's own condition, or a future edit could silently narrow it back down without noticing. Every offer now carries a `reason` string — `renderFAOffers` already renders it via `.fa-offer-reason`; any NEW offer-construction path (there's currently only the one home re-sign + the one away-candidate loop) should set a `reason` too, or that offer will just render with no line there instead of erroring (the `o.reason ? ... : ""` guard is silent-safe, which means a missing reason is easy to miss in review — check for it explicitly).
+- `simpleWinProb(aStrength,bStrength)` (Round 19) — `0.5+(a-b)*0.006` clamped to `[0.10,0.90]`, tuned via `winprob_tune2.mjs` to keep a 31-team single season from producing the old formula's 7-8 teams at 12+ wins. This is the WITHIN-season schedule win-probability, separate from `contenderDeclinePull`/`rebuildPull`'s BETWEEN-season drift — don't conflate the two when retuning either.
+- `teamRecord` param on `simulatePlayerSeasonStats(entity, decade, league, year, forcedGames, teamRecord)` (Round 19) — rival/bench win-loss is now derived from the team's REAL `buildScheduleResults` record (`season.leagueStandings.results[entity.teamId]`), proportionally split by how many of the team's games this entity actually played, NOT an independent per-game coin flip. `simulateRivalSeasons`/`simulateDepthChartSeasons` both take `leagueStandings` as a 4th param now and look up the entity's own team's record before calling into `simulatePlayerSeasonStats` — any FUTURE caller of `simulatePlayerSeasonStats` for a rival/bench entity should pass this too, or that entity silently falls back to the old independent-roll formula (kept only as a should-never-fire safety net for a caller with no standings yet). `season.leagueStandings` is already set (inside `resolvePlayoffs`, which runs before `simulateRivalSeasons`/`simulateDepthChartSeasons` in `generateSeason()`'s existing call order) by the time these calls happen — don't reorder that.
+- `.team-ovr` / `teamOverall(id)` in `buildStandingsTabHTML` (Round 19) — reads the exact same `career.teamStrength`/`career.leagueStrength[id]` values `simpleWinProb` uses, so the Standings tab's displayed overall is always consistent with what's actually driving that team's win odds. `.seed-list li span{float:right}` predates this and would've broken the badge's layout — the fix is `.seed-list li span.team-ovr{float:none}`, keep that override if the seed-list markup is ever touched again.
+- `leagueActiveSortKey`/`leagueInactiveSortKey` + `LEAGUE_ACTIVE_SORTERS`/`LEAGUE_INACTIVE_SORTERS` + `reRenderLeagueTables()` (Round 19) — click-to-sort on the League tab's column headers, generalizing the pre-existing Trophy Room `TROPHY_ROOM_SORTERS` comparator-map idiom from external toggle buttons to `data-league-sort` attributes on `<th>` elements, wired into the SAME delegated `#careerContent` click listener that already handles `[data-rival-id]`/`[data-league-subtab]` (Round 12/18) — any future League-tab interactive element should follow this same one-listener pattern, not attach its own. `reRenderLeagueTables()` only replaces the two tables' `<tbody>` innerHTML (via `leagueTabSeason`, set at the top of `buildLeagueTabHTML`) specifically so a sort click never disturbs the active/inactive sub-tab toggle state or anything else on the card — a future column addition should update `LEAGUE_ACTIVE_SORTERS`/`LEAGUE_INACTIVE_SORTERS` and the `activeTh`/`inactiveTh` header calls together, or the new column simply won't be sortable.
+- `ERA_TEAM_VOLATILITY[decade]` (Round 19) — per-decade multiplier (0.55 in the 1960s ramping to 1.3 in the 2020s) on team-strength CHURN, mirroring the pre-existing `ERA_ATTR_MULT.injury` precedent. Applied at three call sites, all found by grepping this constant: the flat per-season noise + `contenderDeclinePull`/`rebuildPull` output in `generateSeason()`'s drift block, `rollLeagueNews`'s per-event `strengthDelta` roll, and `simulateRivalSeasons`' succession-nudge jump when a rival retires. It scales the RATE of churn, never a threshold (`CONTENDER_DECLINE_THRESHOLD`/`REBUILD_THRESHOLD` stay absolute across eras) — a future 4th churn source should be scaled by this same multiplier at its own call site, not by inventing a second era table. `CONTENDER_DECLINE_RATE`/`REBUILD_RATE` were also raised 0.22→0.32 and thresholds tightened 76/45→72/48 in this same round (stronger rubberbanding, on top of the era scaling) — re-verify with a fresh sweep before changing either further, same standing rule as Round 5/18's tuning of these same two functions.
