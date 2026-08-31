@@ -3367,11 +3367,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // same ingredients the old rolls used -- how strong a case this season makes -- just no longer
     // fed through a probability; *Eligible gates out a barely-played season (a real Pro Bowl/All-Pro
     // case requires an actual full-ish season, not a plausible score off a tiny sample).
+    // Eligibility is PLAYING-TIME only, never an absolute performance bar -- a real Pro Bowl/
+    // All-Pro vote doesn't require clearing some fixed rating-above-average threshold, it's a pure
+    // RELATIVE comparison among whoever played enough to be considered, and the best of that pool
+    // wins every single year no matter how strong or weak the league was overall. An earlier
+    // version gated on `ratingEdge>=1`/`>=9` on top of playing time -- in a league-wide down year
+    // (or after a stat-realism pass compresses everyone's ratings, as happened once already) that
+    // could empty the eligible pool entirely, falling back to resolveSeasonAllProAndProBowl's
+    // tiny-sample safety net instead of an honest comparison of who actually played the most/best.
     const proBowlScore = ratingEdge*0.6 + Math.max(0, td-16)*0.45 + (winPct-0.5)*10;
-    const proBowlEligible = attempts>200 && gamesPlayedShare>=0.65 && ratingEdge>=1;
+    const proBowlEligible = attempts>200 && gamesPlayedShare>=0.65;
 
     const allProScore = ratingEdge*0.75 + Math.max(0, td-22)*0.55 + (winPct-0.5)*18;
-    const allProEligible = gamesPlayedShare>=0.8 && ratingEdge>=9;
+    const allProEligible = attempts>250 && gamesPlayedShare>=0.8;
 
     // MVP is likewise decided once, league-wide, by resolveSeasonMVP. mvpEligible gates out
     // someone who barely played from ever backing into the award off a tiny sample; a real MVP
@@ -6206,34 +6214,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // home, the rest of the league filling out the slate -- see pickRegularSeasonOpponents), each
   // game resolved against that WEEK's actual opponent team grade (see simulateRegularSeasonGames),
   // with a per-game stat line so the season totals aren't just one deterministic formula anymore.
-  function renderOwnScheduleTable(season){
-    const log = season.gameLog || [];
-    if(!log.length){
-      return `<div class="calc-refnote">No game-by-game log for this season (missed the whole year, or an older save from before per-game tracking was added).</div>`;
-    }
-    const rows = log.map(g=>`<tr>
-        <td class="tabular">${g.week}</td>
-        <td>${svgEscape(g.opponentName)} <span style="color:var(--ink-muted);">(grade ${g.opponentGrade})</span>${g.opponentQbName ? `<br><span style="color:var(--ink-muted);font-size:0.82em;">QB <button type="button" class="rival-link" data-rival-id="${g.opponentQbId}">${svgEscape(g.opponentQbName)}</button> — ${g.opponentQbOverall} overall</span>` : ""}</td>
-        <td class="${g.won?"good":"bad"}"><b>${g.won?"W":"L"}</b> <span class="tabular">${g.myScore}-${g.oppScore}</span></td>
-        <td class="tabular">${g.comp}/${g.att}</td>
-        <td class="tabular">${g.yards}</td>
-        <td class="tabular">${g.td}</td>
-        <td class="tabular">${g.int}</td>
-        <td class="tabular">${g.sacks}</td>
-        <td class="tabular">${g.rushAtt>0 ? `${g.rushAtt}-${g.rushYards}${g.rushTd?" · "+g.rushTd+" TD":""}` : "—"}</td>
-      </tr>`).join("");
-    const wins = log.filter(g=>g.won).length, losses = log.length-wins;
-    return `<div class="calc-refnote">Game-by-game results as the starter this season — every opponent's real team grade factors into that week's win odds (see the Win Probability card in Admin &amp; Testing's Stat Calculator for the formula). Starter record: <b>${wins}-${losses}</b>.</div>
-      <div class="table-wrap">
-        <table class="league-table">
-          <thead><tr><th>Wk</th><th>Opponent</th><th>Result</th><th class="tabular">C/A</th><th class="tabular">Yds</th><th class="tabular">TD</th><th class="tabular">INT</th><th class="tabular">Sacks</th><th class="tabular">Rush</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>`;
-  }
   // Resolves a game-log qbId to whichever entity actually played that game -- a current starter
   // (career.leagueRivals) or a bench QB2/QB3 (career.leagueDepthCharts) -- for any OTHER team's
-  // schedule view. Never needs to resolve the player's own id (see renderOtherTeamScheduleTable).
+  // game on the week board. Never needs to resolve the player's own id (they're always themselves).
   function resolveScheduleQb(qbId){
     if(!qbId) return null;
     const rival = findRivalById(qbId);
@@ -6242,55 +6225,69 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(bench) return { id: bench.id, name: bench.name };
     return null;
   }
-  // The counterpart to renderOwnScheduleTable for any OTHER team: real per-game results from the
-  // same shared schedule simulation (career.currentSeasonSchedules, built once per season, current
-  // season only -- see buildScheduleResults/simulateLeagueStandings), with each game's stat line
-  // distributed from whichever QB actually played that week (applyStatLineToGames, tagged in
-  // simulateRivalSeasons/simulateDepthChartSeasons).
-  function renderOtherTeamScheduleTable(season, teamId){
-    const log = (career.currentSeasonSchedules && career.currentSeasonSchedules[teamId]) || [];
-    if(!log.length){
-      return `<div class="calc-refnote">No game-by-game log available for this team this season.</div>`;
+  // Every real matchup for one week across the WHOLE league -- real NFL schedule pages browse by
+  // week (see every game that week), not by team, which is what this replaces the old team-picker
+  // schedule tab with. Weaves in the player's own REAL game (season.gameLog -- a separate, more
+  // detailed simulation from the shared league schedule, unchanged from how it's always worked) for
+  // their own row; the opponent's OWN shared-schedule entry for that week is deliberately SKIPPED
+  // (not overwritten or shown twice) so a team's schedule can never visibly contradict itself --
+  // that team simply doesn't appear on the board this specific week, reading like a bye rather than
+  // a collision. This is a known, narrow boundary between the two separate simulations (the
+  // player's own regular season has always been simulated independently of the shared league-wide
+  // schedule) -- fully unifying them would be a much larger change than this pass's scope.
+  function buildWeekMatchups(season, week){
+    const teamIds = divisionsForYear(season.year).flatMap(d=>d.teams);
+    const seen = new Set();
+    const matchups = [];
+    const myGame = (season.gameLog||[]).find(g=>g.week===week);
+    if(myGame){
+      seen.add(season.teamId); seen.add(myGame.opponentId);
+      matchups.push({ aId: season.teamId, aScore: myGame.myScore, aWon: myGame.won, aQb: null,
+        bId: myGame.opponentId, bScore: myGame.oppScore, bQb: resolveScheduleQb(myGame.opponentQbId) });
     }
-    const rows = log.map(g=>{
-      const qb = resolveScheduleQb(g.qbId);
-      const qbHtml = qb ? `<button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button>` : "—";
-      const oppName = svgEscape(teamNameAt(g.opponentId, season.year)) + (g.opponentId===career.teamId ? ` <span style="color:var(--ink-muted);">(you)</span>` : "");
-      return `<tr>
-        <td class="tabular">${g.week}</td>
-        <td>${oppName}<br><span style="color:var(--ink-muted);font-size:0.82em;">QB ${qbHtml}</span></td>
-        <td class="${g.won?"good":"bad"}"><b>${g.won?"W":"L"}</b> <span class="tabular">${g.myScore}-${g.oppScore}</span></td>
-        <td class="tabular">${g.comp}/${g.att}</td>
-        <td class="tabular">${g.yards}</td>
-        <td class="tabular">${g.td}</td>
-        <td class="tabular">${g.int}</td>
-      </tr>`;
-    }).join("");
-    const wins = log.filter(g=>g.won).length, losses = log.length-wins;
-    return `<div class="calc-refnote">${svgEscape(teamNameAt(teamId, season.year))}'s ${season.year} season — real results from the same shared league schedule simulation, with each game's stat line credited to whichever QB actually played that week. Record: <b>${wins}-${losses}</b>.</div>
-      <div class="table-wrap">
-        <table class="league-table">
-          <thead><tr><th>Wk</th><th>Opponent</th><th>Result</th><th class="tabular">C/A</th><th class="tabular">Yds</th><th class="tabular">TD</th><th class="tabular">INT</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>`;
+    teamIds.forEach(id=>{
+      if(seen.has(id)) return;
+      const log = career.currentSeasonSchedules && career.currentSeasonSchedules[id];
+      const g = log && log.find(x=>x.week===week);
+      if(!g || seen.has(g.opponentId)) return;
+      seen.add(id); seen.add(g.opponentId);
+      matchups.push({ aId: id, aScore: g.myScore, aWon: g.won, aQb: resolveScheduleQb(g.qbId),
+        bId: g.opponentId, bScore: g.oppScore, bQb: null });
+    });
+    return matchups;
   }
-  // Schedule tab team picker -- mirrors the Trends-tab stat-picker pattern (trendsStatKey/
+  function weekMatchupTeamLineHTML(teamId, score, won, qb, year){
+    const mine = teamId===career.teamId;
+    const name = svgEscape(teamNameAt(teamId, year)) + (mine ? " (you)" : "");
+    const qbHtml = qb ? `<div class="week-matchup-qb">QB <button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button></div>` : "";
+    return `<div class="week-matchup-team${won?" good":""}${mine?" me":""}">
+        <span class="week-matchup-name">${won?"<b>":""}${name}${won?"</b>":""}</span>
+        <span class="tabular week-matchup-score">${score}</span>
+      </div>${qbHtml}`;
+  }
+  // Schedule tab week picker -- mirrors the Trends-tab stat-picker pattern (trendsStatKey/
   // renderTrendsSparkline): a module-level selection var, a <select> rebuilt on every render with
   // the current selection marked, wired via the same delegated #careerContent listener the League
   // tab's subtab/sort controls already use (see the `change` branch added there).
-  let scheduleTabTeamId = null;
+  let scheduleTabWeek = 1;
   let scheduleTabSeason = null;
   function renderScheduleTabInner(){
     const season = scheduleTabSeason;
-    const teamIds = divisionsForYear(season.year).flatMap(d=>d.teams);
-    const options = teamIds.map(id=>`<option value="${id}"${id===scheduleTabTeamId?" selected":""}>${svgEscape(teamNameAt(id, season.year))}${id===career.teamId?" (you)":""}</option>`).join("");
-    const body = scheduleTabTeamId===career.teamId ? renderOwnScheduleTable(season) : renderOtherTeamScheduleTable(season, scheduleTabTeamId);
-    return `<div class="schedule-team-picker"><label>Team <select id="scheduleTeamSelect" class="spk-select">${options}</select></label></div>${body}`;
+    const gamesN = LEAGUE[season.decade].games;
+    const options = Array.from({length: gamesN}, (_,i)=>i+1)
+      .map(w=>`<option value="${w}"${w===scheduleTabWeek?" selected":""}>Week ${w}</option>`).join("");
+    const matchups = buildWeekMatchups(season, scheduleTabWeek);
+    const cards = matchups.map(m=>`<div class="week-matchup-card">
+        ${weekMatchupTeamLineHTML(m.aId, m.aScore, m.aWon, m.aQb, season.year)}
+        ${weekMatchupTeamLineHTML(m.bId, m.bScore, !m.aWon, m.bQb, season.year)}
+      </div>`).join("");
+    const body = matchups.length ? `<div class="week-matchup-grid">${cards}</div>`
+      : `<div class="calc-refnote">No games recorded for this week.</div>`;
+    return `<div class="schedule-week-picker"><label>Week <select id="scheduleWeekSelect" class="spk-select">${options}</select></label></div>${body}`;
   }
   function buildScheduleTabHTML(season){
     scheduleTabSeason = season;
-    scheduleTabTeamId = career.teamId;
+    scheduleTabWeek = 1;
     return `<div id="scheduleTabRoot">${renderScheduleTabInner()}</div>`;
   }
 
@@ -6336,8 +6333,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // bottom=worst, matching standard bracket convention; `seedRowY` tracks where each surviving
   // seed was drawn in the PREVIOUS round so a bye (a seed skipping straight to a later round) still
   // gets a correct box with simply no incoming connector line for that gap.
+  // Compact box width: uses each team's own short id ("GB","LAR", etc, already the real display
+  // form used throughout the schedule/standings machinery) instead of a full city+mascot name, so
+  // a 3-round bracket's natural design width stays small enough to actually fit next to its
+  // sibling conference instead of overflowing the page -- a full-name version measured ~750px
+  // wide, wider than most viewports, which is what caused the original layout to spill off-screen.
   function renderBracketTreeSVG(rounds, year){
-    const boxW = 168, boxH = 44, rowGap = 14, colGap = 46, colW = boxW + colGap;
+    const boxW = 108, boxH = 44, rowGap = 14, colGap = 34, colW = boxW + colGap;
     const topPad = 24, leftPad = 10;
     let seedRowY = {};
     const boxesHtml = [];
@@ -6355,12 +6357,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const y = topPad + 14 + rowIdx*(boxH+rowGap);
         maxY = Math.max(maxY, y+boxH/2);
         const aWon = m.winnerId===m.aId;
-        const aName = svgEscape(teamNameAt(m.aId, year));
-        const bName = m.bId ? svgEscape(teamNameAt(m.bId, year)) : null;
         boxesHtml.push(`<g>
+            <title>${svgEscape(teamNameAt(m.aId, year))}${m.bId?` vs ${svgEscape(teamNameAt(m.bId, year))}`:""}</title>
             <rect x="${x}" y="${y-boxH/2}" width="${boxW}" height="${boxH}" rx="5" fill="var(--surface)" stroke="var(--line-strong)" stroke-width="1"/>
-            <text x="${x+8}" y="${y-6}" class="bracket-team-name${aWon?" me":""}">#${m.aSeed} ${aName}</text>
-            <text x="${x+8}" y="${y+14}" class="bracket-team-name${bName&&!aWon?" me":""}">${bName ? `#${m.bSeed} ${bName}` : `<tspan fill="var(--ink-muted)">BYE</tspan>`}</text>
+            <text x="${x+7}" y="${y-6}" class="bracket-team-name${aWon?" me":""}">#${m.aSeed} ${svgEscape(m.aId)}</text>
+            <text x="${x+7}" y="${y+14}" class="bracket-team-name${m.bId&&!aWon?" me":""}">${m.bId ? `#${m.bSeed} ${svgEscape(m.bId)}` : `<tspan fill="var(--ink-muted)">BYE</tspan>`}</text>
           </g>`);
         nextSeedRowY[m.winnerId] = y;
         [[m.aId, m.aSeed], [m.bId, m.bSeed]].forEach(([id])=>{
@@ -8789,12 +8790,12 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
     }
   });
 
-  // Schedule tab's team picker -- same delegated-listener idiom as the League tab's subtab/sort
+  // Schedule tab's week picker -- same delegated-listener idiom as the League tab's subtab/sort
   // controls above, on a `change` listener since it's a <select>, not a click target.
   document.getElementById("careerContent").addEventListener("change", (e)=>{
-    const select = e.target.closest("#scheduleTeamSelect");
+    const select = e.target.closest("#scheduleWeekSelect");
     if(select){
-      scheduleTabTeamId = select.value;
+      scheduleTabWeek = Number(select.value);
       const root = document.getElementById("scheduleTabRoot");
       if(root) root.innerHTML = renderScheduleTabInner();
     }
