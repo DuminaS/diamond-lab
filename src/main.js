@@ -6426,7 +6426,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       else if(/traded|draft/i.test(text)) cls = "gold";
       return `<div class="feed-line ${cls}"><span class="feed-year tabular">${year}</span><span class="feed-text">${text}</span></div>`;
     }).join("");
-    return `<div class="feed-wrap">${rows}<div class="feed-line"><span class="feed-year"></span><span class="feed-text" style="color:var(--ink-muted);">— present day<span class="feed-cursor"></span></span></div></div>`;
+    // "present day" belongs at the TOP: lines are newest-first (the .reverse() above), so the top
+    // of the feed is where "now" actually is -- it was previously appended after `rows`, landing it
+    // at the bottom next to the OLDEST entry instead, a real reported bug ("present day is at the
+    // oldest thing").
+    return `<div class="feed-wrap"><div class="feed-line"><span class="feed-year"></span><span class="feed-text" style="color:var(--ink-muted);">— present day<span class="feed-cursor"></span></span></div>${rows}</div>`;
   }
 
   // QOL: a season's headline stats (yards/TD/INT/rating) tick up from 0 rather than snapping

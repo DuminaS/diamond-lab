@@ -933,6 +933,17 @@ actual team situation and player profile — matching what was originally a sing
 this session, deliberately shipped in verified, independently-calibrated increments rather than one
 large unreviewable change.
 
+### Round 17 — bug fix: "present day" marker at the wrong end of the career event log
+
+Playtester report (via Discord): the career event/transaction log ("Round 1, Pick 28 overall...",
+"Announces He's Expecting.", etc.) showed "— present day" next to the OLDEST entry instead of the
+newest. `buildEventLogFeedHTML()` builds `rows` newest-first (`career.transactions.slice().reverse()`)
+but then appended the "— present day" line AFTER `rows` in the returned markup — landing it at the
+visual BOTTOM of a newest-first list, i.e. right next to the oldest entry, backwards. Fixed by moving
+that line to the front of the returned string instead. Verified via Playwright: advanced a couple of
+real seasons (so more than one transaction exists) and confirmed "— present day" renders as the
+FIRST line in the feed, not the last.
+
 ### Round 4 — difficulty/realism overhaul, all 3 items shipped
 Triggered by user feedback on the Round 3 build: a 63-overall QB was posting 4,721 yards / 39 TD / 104.7 rating, and a 42-overall team was shown beating a 73-overall team in the conference championship, then facing (and being competitive with) a 96-overall team in the Super Bowl. Three asks: (a) tighten stat production further, (b) make team grade matter much more so lopsided upsets are "very very rare," (c) redesign player development to have boom/bust potential instead of smooth linear progression — explicitly flagged by the user as something to brainstorm together, not implement unilaterally. For item (c), presented 4 concrete mechanic options to the user via AskUserQuestion; the user selected all 4 (rare breakout events, real bust/plateau paths, volatility tied to dev-speed tag, dev speed shifting mid-career) — synthesized into one unified system rather than four bolted-on mechanics (see item 3 below).
 
