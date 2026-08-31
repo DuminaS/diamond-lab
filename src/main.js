@@ -6422,25 +6422,36 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // -- one column per round, connector bezier curves from a winning seed's box to its slot in the
   // next round, gold-bordered "mine" state, grayscale-eliminated losers, a BYE badge, and a
   // clickable node (opens the box-score modal) once a matchup is decided.
-  function renderPlayoffTreeSVG(rounds, year, conf){
+  // `mirrored` flips WHICH SIDE each round renders on (round 0 near the outer edge, the final
+  // round near the center) without changing the chronological processing order -- this is what
+  // lets the "other" conference converge toward a center Super Bowl from the opposite direction of
+  // "my" conference, while still bookkeeping seed positions in real (round 0 first) order.
+  function renderPlayoffTreeSVG(rounds, year, conf, mirrored){
     if(!rounds.length) return "";
-    const boxW = 122, boxH = 46, rowGap = 14, colGap = 36, colW = boxW + colGap;
+    const boxW = 122, boxH = 46, rowGap = 14, colGap = 46, colW = boxW + colGap;
     const topPad = 24, leftPad = 10;
-    let seedRowY = {};
-    const boxesHtml = [];
-    const connectorsHtml = [];
+    // Every seed's stable INITIAL vertical "home" position, standard bracket-layout technique --
+    // this is what makes a later round's box land exactly centered between the two seeds/boxes
+    // that feed it (the previous version just stacked boxes top-to-bottom per round regardless of
+    // who fed them, which is what produced misaligned boxes and connectors that had to travel far
+    // and cut across other boxes -- both reported bugs).
+    const allSeeds = new Set();
+    rounds.forEach(r=>r.matchups.forEach(m=>{ if(m.aSeed!=null) allSeeds.add(m.aSeed); if(m.bSeed!=null) allSeeds.add(m.bSeed); }));
+    const seedList = Array.from(allSeeds).sort((a,b)=>a-b);
+    const seedPos = {}; seedList.forEach((seed,i)=>{ seedPos[seed] = topPad + 16 + i*(boxH+rowGap); });
+    const fallbackY = topPad+16;
+    let prevIdPos = {}; // teamId -> {x,y} as of the last round they appeared in, for connectors
+    const boxesHtml = [], connectorsHtml = [];
     let maxY = topPad;
     rounds.forEach((round, roundIdx)=>{
-      const x = leftPad + roundIdx*colW;
-      const indexed = round.matchups.map((m, matchIdx)=>({ m, matchIdx }));
-      const sorted = indexed.slice().sort((e1,e2)=>{
-        const min1 = Math.min(e1.m.aSeed ?? 999, e1.m.bSeed ?? 999), min2 = Math.min(e2.m.aSeed ?? 999, e2.m.bSeed ?? 999);
-        return min1-min2;
-      });
+      const displayColIdx = mirrored ? (rounds.length-1-roundIdx) : roundIdx;
+      const x = leftPad + displayColIdx*colW;
       boxesHtml.push(`<text x="${x+boxW/2}" y="${topPad-8}" text-anchor="middle" class="bracket-round-label">${svgEscape(roundDisplayLabel(round.label, year))}</text>`);
-      const nextSeedRowY = {};
-      sorted.forEach(({m, matchIdx}, rowIdx)=>{
-        const y = topPad + 16 + rowIdx*(boxH+rowGap);
+      const nextIdPos = {};
+      round.matchups.forEach((m, matchIdx)=>{
+        const aY = m.aSeed!=null && seedPos[m.aSeed]!=null ? seedPos[m.aSeed] : fallbackY;
+        const bY = m.bSeed!=null && seedPos[m.bSeed]!=null ? seedPos[m.bSeed] : null;
+        const y = bY!=null ? (aY+bY)/2 : aY;
         maxY = Math.max(maxY, y+boxH/2);
         const decided = m.winnerId!=null && m.bId!=null;
         const aWon = decided && m.winnerId===m.aId, bWon = decided && m.winnerId===m.bId;
@@ -6451,16 +6462,27 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
             <text x="${x+8}" y="${y-7}" class="bracket-team-name${aWon?" good":""}${decided&&!aWon?" eliminated":""}">${m.aSeed!=null?`#${m.aSeed} `:""}${svgEscape(m.aId)}${decided?` <tspan class="bracket-score">${m.aScore}</tspan>`:""}</text>
             <text x="${x+8}" y="${y+15}" class="bracket-team-name${bWon?" good":""}${decided&&!bWon?" eliminated":""}">${m.bId ? `${m.bSeed!=null?`#${m.bSeed} `:""}${svgEscape(m.bId)}${decided?` <tspan class="bracket-score">${m.bScore}</tspan>`:""}` : `<tspan class="bracket-bye">BYE</tspan>`}</text>
           </g>`);
-        if(m.winnerId!=null) nextSeedRowY[m.winnerId] = y;
+        if(m.aSeed!=null) seedPos[m.aSeed] = y;
+        if(m.bSeed!=null) seedPos[m.bSeed] = y;
+        if(m.aId!=null) nextIdPos[m.aId] = { x, y };
+        if(m.bId!=null) nextIdPos[m.bId] = { x, y };
+        // Clean right-angle "elbow" connectors (horizontal out of the source box, vertical in the
+        // gap between columns, horizontal into the destination box) instead of a smooth bezier --
+        // an elbow can never visually cut across an intervening box the way a diagonal curve did,
+        // since its only vertical segment sits entirely within the empty gap between columns.
         [m.aId, m.bId].forEach(id=>{
-          if(id!=null && seedRowY[id]!=null){
-            const x1 = x-colGap, y1 = seedRowY[id];
+          const prev = id!=null ? prevIdPos[id] : null;
+          if(prev){
+            const sourceIsLeft = prev.x < x;
+            const x1Edge = sourceIsLeft ? prev.x+boxW : prev.x;
+            const x2Edge = sourceIsLeft ? x : x+boxW;
+            const midX = (x1Edge+x2Edge)/2;
             const won = m.winnerId===id;
-            connectorsHtml.push(`<path d="M${x1+boxW},${y1} C${x1+boxW+colGap*0.5},${y1} ${x-colGap*0.5},${y} ${x},${y}" class="bracket-connector${won?" won":""}" fill="none"/>`);
+            connectorsHtml.push(`<path d="M${x1Edge},${prev.y} H${midX} V${y} H${x2Edge}" class="bracket-connector${won?" won":""}" fill="none"/>`);
           }
         });
       });
-      seedRowY = nextSeedRowY;
+      prevIdPos = nextIdPos;
     });
     const w = leftPad*2 + rounds.length*boxW + Math.max(0,rounds.length-1)*colGap;
     const h = Math.max(maxY+12, topPad+boxH+12);
@@ -6557,12 +6579,17 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const myDisplay = playoffTreeConfDisplay(myConf, season, pb, myConf);
     const otherDisplay = playoffTreeConfDisplay(otherConf, season, pb, myConf);
 
-    function confSectionHTML(conf, display){
-      const body = display.rounds.length ? renderPlayoffTreeSVG(display.rounds, year, conf)
+    // The "other" conference renders MIRRORED -- its own Wild Card round sits at ITS outer edge,
+    // its Conference Championship approaches the shared boundary between the two columns, same as
+    // "my" conference does from the opposite side -- so the two halves visually converge toward
+    // the middle (where the Super Bowl section sits, right below) instead of both just running
+    // left-to-right independently side by side.
+    function confSectionHTML(conf, display, mirrored){
+      const body = display.rounds.length ? renderPlayoffTreeSVG(display.rounds, year, conf, mirrored)
         : `<div class="calc-refnote">${display.isReal ? "Missed the playoffs this season." : "Not simulated yet — use Simulate Next Round below."}</div>`;
       const champLine = display.championKnown && display.championId
         ? `<div class="calc-refnote">Conference Champion: <b>${svgEscape(teamNameAt(display.championId, year))}</b></div>` : "";
-      return `<div><h4>${confLabel(conf, year)}${conf===myConf?" (your conference)":""}</h4>${body}${champLine}</div>`;
+      return `<div${mirrored?` style="text-align:right;"`:""}><h4>${confLabel(conf, year)}${conf===myConf?" (your conference)":""}</h4>${body}${champLine}</div>`;
     }
 
     const needsRoundSimulate = [[myConf,myDisplay],[otherConf,otherDisplay]]
@@ -6584,8 +6611,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const innerHtml = `<div class="playoff-tree-inner">
         ${actionHtml ? `<div class="playoff-tree-actions">${actionHtml}</div>` : ""}
         <div class="standings-columns">
-          ${confSectionHTML(myConf, myDisplay)}
-          ${confSectionHTML(otherConf, otherDisplay)}
+          ${confSectionHTML(myConf, myDisplay, false)}
+          ${confSectionHTML(otherConf, otherDisplay, true)}
         </div>
         ${sbHtml}
       </div>`;
