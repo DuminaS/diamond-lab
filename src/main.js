@@ -2609,39 +2609,57 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // still needing a game, and leaves a team unpaired (a bye) if no valid partner remains that
   // week rather than ever double-booking one -- validated collision-free via week_schedule_sweep.mjs
   // across both an even 32-team/8-division setup and an uneven pre-1970-style division setup.
+  // Division-rival meetings are placed FIRST, one in each half of the season, before any other
+  // game is scheduled -- an earlier version instead gave a division rival priority inside the
+  // regular per-week greedy loop, which raced every team through its division commitments before
+  // ever touching a cross-division opponent, front-loading EVERY division game across the whole
+  // league into the first several weeks (a real, reported bug: "week 6" showed almost nothing but
+  // division matchups). Real NFL schedules spread each division rivalry across the season instead
+  // of clustering it at the start -- placing one meeting per half (with a same-half retry budget,
+  // then a full-season fallback for the rare case both teams' preferred half is already full)
+  // reproduces that spread. Validated via week_schedule_sweep2.mjs: 0 collisions, 0 leftover
+  // teams, 0 placement failures, and division games landing roughly evenly across every week of a
+  // 32-team/17-game season instead of bunched at the front.
   function scheduleGamesIntoWeeks(divs, allIds, gamesN){
-    const divNeeded = {}; allIds.forEach(id=>{ divNeeded[id] = {}; });
+    const remaining = {}; allIds.forEach(id=>{ remaining[id] = gamesN; });
+    const weeks = Array.from({length: gamesN}, ()=>[]);
+    const usedThisWeek = Array.from({length: gamesN}, ()=>new Set());
+    function tryPlaceInWeek(w, a, b){
+      if(usedThisWeek[w].has(a) || usedThisWeek[w].has(b)) return false;
+      weeks[w].push([a,b]);
+      usedThisWeek[w].add(a); usedThisWeek[w].add(b);
+      remaining[a]--; remaining[b]--;
+      return true;
+    }
+    function placeGameInHalf(a, b, half){
+      let guard = 0;
+      while(guard++<50){
+        if(remaining[a]<=0 || remaining[b]<=0) return false;
+        const w = half[0] + Math.floor(Math.random()*(half[1]-half[0]));
+        if(tryPlaceInWeek(w, a, b)) return true;
+      }
+      for(let w=half[0]; w<half[1]; w++){ if(remaining[a]>0 && remaining[b]>0 && tryPlaceInWeek(w,a,b)) return true; }
+      for(let w=0; w<gamesN; w++){ if(remaining[a]>0 && remaining[b]>0 && tryPlaceInWeek(w,a,b)) return true; }
+      return false;
+    }
+    const mid = Math.floor(gamesN/2);
     divs.forEach(d=>{
       for(let i=0;i<d.teams.length;i++){
         for(let j=i+1;j<d.teams.length;j++){
-          divNeeded[d.teams[i]][d.teams[j]] = 2; divNeeded[d.teams[j]][d.teams[i]] = 2;
+          placeGameInHalf(d.teams[i], d.teams[j], [0, mid || 1]);
+          placeGameInHalf(d.teams[i], d.teams[j], [mid, gamesN]);
         }
       }
     });
-    const remaining = {}; allIds.forEach(id=>{ remaining[id] = gamesN; });
-    const weeks = [];
-    const maxWeeks = gamesN + 8; // small overflow allowance; the sweep shows this is essentially never needed
-    for(let w=0; w<maxWeeks && allIds.some(id=>remaining[id]>0); w++){
-      const usedThisWeek = new Set();
-      const weekPairs = [];
-      const pool = shuffle(allIds.filter(id=>remaining[id]>0));
+    // remaining slate (cross-division/filler): same flat greedy-per-week matching as before,
+    // just with no division-rival preference bias left to apply -- those are already placed above.
+    for(let w=0; w<gamesN; w++){
+      const pool = shuffle(allIds.filter(id=> remaining[id]>0 && !usedThisWeek[w].has(id)));
       pool.forEach(a=>{
-        if(usedThisWeek.has(a) || remaining[a]<=0) return;
-        let b = null;
-        const divRivalsOwed = Object.keys(divNeeded[a]).filter(id=> divNeeded[a][id]>0 && !usedThisWeek.has(id) && remaining[id]>0);
-        if(divRivalsOwed.length) b = pick(divRivalsOwed);
-        else {
-          const cands = pool.filter(id=> id!==a && !usedThisWeek.has(id) && remaining[id]>0);
-          if(cands.length) b = pick(cands);
-        }
-        if(b){
-          weekPairs.push([a,b]);
-          usedThisWeek.add(a); usedThisWeek.add(b);
-          remaining[a]--; remaining[b]--;
-          if(divNeeded[a][b]>0){ divNeeded[a][b]--; divNeeded[b][a]--; }
-        }
+        if(usedThisWeek[w].has(a) || remaining[a]<=0) return;
+        const cands = pool.filter(id=> id!==a && !usedThisWeek[w].has(id) && remaining[id]>0);
+        if(cands.length) tryPlaceInWeek(w, a, pick(cands));
       });
-      weeks.push(weekPairs);
     }
     return weeks;
   }
