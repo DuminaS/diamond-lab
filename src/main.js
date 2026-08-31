@@ -3083,10 +3083,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const rounds = [];
     function playRound(pairs, label){
       const matchups = pairs.map(([a,b])=>{
-        if(!b) return { aSeed:a.seed, aId:a.id, bSeed:null, bId:null, winnerId:a.id };
+        if(!b) return { aSeed:a.seed, aId:a.id, bSeed:null, bId:null, winnerId:a.id, aScore:null, bScore:null };
         const sA = career.leagueStrength[a.id] ?? 60, sB = career.leagueStrength[b.id] ?? 60;
         const winnerId = simpleGameWinner(a.id, sA, b.id, sB);
-        return { aSeed:a.seed, aId:a.id, bSeed:b.seed, bId:b.id, winnerId };
+        const loserId = winnerId===a.id ? b.id : a.id;
+        const scored = approxGameScore(career.leagueStrength[winnerId] ?? 60, career.leagueStrength[loserId] ?? 60);
+        const aScore = winnerId===a.id ? scored.winnerScore : scored.loserScore;
+        const bScore = winnerId===b.id ? scored.winnerScore : scored.loserScore;
+        return { aSeed:a.seed, aId:a.id, bSeed:b.seed, bId:b.id, winnerId, aScore, bScore };
       });
       rounds.push({ label, matchups });
       return matchups.map(m=> m.winnerId===m.aId ? {seed:m.aSeed,id:m.aId} : {seed:m.bSeed,id:m.bId});
@@ -3143,7 +3147,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const myOff = playoffOffenseGrade(myOffFn(), season);
         const game = simulateGameScore(myOff, oppOffense, career.defense);
         const round = {
-          round: roundLabel, opponent: teamNameAt(opp.id, career.year), mySeed: player.seed, oppSeed: opp.seed,
+          round: roundLabel, opponent: teamNameAt(opp.id, career.year), oppId: opp.id, mySeed: player.seed, oppSeed: opp.seed,
           myScore: game.myTotal, oppScore: game.oppTotal, won: game.won, quarters: game.quarters,
           box: season ? generateGameBoxScore(season, game.myTotal, game.myTds) : null,
           oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength, _defOffense: oppOffense,
@@ -3206,7 +3210,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const myOff = playoffOffenseGrade(playoffs._effOverall, season);
     const game = simulateGameScore(myOff, oppOffense, career.defense);
     const sbRound = {
-      round:"Super Bowl", opponent: teamNameAt(otherChampId, career.year),
+      round:"Super Bowl", opponent: teamNameAt(otherChampId, career.year), oppId: otherChampId,
       myScore: game.myTotal, oppScore: game.oppTotal, won: game.won,
       quarters: game.quarters, box: generateGameBoxScore(season, game.myTotal, game.myTds),
       oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength, _defOffense: oppOffense,
@@ -3278,6 +3282,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const year = season.year;
     const myConf = conferenceOf(career.teamId, year);
     const otherConf = myConf==="AFC" ? "NFC" : "AFC";
+    // Resolved EAGERLY, immediately, regardless of the player's own outcome -- the other
+    // conference has nothing to do with the player, so the Playoff Tree tab's interactive
+    // step-through for it shouldn't have to wait for the player's own reveal (which can take
+    // several more real interactions) to even become available. finalizeLeaguePlayoffBracket
+    // reuses this exact cache later rather than re-resolving (a second call would roll fresh
+    // Math.random() results and could disagree with what was already shown here).
+    season.leagueStandings._otherConfBracketCache = resolveFullBracketWithRounds(seeded[otherConf], format);
     const mySeeds = seeded[myConf];
     const mySeedIdx = mySeeds.findIndex(t=>t.id===career.teamId);
 
@@ -3323,7 +3334,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const madePlayoffs = !!(myPlayoffs && myPlayoffs.made);
     const reachedSB = madePlayoffs && myPlayoffs.rounds.some(r=>r.round==="Super Bowl");
 
-    const otherBracket = resolveFullBracketWithRounds(ls.seeded[otherConf], format);
+    const otherBracket = ls._otherConfBracketCache || resolveFullBracketWithRounds(ls.seeded[otherConf], format);
     let myConfChampId, myBracketRounds = null;
     if(reachedSB){
       // reaching a real, revealed Super Bowl already means winning the conference for real.
@@ -6356,86 +6367,232 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // a 3-round bracket's natural design width stays small enough to actually fit next to its
   // sibling conference instead of overflowing the page -- a full-name version measured ~750px
   // wide, wider than most viewports, which is what caused the original layout to spill off-screen.
-  function renderBracketTreeSVG(rounds, year){
-    const boxW = 108, boxH = 44, rowGap = 14, colGap = 34, colW = boxW + colGap;
+  // Maps ONE of the player's own real playoff rounds (season.playoffs.rounds[i]) into the SAME
+  // {aSeed,aId,aScore,bSeed,bId,bScore,winnerId} matchup shape resolveFullBracketWithRounds
+  // produces for a flat conference, so both sides of the bracket can render through ONE system
+  // (renderPlayoffTreeSVG) instead of two visually-inconsistent renderers (the reported bug: the
+  // player's own conference used to reuse the Season tab's own single-path box style, clashing
+  // with the new tree style used everywhere else).
+  function nodeMatchFromRealRound(r){
+    return { aSeed: r.mySeed ?? null, aId: career.teamId, aScore: r.myScore,
+      bSeed: r.oppSeed ?? null, bId: r.oppId ?? null, bScore: r.oppScore,
+      winnerId: r.won ? career.teamId : (r.oppId ?? null), realRound: r };
+  }
+  // Per-conference revealed-round-count for the NEW "Simulate Next Round" mechanic -- transient,
+  // current-season-only (like career.currentSeasonSchedules), reset whenever the season changes.
+  // Deliberately does NOT apply to the player's own real conference (see playoffTreeConfDisplay) --
+  // that side is always paced by the existing Season-tab Key Moment reveal, never this counter.
+  function ensurePlayoffTreeReveal(season){
+    if(!career.playoffTreeReveal || career.playoffTreeReveal.year!==season.year){
+      career.playoffTreeReveal = { year: season.year, AFC: 0, NFC: 0 };
+    }
+    return career.playoffTreeReveal;
+  }
+  // Normalizes ONE conference's Playoff Tree display data regardless of source: the player's own
+  // real path (season.playoffs.rounds, mirrored read-only -- never re-simulated), the eager
+  // "other conference" cache (season.leagueStandings._otherConfBracketCache, resolved immediately
+  // in resolvePlayoffs so it's steppable even while the player's own reveal is still in progress),
+  // or the final permanent record (season.leagueStandings.playoffBracket, once it exists). Returns
+  // { rounds, isReal, championKnown, championId, revealedCount, totalRounds } -- `rounds` is
+  // always a reveal-counter SLICE for a flat conference, or the player's real rounds AS-IS.
+  function playoffTreeConfDisplay(conf, season, pb, myConf){
+    const isMyRealConf = conf===myConf && season.playoffs && season.playoffs.made!==false && (!pb || pb[conf].rounds===null);
+    if(isMyRealConf){
+      const realRounds = (season.playoffs.rounds||[]).filter(r=>r.round!=="Super Bowl");
+      const rounds = realRounds.map(r=>({ label:r.round, matchups:[nodeMatchFromRealRound(r)] }));
+      const championKnown = !!season.playoffs.done;
+      return { rounds, isReal:true, championKnown, championId: championKnown && pb ? pb[conf].championId : null,
+        revealedCount: rounds.length, totalRounds: rounds.length };
+    }
+    let flatRounds, flatChampionId;
+    if(pb && pb[conf] && pb[conf].rounds){ flatRounds = pb[conf].rounds; flatChampionId = pb[conf].championId; }
+    else if(conf!==myConf && season.leagueStandings._otherConfBracketCache){
+      flatRounds = season.leagueStandings._otherConfBracketCache.rounds;
+      flatChampionId = season.leagueStandings._otherConfBracketCache.champion.id;
+    } else {
+      return { rounds: [], isReal:false, championKnown:false, championId:null, revealedCount:0, totalRounds:0 };
+    }
+    const reveal = ensurePlayoffTreeReveal(season);
+    const revealedCount = clamp(reveal[conf]||0, 0, flatRounds.length);
+    return { rounds: flatRounds.slice(0, revealedCount), isReal:false,
+      championKnown: revealedCount>=flatRounds.length, championId: revealedCount>=flatRounds.length ? flatChampionId : null,
+      revealedCount, totalRounds: flatRounds.length };
+  }
+  // Unified bracket-tree renderer for BOTH the player's real conference and any flat-resolved one
+  // -- one column per round, connector bezier curves from a winning seed's box to its slot in the
+  // next round, gold-bordered "mine" state, grayscale-eliminated losers, a BYE badge, and a
+  // clickable node (opens the box-score modal) once a matchup is decided.
+  function renderPlayoffTreeSVG(rounds, year, conf){
+    if(!rounds.length) return "";
+    const boxW = 122, boxH = 46, rowGap = 14, colGap = 36, colW = boxW + colGap;
     const topPad = 24, leftPad = 10;
     let seedRowY = {};
     const boxesHtml = [];
     const connectorsHtml = [];
     let maxY = topPad;
-    rounds.forEach((round, colIdx)=>{
-      const x = leftPad + colIdx*colW;
-      const sortedMatchups = round.matchups.slice().sort((m1,m2)=>{
-        const min1 = Math.min(m1.aSeed, m1.bSeed ?? 999), min2 = Math.min(m2.aSeed, m2.bSeed ?? 999);
+    rounds.forEach((round, roundIdx)=>{
+      const x = leftPad + roundIdx*colW;
+      const indexed = round.matchups.map((m, matchIdx)=>({ m, matchIdx }));
+      const sorted = indexed.slice().sort((e1,e2)=>{
+        const min1 = Math.min(e1.m.aSeed ?? 999, e1.m.bSeed ?? 999), min2 = Math.min(e2.m.aSeed ?? 999, e2.m.bSeed ?? 999);
         return min1-min2;
       });
-      const nextSeedRowY = {};
       boxesHtml.push(`<text x="${x+boxW/2}" y="${topPad-8}" text-anchor="middle" class="bracket-round-label">${svgEscape(roundDisplayLabel(round.label, year))}</text>`);
-      sortedMatchups.forEach((m, rowIdx)=>{
-        const y = topPad + 14 + rowIdx*(boxH+rowGap);
+      const nextSeedRowY = {};
+      sorted.forEach(({m, matchIdx}, rowIdx)=>{
+        const y = topPad + 16 + rowIdx*(boxH+rowGap);
         maxY = Math.max(maxY, y+boxH/2);
-        const aWon = m.winnerId===m.aId;
-        boxesHtml.push(`<g>
+        const decided = m.winnerId!=null && m.bId!=null;
+        const aWon = decided && m.winnerId===m.aId, bWon = decided && m.winnerId===m.bId;
+        const aMine = m.aId===career.teamId, bMine = m.bId===career.teamId;
+        boxesHtml.push(`<g class="playoff-node${decided?" clickable":""}"${decided?` data-bracket-conf="${conf}" data-bracket-round-idx="${roundIdx}" data-bracket-match-idx="${matchIdx}"`:""}>
             <title>${svgEscape(teamNameAt(m.aId, year))}${m.bId?` vs ${svgEscape(teamNameAt(m.bId, year))}`:""}</title>
-            <rect x="${x}" y="${y-boxH/2}" width="${boxW}" height="${boxH}" rx="5" fill="var(--surface)" stroke="var(--line-strong)" stroke-width="1"/>
-            <text x="${x+7}" y="${y-6}" class="bracket-team-name${aWon?" me":""}">#${m.aSeed} ${svgEscape(m.aId)}</text>
-            <text x="${x+7}" y="${y+14}" class="bracket-team-name${m.bId&&!aWon?" me":""}">${m.bId ? `#${m.bSeed} ${svgEscape(m.bId)}` : `<tspan fill="var(--ink-muted)">BYE</tspan>`}</text>
+            <rect x="${x}" y="${y-boxH/2}" width="${boxW}" height="${boxH}" rx="7" class="playoff-node-rect${aMine||bMine?" mine":""}"/>
+            <text x="${x+8}" y="${y-7}" class="bracket-team-name${aWon?" good":""}${decided&&!aWon?" eliminated":""}">${m.aSeed!=null?`#${m.aSeed} `:""}${svgEscape(m.aId)}${decided?` <tspan class="bracket-score">${m.aScore}</tspan>`:""}</text>
+            <text x="${x+8}" y="${y+15}" class="bracket-team-name${bWon?" good":""}${decided&&!bWon?" eliminated":""}">${m.bId ? `${m.bSeed!=null?`#${m.bSeed} `:""}${svgEscape(m.bId)}${decided?` <tspan class="bracket-score">${m.bScore}</tspan>`:""}` : `<tspan class="bracket-bye">BYE</tspan>`}</text>
           </g>`);
-        nextSeedRowY[m.winnerId] = y;
-        [[m.aId, m.aSeed], [m.bId, m.bSeed]].forEach(([id])=>{
+        if(m.winnerId!=null) nextSeedRowY[m.winnerId] = y;
+        [m.aId, m.bId].forEach(id=>{
           if(id!=null && seedRowY[id]!=null){
             const x1 = x-colGap, y1 = seedRowY[id];
-            connectorsHtml.push(`<line x1="${x1+boxW}" y1="${y1}" x2="${x}" y2="${y}" stroke="var(--line-strong)" stroke-width="1.5"/>`);
+            const won = m.winnerId===id;
+            connectorsHtml.push(`<path d="M${x1+boxW},${y1} C${x1+boxW+colGap*0.5},${y1} ${x-colGap*0.5},${y} ${x},${y}" class="bracket-connector${won?" won":""}" fill="none"/>`);
           }
         });
       });
       seedRowY = nextSeedRowY;
     });
     const w = leftPad*2 + rounds.length*boxW + Math.max(0,rounds.length-1)*colGap;
-    const h = maxY + 12;
+    const h = Math.max(maxY+12, topPad+boxH+12);
     return `<div class="bracket-wrap"><svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Playoff bracket">
         ${connectorsHtml.join("")}${boxesHtml.join("")}
       </svg></div>`;
   }
+  // A plausible single-game stat line for a QB whose SEASON aggregate is all we actually track --
+  // flat-resolved playoff games (nobody real involved) never got a per-game simulation, only a
+  // final score. Distributes that QB's real per-game AVERAGE with natural variance rather than
+  // fabricating something disconnected from his real season.
+  function estimateSingleGameStatLine(qb){
+    const t = qb && qb.totals;
+    if(!t || !t.games) return null;
+    const jitter = ()=> 0.75+Math.random()*0.5;
+    const att = Math.max(1, Math.round((t.att/t.games)*jitter()));
+    const compPct = t.att>0 ? t.comp/t.att : 0, ypa = t.att>0 ? t.yards/t.att : 0;
+    const tdRate = t.att>0 ? t.td/t.att : 0, intRate = t.att>0 ? t.int/t.att : 0;
+    const comp = Math.min(att, Math.round(att*compPct));
+    const yards = Math.round(att*ypa*jitter());
+    const td = Math.max(0, Math.round(att*tdRate*jitter()));
+    const interceptions = Math.max(0, Math.round(att*intRate*jitter()));
+    return { comp, att, yards, td, int: interceptions, rating: passerRating(comp, att, yards, td, interceptions) };
+  }
+  function buildBracketBoxScoreModalHTML(match, year, roundLabel){
+    const aName = svgEscape(teamNameAt(match.aId, year)), bName = svgEscape(teamNameAt(match.bId, year));
+    const [q1a,q2a,q3a,q4a] = distributeAcrossGames(match.aScore, 4);
+    const [q1b,q2b,q3b,q4b] = distributeAcrossGames(match.bScore, 4);
+    function qbLineHTML(teamId, isMine){
+      if(isMine){
+        // A real playoff game already has a real box score generated for the player's own side
+        // (generateGameBoxScore, called when the round itself was created) -- use it directly
+        // rather than a placeholder; a flat-side "mine" is impossible (the player is never a
+        // participant in a flat-resolved matchup), so this branch only ever fires for real rounds.
+        const box = match.realRound && match.realRound.box;
+        const line = box ? `${box.comp}/${box.att}, ${box.yards} yds, ${box.td} TD, ${box.int} INT` : "";
+        return `<div class="bracket-qb-line"><b>${svgEscape(career.name)}</b>${line ? ` — ${line}` : ""}</div>`;
+      }
+      const qb = rivalForTeam(teamId);
+      const line = qb ? estimateSingleGameStatLine(qb) : null;
+      return `<div class="bracket-qb-line">${qb ? `<button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button>` : "—"}${line ? ` — ${line.comp}/${line.att}, ${line.yards} yds, ${line.td} TD, ${line.int} INT, ${line.rating.toFixed(1)} rtg` : ""}</div>`;
+    }
+    const margin = Math.abs(match.aScore-match.bScore);
+    const recap = margin<=3 ? "A nail-biter decided in the final minutes." : margin>=21 ? "Never really in doubt after the first half." : "A hard-fought, back-and-forth game.";
+    return `<div class="modal-box">
+        <div class="modal-head"><h3>${svgEscape(roundDisplayLabel(roundLabel, year))}</h3><button type="button" class="modal-close">Close</button></div>
+        <div class="table-wrap"><table class="standings-table"><thead><tr><th></th><th class="tabular">Q1</th><th class="tabular">Q2</th><th class="tabular">Q3</th><th class="tabular">Q4</th><th class="tabular">F</th></tr></thead>
+          <tbody>
+            <tr class="${match.winnerId===match.aId?"me":""}"><td>${aName}</td><td class="tabular">${q1a}</td><td class="tabular">${q2a}</td><td class="tabular">${q3a}</td><td class="tabular">${q4a}</td><td class="tabular"><b>${match.aScore}</b></td></tr>
+            <tr class="${match.winnerId===match.bId?"me":""}"><td>${bName}</td><td class="tabular">${q1b}</td><td class="tabular">${q2b}</td><td class="tabular">${q3b}</td><td class="tabular">${q4b}</td><td class="tabular"><b>${match.bScore}</b></td></tr>
+          </tbody></table></div>
+        ${qbLineHTML(match.aId, match.aId===career.teamId)}
+        ${qbLineHTML(match.bId, match.bId===career.teamId)}
+        <div class="calc-refnote" style="margin-top:0.6rem;">${recap}</div>
+      </div>`;
+  }
+  function openBracketBoxScore(match, year, roundLabel){
+    const overlay = document.getElementById("bracketBoxScoreOverlay");
+    if(!overlay || !match.bId) return;
+    overlay.innerHTML = buildBracketBoxScoreModalHTML(match, year, roundLabel);
+    overlay.classList.add("open");
+    overlay.setAttribute("aria-hidden", "false");
+    const closeBtn = overlay.querySelector(".modal-close");
+    if(closeBtn) closeBtn.addEventListener("click", closeBracketBoxScore);
+    if(!overlay._backdropWired){
+      overlay._backdropWired = true;
+      overlay.addEventListener("click", (e)=>{ if(e.target===overlay) closeBracketBoxScore(); });
+    }
+  }
+  function closeBracketBoxScore(){
+    const overlay = document.getElementById("bracketBoxScoreOverlay");
+    if(!overlay) return;
+    overlay.classList.remove("open");
+    overlay.setAttribute("aria-hidden", "true");
+    overlay.innerHTML = "";
+  }
   // Playoff Tree tab: a real, permanent champion for both conferences and the Super Bowl every
   // season (see finalizeLeaguePlayoffBracket) -- previously nothing here was ever determined unless
-  // the player personally won it all. The player's own conference shows their real path when they
-  // made the playoffs (never a from-scratch re-simulation that could contradict what they actually
-  // played); the other conference always shows a full, real, independently-flat-resolved bracket
-  // since nobody real was ever in it to begin with.
+  // the player personally won it all. Both conferences (including the player's own real path) now
+  // render through the SAME unified node-card system (renderPlayoffTreeSVG) -- no more mixing the
+  // Season tab's own single-path box style with the tree style, which is what the earlier
+  // screenshot showed clashing. The other conference (and the player's own, in a season they
+  // missed the playoffs) is revealed round-by-round via "Simulate Next Round", a pure reveal
+  // counter over the already-fully-resolved permanent record -- see ensurePlayoffTreeReveal.
+  let playoffTreeSeason = null;
   function buildPlayoffTreeTabHTML(season){
     const ls = season.leagueStandings;
-    const pb = ls && ls.playoffBracket;
-    if(!pb){
-      return `<div class="calc-refnote">This season's playoff bracket isn't decided yet — check back after your own playoff run (if any) finishes.</div>`;
-    }
+    if(!ls) return `<div class="calc-refnote">Standings aren't available for this season.</div>`;
+    playoffTreeSeason = season;
+    const pb = ls.playoffBracket;
     const year = season.year;
     const myConf = conferenceOf(career.teamId, year);
     const otherConf = myConf==="AFC" ? "NFC" : "AFC";
-    function confSection(conf){
-      const b = pb[conf];
-      // A real, connected bracket-tree diagram for the flat-resolved conference (always true for
-      // the OTHER conference, and for the player's own only in a season they missed the playoffs
-      // entirely); when the player made the playoffs, reuse the SAME single-path bracket SVG the
-      // Season tab already shows for their real run (season.playoffs.rounds) -- never a
-      // from-scratch re-simulation that could contradict what they actually played.
-      const body = b.rounds
-        ? renderBracketTreeSVG(b.rounds, year)
-        : (season.playoffs && season.playoffs.rounds && season.playoffs.rounds.length
-            ? renderPlayoffBracketSVG(season.playoffs.rounds, season.teamName, season.year)
-            : `<div class="calc-refnote">Missed the playoffs this season.</div>`);
-      return `<div><h4>${confLabel(conf, year)}${conf===myConf?" (your conference)":""}</h4>
-          ${body}
-          <div class="calc-refnote">Conference Champion: <b>${svgEscape(teamNameAt(b.championId, year))}</b></div>
-        </div>`;
+    const myDisplay = playoffTreeConfDisplay(myConf, season, pb, myConf);
+    const otherDisplay = playoffTreeConfDisplay(otherConf, season, pb, myConf);
+
+    function confSectionHTML(conf, display){
+      const body = display.rounds.length ? renderPlayoffTreeSVG(display.rounds, year, conf)
+        : `<div class="calc-refnote">${display.isReal ? "Missed the playoffs this season." : "Not simulated yet — use Simulate Next Round below."}</div>`;
+      const champLine = display.championKnown && display.championId
+        ? `<div class="calc-refnote">Conference Champion: <b>${svgEscape(teamNameAt(display.championId, year))}</b></div>` : "";
+      return `<div><h4>${confLabel(conf, year)}${conf===myConf?" (your conference)":""}</h4>${body}${champLine}</div>`;
     }
-    const sbWinnerName = svgEscape(teamNameAt(pb.superBowlWinnerId, year)), sbLoserName = svgEscape(teamNameAt(pb.superBowlLoserId, year));
-    return `<div class="standings-columns">
-        ${confSection(myConf)}
-        ${confSection(otherConf)}
-      </div>
-      <div class="section-label" style="margin-top:1.5rem;">${svgEscape(superBowlDisplayName(year))}</div>
-      <div class="calc-refnote">${sbWinnerName} def. ${sbLoserName}, <span class="tabular">${pb.superBowlScore}</span>${pb.superBowlWinnerId===career.teamId ? " — your Super Bowl!" : ""}</div>`;
+
+    const needsRoundSimulate = [[myConf,myDisplay],[otherConf,otherDisplay]]
+      .some(([,d])=> !d.isReal && d.revealedCount<d.totalRounds);
+    let actionHtml = "";
+    if(needsRoundSimulate){
+      actionHtml = `<button type="button" class="btn btn-ghost" id="playoffTreeSimulateBtn" data-bracket-simulate="round">Simulate Next Round <span style="opacity:0.6;">(Space)</span></button>`;
+    } else if(!pb){
+      actionHtml = `<div class="calc-refnote">Waiting on your own playoff run to finish (see the Season tab) before the Super Bowl can be decided.</div>`;
+    }
+
+    let sbHtml = "";
+    if(pb){
+      const sbWinnerName = svgEscape(teamNameAt(pb.superBowlWinnerId, year)), sbLoserName = svgEscape(teamNameAt(pb.superBowlLoserId, year));
+      sbHtml = `<div class="section-label" style="margin-top:1.5rem;">${svgEscape(superBowlDisplayName(year))}</div>
+        <div class="calc-refnote">${sbWinnerName} def. ${sbLoserName}, <span class="tabular">${pb.superBowlScore}</span>${pb.superBowlWinnerId===career.teamId ? " — your Super Bowl!" : ""}</div>`;
+    }
+
+    const innerHtml = `<div class="playoff-tree-inner">
+        ${actionHtml ? `<div class="playoff-tree-actions">${actionHtml}</div>` : ""}
+        <div class="standings-columns">
+          ${confSectionHTML(myConf, myDisplay)}
+          ${confSectionHTML(otherConf, otherDisplay)}
+        </div>
+        ${sbHtml}
+      </div>`;
+    // Reuses the SAME era-themed chrome (eraWrap/eraChrome) already established for event cards --
+    // this is exactly the "7 decade-specific visual theme" system the user asked for; no new
+    // theming mechanism needed, just applying an existing one to a new tab's content.
+    return eraWrap(season.decade, innerHtml);
   }
 
   // League-wide QB comparison: every other starting QB in the league (see generateLeagueRivals /
@@ -8806,6 +8963,48 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
       }
       reRenderLeagueTables();
     }
+    // Playoff Tree "Simulate Next Round" -- advances every flat-resolved conference (never the
+    // player's own real one, which is always paced by the Season tab) one revealed round further.
+    const simulateBtn = e.target.closest("[data-bracket-simulate]");
+    if(simulateBtn){ simulateNextPlayoffTreeRound(); }
+    // Playoff Tree matchup node click -- opens the box-score modal for a decided game.
+    const bracketNode = e.target.closest("[data-bracket-conf]");
+    if(bracketNode && playoffTreeSeason){
+      const season = playoffTreeSeason;
+      const conf = bracketNode.dataset.bracketConf;
+      const roundIdx = Number(bracketNode.dataset.bracketRoundIdx);
+      const matchIdx = Number(bracketNode.dataset.bracketMatchIdx);
+      const pb = season.leagueStandings && season.leagueStandings.playoffBracket;
+      const myConf = conferenceOf(career.teamId, season.year);
+      const display = playoffTreeConfDisplay(conf, season, pb, myConf);
+      const round = display.rounds[roundIdx];
+      const match = round && round.matchups[matchIdx];
+      if(match) openBracketBoxScore(match, season.year, round.label);
+    }
+  });
+  function simulateNextPlayoffTreeRound(){
+    const season = playoffTreeSeason;
+    if(!season || !season.leagueStandings) return;
+    const reveal = ensurePlayoffTreeReveal(season);
+    const pb = season.leagueStandings.playoffBracket;
+    const myConf = conferenceOf(career.teamId, season.year);
+    const otherConf = myConf==="AFC" ? "NFC" : "AFC";
+    [myConf, otherConf].forEach(conf=>{
+      const d = playoffTreeConfDisplay(conf, season, pb, myConf);
+      if(!d.isReal && d.revealedCount<d.totalRounds) reveal[conf] = d.revealedCount+1;
+    });
+    const panel = document.getElementById("tabpanel-playofftree");
+    if(panel) panel.innerHTML = buildPlayoffTreeTabHTML(season);
+  }
+  // Spacebar shortcut for "Simulate Next Round" -- scoped to only fire while the Playoff Tree tab
+  // panel is the currently active dash-tab, so it never hijacks spacebar anywhere else in the app.
+  document.addEventListener("keydown", (e)=>{
+    if(e.code!=="Space" && e.key!==" ") return;
+    const panel = document.getElementById("tabpanel-playofftree");
+    if(!panel || !panel.classList.contains("active")) return;
+    if(!document.getElementById("playoffTreeSimulateBtn")) return;
+    e.preventDefault();
+    simulateNextPlayoffTreeRound();
   });
 
   // Schedule tab's week picker -- same delegated-listener idiom as the League tab's subtab/sort

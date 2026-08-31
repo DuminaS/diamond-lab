@@ -909,8 +909,47 @@
   .bracket-wrap svg{ display:block; }
   .bracket-team-name{ font-family: var(--mono); font-size: 11px; fill: var(--ink); }
   .bracket-team-name.me{ fill: var(--field); font-weight: 700; }
-  .bracket-score{ font-family: var(--mono); font-size: 11px; font-weight: 700; fill: var(--ink-muted); }
+  .bracket-team-name.good{ fill: var(--good); font-weight: 700; }
+  .bracket-team-name.eliminated{ opacity: 0.45; }
+  .bracket-score{ font-family: var(--mono); font-size: 11px; font-weight: 700; fill: currentColor; }
+  .bracket-bye{ fill: var(--ink-muted); font-style: italic; }
   .bracket-round-label{ font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; fill: var(--ink-muted); }
+  /* ---------- Playoff Tree: unified matchup-node bracket (replaces the old mixed single-path +
+     tree renderers -- one visual system now, for every conference, every era). ---------- */
+  .playoff-node-rect{ fill: var(--surface); stroke: var(--line-strong); stroke-width: 1; }
+  .playoff-node.mine .playoff-node-rect{ stroke: #d4af37; stroke-width: 2; filter: drop-shadow(0 0 4px rgba(212,175,55,0.5)); }
+  .playoff-node.clickable{ cursor: pointer; }
+  .playoff-node.clickable:hover .playoff-node-rect{ stroke: var(--field); }
+  .bracket-connector{ stroke: #2a3b4c; stroke-width: 1.5; }
+  .bracket-connector.won{ stroke: #d4af37; stroke-width: 2; }
+  .playoff-tree-actions{ margin-bottom: 1rem; }
+  .playoff-tree-inner{ font-family: inherit; }
+  /* Era-specific bracket recoloring -- reuses the SAME .era-XXXXs wrapper classes already
+     established for event-card chrome (eraWrap/eraChrome), just adding SVG fill/stroke overrides
+     since those can't be expressed via the background/border rules the event cards use. */
+  .era-1960s .bracket-wrap svg{ font-family: Georgia, 'Times New Roman', serif; }
+  .era-1960s .playoff-node-rect{ fill: #F5F5DC; stroke: #111; stroke-width: 2; rx: 0; }
+  .era-1960s .bracket-team-name{ fill: #111; }
+  .era-1960s .bracket-round-label{ fill: #3a3a3a; }
+  .era-1960s .bracket-connector{ stroke: #111; stroke-dasharray: 4; }
+  .era-1970s .playoff-node-rect{ fill: #0a1a5c; stroke: #FFEB3B; }
+  .era-1970s .bracket-team-name{ fill: #fff; font-weight: 700; }
+  .era-1970s .bracket-round-label{ fill: #FFEB3B; }
+  .era-1970s .bracket-connector{ stroke: #FFEB3B; }
+  .era-1980s .bracket-wrap svg{ font-family: 'IBM Plex Mono', 'Courier New', monospace; }
+  .era-1980s .playoff-node-rect{ fill: #000; stroke: #39FF14; rx: 0; }
+  .era-1980s .bracket-team-name{ fill: #39FF14; text-transform: uppercase; }
+  .era-1980s .bracket-round-label{ fill: #39FF14; }
+  .era-1980s .bracket-connector{ stroke: #39FF14; filter: drop-shadow(0 0 2px #39FF14); }
+  .era-1990s .playoff-node-rect{ fill: #2b303c; stroke: #6b7280; stroke-width: 2; }
+  .era-1990s .bracket-team-name{ fill: #e5e7eb; font-weight: 700; }
+  .era-2000s .playoff-node-rect{ fill: #1a1a1a; stroke: #444; rx: 12; }
+  .era-2000s .bracket-round-label{ fill: #999; }
+  .era-2010s .playoff-node-rect{ fill: #fff; stroke: #d8dedb; }
+  .era-2010s .bracket-team-name{ fill: #141a18; }
+  .era-2010s .bracket-score{ fill: #141a18; }
+  .era-2020s .playoff-node-rect{ fill: #0c1014; stroke: #2a3b4c; }
+  .era-2020s .playoff-node.mine .bracket-connector.won, .era-2020s .bracket-connector.won{ stroke: #d4af37; filter: drop-shadow(0 0 3px rgba(212,175,55,0.6)); }
 
   /* ---------- Experimental: era-themed event cards ----------
      Re-skins the outer chrome of an event card based on decadeForYear(career.year). Inner markup
