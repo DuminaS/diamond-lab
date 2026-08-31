@@ -2526,6 +2526,63 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // bimodal standings page) -- 0.006/[0.10,0.90] cuts that to ~4 while still leaving real spread.
   function simpleWinProb(aStrength, bStrength){ return clamp(0.5 + (aStrength-bStrength)*0.006, 0.10, 0.90); }
   function simpleGameWinner(idA, sA, idB, sB){ return Math.random() < simpleWinProb(sA, sB) ? idA : idB; }
+  // A plausible final score for a game where only two raw team-strength numbers exist (not the full
+  // offense/defense split simulateGameScore uses for the player's own games) -- good enough to fill
+  // a real per-team schedule row, swept via approx_score_sweep.mjs for realistic NFL-ish ranges.
+  function approxGameScore(winnerStrength, loserStrength){
+    const edge = clamp((winnerStrength-loserStrength)*0.25, 0, 14);
+    const winnerScore = Math.round(20 + edge + (Math.random()*16-4));
+    const margin = Math.round(3 + edge*0.4 + Math.random()*11);
+    const loserScore = clamp(winnerScore - margin, 0, winnerScore-1);
+    return { winnerScore, loserScore };
+  }
+  // Splits an integer total across n games with natural game-to-game variance while the shares
+  // still sum EXACTLY back to total -- used to turn a QB's already-calculated season aggregate into
+  // a plausible per-game log without inventing a second, separately-calibrated per-game engine.
+  function distributeAcrossGames(total, n){
+    if(n<=0) return [];
+    if(n===1) return [total];
+    const raw = Array.from({length:n}, ()=> 0.6+Math.random()*0.8);
+    const rawSum = raw.reduce((a,b)=>a+b,0);
+    const shares = raw.map(w=> Math.round(total*w/rawSum));
+    let diff = total - shares.reduce((a,b)=>a+b,0);
+    let i = 0;
+    while(diff!==0 && i<10000){
+      const idx = i % n;
+      if(diff>0){ shares[idx]++; diff--; } else if(shares[idx]>0){ shares[idx]--; diff++; }
+      i++;
+    }
+    return shares;
+  }
+  // Attaches per-game QB attribution + a plausible per-game stat line onto a slice of a team's real
+  // game log (career.currentSeasonSchedules[teamId]) -- comp is derived from each game's own
+  // attempts share so it can never exceed that game's attempts, unlike distributing comp/att
+  // independently would risk.
+  function applyStatLineToGames(games, qbId, comp, att, yards, td, int){
+    if(!games || !games.length) return;
+    const attShares = distributeAcrossGames(att, games.length);
+    const ydShares = distributeAcrossGames(yards, games.length);
+    const tdShares = distributeAcrossGames(td, games.length);
+    const intShares = distributeAcrossGames(int, games.length);
+    const compPct = att>0 ? comp/att : 0;
+    games.forEach((g,i)=>{
+      g.qbId = qbId;
+      g.att = attShares[i];
+      g.comp = Math.min(attShares[i], Math.round(attShares[i]*compPct));
+      g.yards = ydShares[i];
+      g.td = tdShares[i];
+      g.int = intShares[i];
+    });
+  }
+  // Recomputes a QB's real win/loss/winPct from the exact games tagged to him (see
+  // applyStatLineToGames/the qbId tagging in simulateRivalSeasons), and corrects the totals that
+  // simulatePlayerSeasonStats already incremented once using its own (now-superseded) estimate.
+  function reconcileWinLossFromGames(entity, season, games){
+    if(!games) return;
+    const wins = games.filter(g=>g.won).length, losses = games.length-wins;
+    entity.totals.wins += (wins-season.wins); entity.totals.losses += (losses-season.losses);
+    season.wins = wins; season.losses = losses; season.winPct = games.length>0 ? wins/games.length : 0;
+  }
 
   function buildScheduleResults(season){
     const year = season.year;
@@ -2534,10 +2591,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const allIds = divs.flatMap(d=>d.teams);
     const wins = {}, losses = {};
     allIds.forEach(id=>{ wins[id]=0; losses[id]=0; });
+    // Real per-team, per-game log (opponent/week/score) -- current season only, never persisted into
+    // career.seasonLog (see career.currentSeasonSchedules below). `week` is just this team's own
+    // running game count, so every team gets a clean gap-free 1..gamesN sequence even though division
+    // games are resolved before cross-division ones (display order, not simulated calendar order).
+    const gameLogs = {}; allIds.forEach(id=>{ gameLogs[id] = []; });
     const strengthOf = id => id===career.teamId ? career.teamStrength : (career.leagueStrength[id] ?? 60);
     function playGame(a,b){
       const w = simpleGameWinner(a, strengthOf(a), b, strengthOf(b));
+      const loser = w===a ? b : a;
+      const { winnerScore, loserScore } = approxGameScore(strengthOf(w), strengthOf(loser));
       if(w===a){ wins[a]++; losses[b]++; } else { wins[b]++; losses[a]++; }
+      gameLogs[a].push({ week: gameLogs[a].length+1, opponentId: b, won: w===a, myScore: w===a?winnerScore:loserScore, oppScore: w===a?loserScore:winnerScore });
+      gameLogs[b].push({ week: gameLogs[b].length+1, opponentId: a, won: w===b, myScore: w===b?winnerScore:loserScore, oppScore: w===b?loserScore:winnerScore });
     }
     // division rivals: home & away, so every result is shared between two teams' ledgers
     divs.forEach(d=>{
@@ -2562,19 +2628,25 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       while(remaining[id]>0){
         const opp = pick(allIds.filter(o=>o!==id));
         const w = simpleGameWinner(id, strengthOf(id), opp, strengthOf(opp));
+        const loser = w===id ? opp : id;
+        const { winnerScore, loserScore } = approxGameScore(strengthOf(w), strengthOf(loser));
         if(w===id) wins[id]++; else losses[id]++;
+        gameLogs[id].push({ week: gameLogs[id].length+1, opponentId: opp, won: w===id, myScore: w===id?winnerScore:loserScore, oppScore: w===id?loserScore:winnerScore });
         remaining[id]--;
       }
     });
-    // overwrite the player's own team with its real, already-simulated record
+    // overwrite the player's own team with its real, already-simulated record -- their OWN
+    // game-by-game log stays season.gameLog (a separate, more detailed simulation); gameLogs[career.teamId]
+    // is a throwaway artifact of this pass and is never read back for the player's own team.
     wins[career.teamId] = season.teamWins; losses[career.teamId] = season.teamLosses;
     const results = {};
     allIds.forEach(id=>{ const w=wins[id], l=losses[id], t=w+l; results[id] = { id, wins:w, losses:l, winPct: t>0?w/t:0 }; });
-    return results;
+    return { results, gameLogs };
   }
 
   function simulateLeagueStandings(season){
-    const results = buildScheduleResults(season);
+    const { results, gameLogs } = buildScheduleResults(season);
+    career.currentSeasonSchedules = gameLogs;
     const format = playoffFormatForYear(season.year);
     const divs = divisionsForYear(season.year);
     const seeded = {};
@@ -2927,6 +2999,63 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return { rounds, champion: field[0] };
   }
 
+  // Finishes resolving an ALREADY-IN-PROGRESS bracket field with the flat formula -- used once the
+  // player's own real playoff run ends mid-bracket (eliminated before the conference championship),
+  // so whoever beat them for real is guaranteed to be the one who can still go on to win the
+  // conference, rather than a totally disconnected fresh re-simulation of the whole thing.
+  function resolveRemainingBracketField(field){
+    let f = (field||[]).slice();
+    while(f.length>1){
+      const next = [];
+      for(let i=0;i<Math.floor(f.length/2);i++){
+        const a=f[i], b=f[f.length-1-i];
+        const sA = career.leagueStrength[a.id] ?? 60, sB = career.leagueStrength[b.id] ?? 60;
+        const winnerId = simpleGameWinner(a.id, sA, b.id, sB);
+        next.push(winnerId===a.id ? a : b);
+      }
+      f = next.sort((x,y)=>x.seed-y.seed);
+    }
+    return f[0];
+  }
+
+  // A from-scratch, fully flat resolution of an entire conference bracket, ALWAYS recording every
+  // round's matchups (unlike resolveConferenceBracket, which only ever records a round when
+  // myTeamId is actually in it -- passing "__none__" there leaves `rounds` empty). Used for: the
+  // OTHER conference every season (nobody real ever plays in it), and the player's OWN conference
+  // only in a season they didn't make the playoffs at all (see finalizeLeaguePlayoffBracket).
+  function resolveFullBracketWithRounds(seeds, format){
+    const s = seeds.map((t,i)=>({ seed:i+1, id:t.id }));
+    const N = s.length;
+    const rounds = [];
+    function playRound(pairs, label){
+      const matchups = pairs.map(([a,b])=>{
+        if(!b) return { aSeed:a.seed, aId:a.id, bSeed:null, bId:null, winnerId:a.id };
+        const sA = career.leagueStrength[a.id] ?? 60, sB = career.leagueStrength[b.id] ?? 60;
+        const winnerId = simpleGameWinner(a.id, sA, b.id, sB);
+        return { aSeed:a.seed, aId:a.id, bSeed:b.seed, bId:b.id, winnerId };
+      });
+      rounds.push({ label, matchups });
+      return matchups.map(m=> m.winnerId===m.aId ? {seed:m.aSeed,id:m.aId} : {seed:m.bSeed,id:m.bId});
+    }
+    if(N<2) return { rounds, champion: s[0] };
+    const wcGames = format ? format.wcGames : Math.floor((N-1)/2);
+    if(wcGames<=0){
+      const survivors = playRound([[s[0], s[1]||null]], "Conference Championship");
+      return { rounds, champion: survivors[0] };
+    }
+    const byes = N - 2*wcGames;
+    const firstRoundLabel = byes>0 ? "Wild Card" : "Divisional";
+    const pairs = []; for(let i=0;i<wcGames;i++) pairs.push([s[byes+i], s[N-1-i]]);
+    const wcSurvivors = playRound(pairs, firstRoundLabel);
+    let field = [...s.slice(0,byes), ...wcSurvivors].sort((a,b)=>a.seed-b.seed);
+    while(field.length>1){
+      const roundLabel = field.length>2 ? "Divisional" : "Conference Championship";
+      const pairs2 = []; for(let i=0;i<Math.floor(field.length/2);i++) pairs2.push([field[i], field[field.length-1-i]]);
+      field = playRound(pairs2, roundLabel).sort((a,b)=>a.seed-b.seed);
+    }
+    return { rounds, champion: field[0] };
+  }
+
   /* ----- Live, stepwise postseason resolution -----
      The player's OWN playoff run is deliberately never resolved further ahead than the round
      they've actually played. This used to be one synchronous call (resolvePlayoffs simulating
@@ -3102,7 +3231,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const confRanked = confTeamIds.map(id=>results[id]).sort((a,b)=>b.winPct-a.winPct);
     const confRank = confRanked.findIndex(t=>t.id===career.teamId)+1;
 
-    if(mySeedIdx===-1) return { made:false, confRank, confSize:confTeamIds.length };
+    if(mySeedIdx===-1){
+      finalizeLeaguePlayoffBracket(season, null);
+      return { made:false, confRank, confSize:confTeamIds.length };
+    }
 
     const seed = mySeedIdx+1;
     const playoffs = {
@@ -3116,6 +3248,65 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // be until the player has actually played their way there.
     advanceToNextPlayoffRound(playoffs, season);
     return playoffs;
+  }
+
+  // Determines a REAL, permanent champion for both conferences and the Super Bowl every single
+  // season -- previously, unless the player personally won it, nothing here was ever resolved at
+  // all. Called from two places: resolvePlayoffs itself (immediately) when the player misses the
+  // playoffs entirely, and finalizeRound (once the player's own reveal, if any, has fully finished)
+  // when they made it. `myPlayoffs` is null in the first case, the real (done) playoffs object in
+  // the second. The player's own conference intentionally does NOT get a from-scratch flat
+  // re-simulation when they made the playoffs -- see buildPlayoffTreeTabHTML, which shows their
+  // REAL round-by-round path instead of a matchup grid in that case, so there's nothing to
+  // contradict. Only the champion-level fact needs resolving here for that branch.
+  function finalizeLeaguePlayoffBracket(season, myPlayoffs){
+    const ls = season.leagueStandings;
+    if(!ls) return;
+    const year = season.year;
+    const myConf = conferenceOf(career.teamId, year);
+    const otherConf = myConf==="AFC" ? "NFC" : "AFC";
+    const format = ls.format;
+    const madePlayoffs = !!(myPlayoffs && myPlayoffs.made);
+    const reachedSB = madePlayoffs && myPlayoffs.rounds.some(r=>r.round==="Super Bowl");
+
+    const otherBracket = resolveFullBracketWithRounds(ls.seeded[otherConf], format);
+    let myConfChampId, myBracketRounds = null;
+    if(reachedSB){
+      // reaching a real, revealed Super Bowl already means winning the conference for real.
+      myConfChampId = career.teamId;
+    } else if(madePlayoffs){
+      // eliminated for real mid-bracket -- commit that final round's real (Key-Moment-adjusted)
+      // result if it hasn't been already (confirmPlayoffRound skips this on an elimination loss),
+      // then flat-resolve whoever's left, so the real conqueror is always a valid path to champion.
+      if(myPlayoffs._bracketState._pendingMatches) confirmRoundAdvancement(myPlayoffs._bracketState);
+      const field = myPlayoffs._bracketState.field;
+      myConfChampId = (field && field.length===1) ? field[0].id : resolveRemainingBracketField(field).id;
+    } else {
+      const myBracket = resolveFullBracketWithRounds(ls.seeded[myConf], format);
+      myConfChampId = myBracket.champion.id;
+      myBracketRounds = myBracket.rounds;
+    }
+
+    let superBowlWinnerId, superBowlLoserId, superBowlScore;
+    if(reachedSB){
+      const sb = myPlayoffs.rounds.find(r=>r.round==="Super Bowl");
+      superBowlWinnerId = sb.won ? career.teamId : otherBracket.champion.id;
+      superBowlLoserId = sb.won ? otherBracket.champion.id : career.teamId;
+      superBowlScore = sb.won ? `${sb.myScore}-${sb.oppScore}` : `${sb.oppScore}-${sb.myScore}`;
+    } else {
+      const otherChampId = otherBracket.champion.id;
+      const sA = career.leagueStrength[myConfChampId] ?? 60, sB = career.leagueStrength[otherChampId] ?? 60;
+      const winnerId = simpleGameWinner(myConfChampId, sA, otherChampId, sB);
+      const loserId = winnerId===myConfChampId ? otherChampId : myConfChampId;
+      const scored = approxGameScore(career.leagueStrength[winnerId] ?? 60, career.leagueStrength[loserId] ?? 60);
+      superBowlWinnerId = winnerId; superBowlLoserId = loserId; superBowlScore = `${scored.winnerScore}-${scored.loserScore}`;
+    }
+
+    ls.playoffBracket = {
+      [myConf]: { championId: myConfChampId, rounds: myBracketRounds, playerMade: madePlayoffs },
+      [otherConf]: { championId: otherBracket.champion.id, rounds: otherBracket.rounds, playerMade: false },
+      superBowlWinnerId, superBowlLoserId, superBowlScore,
+    };
   }
 
   // Shared by generateSeason (the player's own season) and simulateRivalSeasons (every other
@@ -3482,7 +3673,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // depth-chart bench players (simulateDepthChartSeasons) can run the IDENTICAL formula instead of
   // a parallel copy. Mutates entity.seasons/totals/age and returns the season object (callers that
   // need "how did he actually play this year" for a succession decision use the return value).
-  function simulatePlayerSeasonStats(entity, decade, league, year, forcedGames, teamRecord){
+  function simulatePlayerSeasonStats(entity, decade, league, year, forcedGames){
     const talentEdge = entity.talent - 65;
     const ageMult = primeMultiplier(entity.age);
     const delta = talentEdge*ageMult;
@@ -3504,25 +3695,17 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const td = Math.max(0, Math.round(attempts*tdRate));
     const interceptions = Math.max(0, Math.round(attempts*intRate));
     const rating = passerRating(completions, attempts, yards, td, interceptions);
-    // wins/losses now derive from the SAME shared schedule simulation (buildScheduleResults) that
-    // produces the Standings tab, instead of an independent per-game coin flip -- previously the
-    // same team-season had two disconnected win/loss numbers (one for standings, one for the
-    // rival's own stat line). teamRecord is that team's already-simulated {wins,losses} for this
-    // season; a partial-season entity (e.g. a bench QB with only relief-duty games) gets a
-    // proportional share of it rather than its own independently-rolled record. The old formula
-    // survives only as a fallback for the (should-never-happen) case a caller has no standings yet.
-    let wins, losses;
-    if(teamRecord && (teamRecord.wins + teamRecord.losses) > 0){
-      const teamWinPct = teamRecord.wins / (teamRecord.wins + teamRecord.losses);
-      wins = Math.round(teamWinPct * gamesPlayed);
-      losses = gamesPlayed - wins;
-    } else {
-      const teamGrade = career.leagueStrength[entity.teamId] ?? 60;
-      const winProb = clamp(0.5 + talentEdge*ageMult*0.009 + (teamGrade-65)*0.009, 0.08, 0.92);
-      wins = 0;
-      for(let i=0;i<gamesPlayed;i++){ if(Math.random()<winProb) wins++; }
-      losses = gamesPlayed-wins;
-    }
+    // This is a placeholder win/loss, used only to feed evaluateSeasonAwards below -- the CALLER
+    // (simulateRivalSeasons/simulateDepthChartSeasons) overwrites season.wins/losses/winPct right
+    // after this returns with an EXACT count from the real per-game schedule
+    // (career.currentSeasonSchedules), via reconcileWinLossFromGames -- see the comment there for why
+    // a placeholder is needed here at all (awards eligibility needs SOME winPct before the caller
+    // knows which of the team's real games this entity actually played).
+    const teamGrade = career.leagueStrength[entity.teamId] ?? 60;
+    const winProb = clamp(0.5 + talentEdge*ageMult*0.009 + (teamGrade-65)*0.009, 0.08, 0.92);
+    let wins = 0;
+    for(let i=0;i<gamesPlayed;i++){ if(Math.random()<winProb) wins++; }
+    const losses = gamesPlayed-wins;
     const winPct = gamesPlayed>0 ? wins/gamesPlayed : 0;
     const { awards, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = evaluateSeasonAwards({
       rating, td, winPct, attempts, gamesPlayed, leagueGames: league.games, decade,
@@ -3541,7 +3724,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     entity.age++;
     return season;
   }
-  function simulateRivalSeasons(decade, league, year, leagueStandings){
+  function simulateRivalSeasons(decade, league, year){
     if(!career.leagueRivals) return;
     career.leagueRivals.forEach(r=>{
       if(r.retired) return;
@@ -3566,20 +3749,35 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         });
         return;
       }
-      const teamRecord = leagueStandings && leagueStandings.results ? leagueStandings.results[r.teamId] : null;
-      const seasonResult = simulatePlayerSeasonStats(r, decade, league, year, undefined, teamRecord);
+      const seasonResult = simulatePlayerSeasonStats(r, decade, league, year);
       developEntityTalent(r, decade);
-      // Part C of the bench-realism fix: whatever games the starter's OWN missed-games roll took
-      // away from him this season are real, actually-played relief snaps for QB2 -- never QB3,
-      // matching real depth charts (a team's third QB essentially never plays). This is what makes
-      // a bench player's stats causally connected to the team's actual season instead of an
-      // independently-rolled parallel statline nobody's games explain -- simulateDepthChartSeasons
-      // (called right after this in the season loop) reads _reliefGames to decide whether QB2 gets
-      // a real stat-line at all this year.
+      // Whatever games the starter's OWN missed-games roll took away from him this season are real,
+      // actually-played relief snaps for QB2 -- never QB3, matching real depth charts (a team's
+      // third QB essentially never plays). This tags the EXACT weeks on the team's real schedule
+      // (career.currentSeasonSchedules, built by buildScheduleResults earlier this same season) so a
+      // Schedule-tab view of this team shows the correct QB for every single game, not just a count.
       const missedGames = league.games - seasonResult.games;
-      if(missedGames>0){
-        const chart = career.leagueDepthCharts[r.teamId];
-        if(chart && chart.qb2 && !chart.qb2.retired) chart.qb2._reliefGames = missedGames;
+      const teamGames = career.currentSeasonSchedules && career.currentSeasonSchedules[r.teamId];
+      const chart = career.leagueDepthCharts[r.teamId];
+      const qb2 = chart && chart.qb2 && !chart.qb2.retired ? chart.qb2 : null;
+      if(teamGames && teamGames.length){
+        let starterWeeks = teamGames, reliefWeeks = [];
+        if(missedGames>0 && qb2){
+          const start = randInt(0, Math.max(0, teamGames.length-missedGames));
+          reliefWeeks = teamGames.slice(start, start+missedGames);
+          starterWeeks = teamGames.filter(g=>!reliefWeeks.includes(g));
+        }
+        applyStatLineToGames(starterWeeks, r.id, seasonResult.comp, seasonResult.att, seasonResult.yards, seasonResult.td, seasonResult.int);
+        reconcileWinLossFromGames(r, seasonResult, starterWeeks);
+        if(reliefWeeks.length>0 && qb2){
+          qb2._reliefGames = reliefWeeks.length;
+          qb2._reliefWeeks = reliefWeeks;
+        }
+      } else if(missedGames>0 && qb2){
+        // Defensive fallback (should never fire -- buildScheduleResults always builds a log for
+        // every team currently in the league): no real schedule to tag against, so relief duty is
+        // still credited by count only, same as before this round's per-game attribution existed.
+        qb2._reliefGames = missedGames;
       }
     });
   }
@@ -3593,7 +3791,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // didn't play, so he gets no season entry at all (not a zero-stat one), matching "no stats
   // because he didn't play." He still ages and develops either way -- prospects don't stop growing
   // just because they didn't see the field this year.
-  function simulateDepthChartSeasons(decade, league, year, leagueStandings){
+  function simulateDepthChartSeasons(decade, league, year){
     if(!career.leagueDepthCharts) return;
     Object.keys(career.leagueDepthCharts).forEach(teamId=>{
       // Same self-heal as spawnNewFranchiseRivals: an existing save from before that filtering
@@ -3613,13 +3811,17 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           return;
         }
         if(p._reliefGames>0){
-          const teamRecord = leagueStandings && leagueStandings.results ? leagueStandings.results[teamId] : null;
-          simulatePlayerSeasonStats(p, decade, league, year, p._reliefGames, teamRecord);
+          const reliefResult = simulatePlayerSeasonStats(p, decade, league, year, p._reliefGames);
+          if(p._reliefWeeks && p._reliefWeeks.length){
+            applyStatLineToGames(p._reliefWeeks, p.id, reliefResult.comp, reliefResult.att, reliefResult.yards, reliefResult.td, reliefResult.int);
+            reconcileWinLossFromGames(p, reliefResult, p._reliefWeeks);
+          }
         } else {
           p.age++;
         }
         developEntityTalent(p, decade);
         p._reliefGames = 0;
+        p._reliefWeeks = null;
       });
     });
   }
@@ -4141,8 +4343,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
     career.seasonLog.push(season);
     spawnNewFranchiseRivals(career.year);
-    simulateRivalSeasons(decade, league, career.year, season.leagueStandings);
-    simulateDepthChartSeasons(decade, league, career.year, season.leagueStandings);
+    simulateRivalSeasons(decade, league, career.year);
+    simulateDepthChartSeasons(decade, league, career.year);
     TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateSuccession(t.id, decade, career.year));
     // Phase 2 of the QB-entity redesign: real bench mobility (trade/waive) and free-agent-pool
     // resolution (retirement hazard + teams signing off the pool), both once per team per season,
@@ -5963,7 +6165,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // home, the rest of the league filling out the slate -- see pickRegularSeasonOpponents), each
   // game resolved against that WEEK's actual opponent team grade (see simulateRegularSeasonGames),
   // with a per-game stat line so the season totals aren't just one deterministic formula anymore.
-  function buildScheduleTabHTML(season){
+  function renderOwnScheduleTable(season){
     const log = season.gameLog || [];
     if(!log.length){
       return `<div class="calc-refnote">No game-by-game log for this season (missed the whole year, or an older save from before per-game tracking was added).</div>`;
@@ -5987,6 +6189,68 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <tbody>${rows}</tbody>
         </table>
       </div>`;
+  }
+  // Resolves a game-log qbId to whichever entity actually played that game -- a current starter
+  // (career.leagueRivals) or a bench QB2/QB3 (career.leagueDepthCharts) -- for any OTHER team's
+  // schedule view. Never needs to resolve the player's own id (see renderOtherTeamScheduleTable).
+  function resolveScheduleQb(qbId){
+    if(!qbId) return null;
+    const rival = findRivalById(qbId);
+    if(rival) return { id: rival.id, name: rival.name };
+    const bench = findDepthChartPlayerById(qbId);
+    if(bench) return { id: bench.id, name: bench.name };
+    return null;
+  }
+  // The counterpart to renderOwnScheduleTable for any OTHER team: real per-game results from the
+  // same shared schedule simulation (career.currentSeasonSchedules, built once per season, current
+  // season only -- see buildScheduleResults/simulateLeagueStandings), with each game's stat line
+  // distributed from whichever QB actually played that week (applyStatLineToGames, tagged in
+  // simulateRivalSeasons/simulateDepthChartSeasons).
+  function renderOtherTeamScheduleTable(season, teamId){
+    const log = (career.currentSeasonSchedules && career.currentSeasonSchedules[teamId]) || [];
+    if(!log.length){
+      return `<div class="calc-refnote">No game-by-game log available for this team this season.</div>`;
+    }
+    const rows = log.map(g=>{
+      const qb = resolveScheduleQb(g.qbId);
+      const qbHtml = qb ? `<button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button>` : "—";
+      const oppName = svgEscape(teamNameAt(g.opponentId, season.year)) + (g.opponentId===career.teamId ? ` <span style="color:var(--ink-muted);">(you)</span>` : "");
+      return `<tr>
+        <td class="tabular">${g.week}</td>
+        <td>${oppName}<br><span style="color:var(--ink-muted);font-size:0.82em;">QB ${qbHtml}</span></td>
+        <td class="${g.won?"good":"bad"}"><b>${g.won?"W":"L"}</b> <span class="tabular">${g.myScore}-${g.oppScore}</span></td>
+        <td class="tabular">${g.comp}/${g.att}</td>
+        <td class="tabular">${g.yards}</td>
+        <td class="tabular">${g.td}</td>
+        <td class="tabular">${g.int}</td>
+      </tr>`;
+    }).join("");
+    const wins = log.filter(g=>g.won).length, losses = log.length-wins;
+    return `<div class="calc-refnote">${svgEscape(teamNameAt(teamId, season.year))}'s ${season.year} season — real results from the same shared league schedule simulation, with each game's stat line credited to whichever QB actually played that week. Record: <b>${wins}-${losses}</b>.</div>
+      <div class="table-wrap">
+        <table class="league-table">
+          <thead><tr><th>Wk</th><th>Opponent</th><th>Result</th><th class="tabular">C/A</th><th class="tabular">Yds</th><th class="tabular">TD</th><th class="tabular">INT</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+  // Schedule tab team picker -- mirrors the Trends-tab stat-picker pattern (trendsStatKey/
+  // renderTrendsSparkline): a module-level selection var, a <select> rebuilt on every render with
+  // the current selection marked, wired via the same delegated #careerContent listener the League
+  // tab's subtab/sort controls already use (see the `change` branch added there).
+  let scheduleTabTeamId = null;
+  let scheduleTabSeason = null;
+  function renderScheduleTabInner(){
+    const season = scheduleTabSeason;
+    const teamIds = divisionsForYear(season.year).flatMap(d=>d.teams);
+    const options = teamIds.map(id=>`<option value="${id}"${id===scheduleTabTeamId?" selected":""}>${svgEscape(teamNameAt(id, season.year))}${id===career.teamId?" (you)":""}</option>`).join("");
+    const body = scheduleTabTeamId===career.teamId ? renderOwnScheduleTable(season) : renderOtherTeamScheduleTable(season, scheduleTabTeamId);
+    return `<div class="schedule-team-picker"><label>Team <select id="scheduleTeamSelect" class="spk-select">${options}</select></label></div>${body}`;
+  }
+  function buildScheduleTabHTML(season){
+    scheduleTabSeason = season;
+    scheduleTabTeamId = career.teamId;
+    return `<div id="scheduleTabRoot">${renderScheduleTabInner()}</div>`;
   }
 
   function buildStandingsTabHTML(season){
@@ -6016,6 +6280,71 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <div><h4>${confLabel("AFC", season.year)} Playoff Seeds</h4>${seedList("AFC")}${divTables("AFC")}</div>
         <div><h4>${confLabel("NFC", season.year)} Playoff Seeds</h4>${seedList("NFC")}${divTables("NFC")}</div>
       </div>`;
+  }
+
+  // Renders one flat-resolved bracket's round-by-round matchups (see resolveFullBracketWithRounds)
+  // as a stack of small tables, one per round -- reuses roundDisplayLabel for the exact same
+  // era-correct "Wild Card"/"Divisional"/"Conference Championship" labels the player's own bracket
+  // already uses, keyed off the same internal literals (never changed, per CLAUDE.md).
+  function renderBracketRoundsHTML(rounds, year){
+    return rounds.map(r=>{
+      const rows = r.matchups.map(m=>{
+        const aWon = m.winnerId===m.aId;
+        const aName = svgEscape(teamNameAt(m.aId, year));
+        const bName = m.bId ? svgEscape(teamNameAt(m.bId, year)) : null;
+        return `<tr>
+          <td class="${aWon?"good":""}">${aWon?"<b>":""}#${m.aSeed} ${aName}${aWon?"</b>":""}</td>
+          <td>${bName ? `<span class="${!aWon?"good":""}">${!aWon?"<b>":""}#${m.bSeed} ${bName}${!aWon?"</b>":""}</span>` : `<span style="color:var(--ink-muted);">BYE</span>`}</td>
+        </tr>`;
+      }).join("");
+      return `<div class="standings-div"><div class="standings-div-name">${svgEscape(roundDisplayLabel(r.label, year))}</div><table class="standings-table"><tbody>${rows}</tbody></table></div>`;
+    }).join("");
+  }
+  // The player's own REAL playoff path (season.playoffs.rounds) -- shown instead of a matchup grid
+  // for their own conference whenever they made the playoffs, so there's never a discrepancy
+  // between what's displayed here and what they actually played through on the Season tab.
+  function renderMyPlayoffPathHTML(season){
+    const playoffs = season.playoffs;
+    if(!playoffs || !playoffs.rounds || !playoffs.rounds.length){
+      return `<div class="calc-refnote">Missed the playoffs this season.</div>`;
+    }
+    const rows = playoffs.rounds.map(r=>`<tr>
+        <td>${svgEscape(roundDisplayLabel(r.round, season.year))}</td>
+        <td>${svgEscape(r.opponent)}</td>
+        <td class="${r.won?"good":"bad"}"><b>${r.won?"W":"L"}</b> <span class="tabular">${r.myScore}-${r.oppScore}</span></td>
+      </tr>`).join("");
+    return `<div class="table-wrap"><table class="standings-table"><tbody>${rows}</tbody></table></div>`;
+  }
+  // Playoff Tree tab: a real, permanent champion for both conferences and the Super Bowl every
+  // season (see finalizeLeaguePlayoffBracket) -- previously nothing here was ever determined unless
+  // the player personally won it all. The player's own conference shows their real path when they
+  // made the playoffs (never a from-scratch re-simulation that could contradict what they actually
+  // played); the other conference always shows a full, real, independently-flat-resolved bracket
+  // since nobody real was ever in it to begin with.
+  function buildPlayoffTreeTabHTML(season){
+    const ls = season.leagueStandings;
+    const pb = ls && ls.playoffBracket;
+    if(!pb){
+      return `<div class="calc-refnote">This season's playoff bracket isn't decided yet — check back after your own playoff run (if any) finishes.</div>`;
+    }
+    const year = season.year;
+    const myConf = conferenceOf(career.teamId, year);
+    const otherConf = myConf==="AFC" ? "NFC" : "AFC";
+    function confSection(conf){
+      const b = pb[conf];
+      const body = b.rounds ? renderBracketRoundsHTML(b.rounds, year) : renderMyPlayoffPathHTML(season);
+      return `<div><h4>${confLabel(conf, year)}${conf===myConf?" (your conference)":""}</h4>
+          ${body}
+          <div class="calc-refnote">Conference Champion: <b>${svgEscape(teamNameAt(b.championId, year))}</b></div>
+        </div>`;
+    }
+    const sbWinnerName = svgEscape(teamNameAt(pb.superBowlWinnerId, year)), sbLoserName = svgEscape(teamNameAt(pb.superBowlLoserId, year));
+    return `<div class="standings-columns">
+        ${confSection(myConf)}
+        ${confSection(otherConf)}
+      </div>
+      <div class="section-label" style="margin-top:1.5rem;">${svgEscape(superBowlDisplayName(year))}</div>
+      <div class="calc-refnote">${sbWinnerName} def. ${sbLoserName}, <span class="tabular">${pb.superBowlScore}</span>${pb.superBowlWinnerId===career.teamId ? " — your Super Bowl!" : ""}</div>`;
   }
 
   // League-wide QB comparison: every other starting QB in the league (see generateLeagueRivals /
@@ -6776,6 +7105,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
               <button type="button" class="dash-tab active" data-tab="season">Season</button>
               <button type="button" class="dash-tab" data-tab="schedule">Schedule</button>
               <button type="button" class="dash-tab" data-tab="standings">Standings</button>
+              <button type="button" class="dash-tab" data-tab="playofftree">Playoff Tree</button>
               <button type="button" class="dash-tab" data-tab="league">League</button>
               <button type="button" class="dash-tab" data-tab="awards">Awards</button>
               <button type="button" class="dash-tab" data-tab="trends">Career Trends</button>
@@ -6813,6 +7143,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
           <div class="dash-tabpanel" id="tabpanel-schedule">${buildScheduleTabHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-standings">${buildStandingsTabHTML(season)}</div>
+          <div class="dash-tabpanel" id="tabpanel-playofftree">${buildPlayoffTreeTabHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-league">${buildLeagueTabHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-awards">${buildAwardCeremonyHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-trends">${buildTrendsTabHTML()}</div>
@@ -7263,6 +7594,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         // Champion award, the ring, and the reputation/GM/fan/popularity bumps that come with a
         // title actually land, since only now is any of that a real, played-out fact.
         finalizePlayoffOutcome(season);
+        // Same timing logic applies to the league-wide bracket record -- only now is the player's
+        // own conference outcome final. Refresh the Playoff Tree tab in place if it's already been
+        // rendered (its initial render, before this run finished, would have shown "not decided yet").
+        finalizeLeaguePlayoffBracket(season, season.playoffs);
+        const playoffTreePanel = document.getElementById("tabpanel-playofftree");
+        if(playoffTreePanel) playoffTreePanel.innerHTML = buildPlayoffTreeTabHTML(season);
       }
     }
 
@@ -8377,6 +8714,17 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
         leagueInactiveSortKey = key;
       }
       reRenderLeagueTables();
+    }
+  });
+
+  // Schedule tab's team picker -- same delegated-listener idiom as the League tab's subtab/sort
+  // controls above, on a `change` listener since it's a <select>, not a click target.
+  document.getElementById("careerContent").addEventListener("change", (e)=>{
+    const select = e.target.closest("#scheduleTeamSelect");
+    if(select){
+      scheduleTabTeamId = select.value;
+      const root = document.getElementById("scheduleTabRoot");
+      if(root) root.innerHTML = renderScheduleTabInner();
     }
   });
 

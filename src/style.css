@@ -862,6 +862,8 @@
     padding: 0.35rem 0.55rem; cursor: pointer;
   }
   .spk-select:focus-visible{ border-color: var(--field); }
+  .schedule-team-picker{ margin-bottom: 0.75rem; }
+  .schedule-team-picker label{ display:flex; align-items:center; gap: 0.5rem; font-family: var(--mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-muted); }
   .sparkline-wrap svg{ width: 100%; height: auto; display:block; }
   .trend-table-wrap{ margin-top: 1.5rem; }
 

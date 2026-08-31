@@ -944,6 +944,95 @@ that line to the front of the returned string instead. Verified via Playwright: 
 real seasons (so more than one transaction exists) and confirmed "— present day" renders as the
 FIRST line in the feed, not the last.
 
+### Round 20 — real per-team schedules, exact QB game attribution, league-wide playoff bracket
+
+Follow-up to Round 19 Part B: the user clarified a proportional win/loss split wasn't what they
+meant by "simulate every team's game" — `buildScheduleResults` already resolves a real, shared
+schedule game-by-game internally, but threw away everything except final win/loss counters. The ask:
+keep that per-game detail (a Schedule-tab dropdown to view ANY team's real week-by-week season, with
+the correct QB per game), and actually simulate every team's playoff run so a real Super Bowl winner
+exists every season, not just the ones the player wins personally.
+
+Two scope decisions confirmed with the user before building: (1) the new per-team game-by-game detail
+is CURRENT SEASON ONLY, not persisted forever (avoids ~32x storage growth per season compounding over
+a long career) — lives on a new, always-overwritten `career.currentSeasonSchedules`, never inside the
+`season` object `career.seasonLog` retains forever; (2) another team's QB's per-game stat line is the
+QB's already-calculated season aggregate distributed across his real games with natural variance, not
+a second, independently-calibrated per-game simulation engine.
+
+**Part A — real per-team, per-game log.** `buildScheduleResults`'s `playGame` closure now also
+pushes `{week, opponentId, won, myScore, oppScore}` into per-team `gameLogs` arrays (`week` = that
+team's own running game count, so every team gets a clean 1..gamesN sequence regardless of the
+randomized global resolution order). New `approxGameScore(winnerStrength, loserStrength)` fills in a
+plausible score for games where only two raw strength numbers exist (swept via
+`approx_score_sweep.mjs` for realistic NFL-ish ranges). `buildScheduleResults` returns
+`{results, gameLogs}`; `simulateLeagueStandings` stashes `gameLogs` onto `career.currentSeasonSchedules`
+(overwritten every season) while `results` keeps its existing cheap, forever-retained shape on
+`season.leagueStandings` unchanged.
+
+**Part B — exact per-game QB attribution, replacing Round 19 Part B's proportional split.**
+`simulateRivalSeasons` now tags the EXACT weeks on `career.currentSeasonSchedules[teamId]` a bench
+QB2 covered (a random contiguous block sized to the starter's real `missedGames` count) with
+`.qbId`, defaulting every other week to the starter — `chart.qb2._reliefWeeks` carries the exact
+slice reference so `simulateDepthChartSeasons` doesn't need to re-derive it. New
+`distributeAcrossGames(total, n)` (integer split across n games, natural variance, exact sum
+preserved) and `applyStatLineToGames(games, qbId, comp, att, yards, td, int)` (comp derived from
+each game's OWN attempts share so it can never exceed that game's attempts) turn a QB's season
+aggregate into a believable per-game log. New `reconcileWinLossFromGames(entity, season, games)`
+overwrites the season object's `wins/losses/winPct` (and fixes `entity.totals`) with an EXACT count
+from the real tagged games — `simulatePlayerSeasonStats` itself still rolls a placeholder win/loss
+internally (needed only to feed `evaluateSeasonAwards` before the caller knows which real games this
+entity covered) but that number is never what ends up displayed; the `teamRecord`-based proportional
+split from Round 19 Part B is gone entirely, along with the now-unused `leagueStandings` param on
+`simulateRivalSeasons`/`simulateDepthChartSeasons` (both read `career.currentSeasonSchedules`
+directly instead). Verified via a live data check: 27/27 teams' game logs matched their aggregate
+standings record exactly, and bench-relief QB win/loss matched his exact tagged games exactly.
+
+**Part C — Schedule tab: pick any team.** New `<select>` (module-level `scheduleTabTeamId`/
+`scheduleTabSeason`, mirroring the pre-existing Trends-tab stat-picker pattern) — the player's own
+team renders exactly as before from `season.gameLog` (`renderOwnScheduleTable`, untouched, still the
+more detailed sacks/rush-inclusive simulation); any other team renders from
+`career.currentSeasonSchedules[teamId]` (`renderOtherTeamScheduleTable`), resolving each game's QB
+via new `resolveScheduleQb(qbId)` (checks `findRivalById` then `findDepthChartPlayerById`). Wired
+through the same delegated `#careerContent` listener already used for League-tab subtabs/sorts, as a
+new `change` branch (selects don't fire `click`).
+
+**Part D — a real, permanent league-wide playoff bracket every season.** Confirmed via code reading:
+unless the player personally reached the Super Bowl, NOTHING recorded who actually won it — a
+season the player missed the playoffs had no bracket data at all beyond seeding, and even a season
+the player won it all only ever resolved the OTHER conference far enough to name a Super Bowl
+opponent, discarding the rest. New `resolveFullBracketWithRounds(seeds, format)` (unlike the
+pre-existing `resolveConferenceBracket`, which only ever records a round when `myTeamId` is actually
+in it — passing `"__none__"` there silently produces zero rounds) ALWAYS records every round's
+matchups via the flat `simpleWinProb` formula, reusing the exact same recursive bye/wildcard/
+divisional/conference-championship pairing shape. New `resolveRemainingBracketField(field)` finishes
+an in-progress bracket flat once the player's real run ends mid-bracket, so whoever beat them for
+real is always a valid path to conference champion, never a disconnected parallel universe. New
+`finalizeLeaguePlayoffBracket(season, myPlayoffs)` ties it together — called from `resolvePlayoffs`
+immediately when the player misses the playoffs (`myPlayoffs=null`), and from `finalizeRound`'s
+"whole run is done" branch (right alongside the pre-existing `finalizePlayoffOutcome` call) once the
+player's own reveal, if any, has fully finished — reaching a REAL, revealed Super Bowl round already
+means winning the conference for real, so that overrides the flat sim's guess for the player's own
+conference; the other conference's flat bracket always stands as-is. Stores
+`season.leagueStandings.playoffBracket = {[myConf]:{championId,rounds}, [otherConf]:{...},
+superBowlWinnerId, superBowlLoserId, superBowlScore}` — small (seeds/matchups/round winners only, no
+per-game logs), so unlike Part A's schedule detail this IS kept forever on every past season. New
+**Playoff Tree** dash-tab (`buildPlayoffTreeTabHTML`): the player's own conference shows their REAL
+path (`season.playoffs.rounds`, via `renderMyPlayoffPathHTML`) whenever they made the playoffs — the
+`rounds` field is deliberately left `null` in that case specifically so the UI never has to choose
+between two conflicting versions of the same conference; the other conference (and the player's own
+when they missed the playoffs entirely) shows the full flat bracket matchup-by-matchup via
+`renderBracketRoundsHTML`, reusing the existing `roundDisplayLabel`/`confLabel`/`superBowlDisplayName`
+era-aware wrappers and the exact same internal round-name literals everything else keys off. Verified
+live: a season the player missed the playoffs rendered a complete, real bracket with a genuine
+champion and Super Bowl winner; a season the player made the playoffs and was eliminated mid-bracket
+rendered their real path plus the correct real conqueror as conference champion.
+
+Full regression suite re-run clean (`pw_bugfix_regression`, `pw_partd_test`, `pw_presentday_test`,
+`pw_career_save`, `pw_rival_test`, `pw_depthchart_test` — the last one failed once in 4 runs on an
+assertion that assumes the first League-tab row is always a full rival, not a bench player, a
+pre-existing fragility unrelated to this round's changes).
+
 ### Round 19 — single-season parity, unified QB win/loss, Standings/League UI, era-aware rubberbanding
 
 Follow-up report after Round 18 shipped: screenshots showed ~8 of 32 teams at 12+ wins in a single
@@ -1182,7 +1271,10 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `forcedGames` param on `simulatePlayerSeasonStats` / `chart.qb2._reliefGames` (Round 18) — this is now the ONLY path by which a bench player gets a real season entry: `simulateDepthChartSeasons` skips the stats call entirely (just ages/develops) unless `_reliefGames>0`, which only `simulateRivalSeasons` ever sets (derived from the team's actual starter's own missed-games roll that season). A bench player's `.seasons` array being SHORTER than his real age/career length is correct and expected now — don't "fix" a bench player with gaps in his season history, that gap IS him not playing that year. QB3 NEVER gets `_reliefGames` (only qb2) — a future change that wants QB3 to ever play (e.g. QB2 also hurt) needs new logic, this doesn't fall out of the existing mechanism automatically.
 - `teamCompetitiveWindow(teamId)` / the age-based carve-outs in `buildFreeAgentOffers` (Round 16, Phase 4, the LAST phase of the QB-entity redesign — see Round 13-16 for the full arc) — `isYoungPlayer`/`isOldAccomplished` are computed from `career.age`/`tier` fresh at the top of `buildFreeAgentOffers`, not stored anywhere; don't try to read them from `career` elsewhere. The rebuild-youth carve-out (`rebuildYouthFit`) BYPASSES the normal `Math.abs(needRank-rank)>1` gate entirely and forces `role:"starter"` — if this function is ever restructured, keep that bypass explicit and early (before the normal gate check), not folded into the gate's own condition, or a future edit could silently narrow it back down without noticing. Every offer now carries a `reason` string — `renderFAOffers` already renders it via `.fa-offer-reason`; any NEW offer-construction path (there's currently only the one home re-sign + the one away-candidate loop) should set a `reason` too, or that offer will just render with no line there instead of erroring (the `o.reason ? ... : ""` guard is silent-safe, which means a missing reason is easy to miss in review — check for it explicitly).
 - `simpleWinProb(aStrength,bStrength)` (Round 19) — `0.5+(a-b)*0.006` clamped to `[0.10,0.90]`, tuned via `winprob_tune2.mjs` to keep a 31-team single season from producing the old formula's 7-8 teams at 12+ wins. This is the WITHIN-season schedule win-probability, separate from `contenderDeclinePull`/`rebuildPull`'s BETWEEN-season drift — don't conflate the two when retuning either.
-- `teamRecord` param on `simulatePlayerSeasonStats(entity, decade, league, year, forcedGames, teamRecord)` (Round 19) — rival/bench win-loss is now derived from the team's REAL `buildScheduleResults` record (`season.leagueStandings.results[entity.teamId]`), proportionally split by how many of the team's games this entity actually played, NOT an independent per-game coin flip. `simulateRivalSeasons`/`simulateDepthChartSeasons` both take `leagueStandings` as a 4th param now and look up the entity's own team's record before calling into `simulatePlayerSeasonStats` — any FUTURE caller of `simulatePlayerSeasonStats` for a rival/bench entity should pass this too, or that entity silently falls back to the old independent-roll formula (kept only as a should-never-fire safety net for a caller with no standings yet). `season.leagueStandings` is already set (inside `resolvePlayoffs`, which runs before `simulateRivalSeasons`/`simulateDepthChartSeasons` in `generateSeason()`'s existing call order) by the time these calls happen — don't reorder that.
+- ~~`teamRecord` param on `simulatePlayerSeasonStats`~~ **SUPERSEDED in Round 20** — the proportional-split approach this bullet described no longer exists. See the Round 20 notes below (`reconcileWinLossFromGames`/`career.currentSeasonSchedules`) for the current, exact-per-game-count mechanism.
 - `.team-ovr` / `teamOverall(id)` in `buildStandingsTabHTML` (Round 19) — reads the exact same `career.teamStrength`/`career.leagueStrength[id]` values `simpleWinProb` uses, so the Standings tab's displayed overall is always consistent with what's actually driving that team's win odds. `.seed-list li span{float:right}` predates this and would've broken the badge's layout — the fix is `.seed-list li span.team-ovr{float:none}`, keep that override if the seed-list markup is ever touched again.
 - `leagueActiveSortKey`/`leagueInactiveSortKey` + `LEAGUE_ACTIVE_SORTERS`/`LEAGUE_INACTIVE_SORTERS` + `reRenderLeagueTables()` (Round 19) — click-to-sort on the League tab's column headers, generalizing the pre-existing Trophy Room `TROPHY_ROOM_SORTERS` comparator-map idiom from external toggle buttons to `data-league-sort` attributes on `<th>` elements, wired into the SAME delegated `#careerContent` click listener that already handles `[data-rival-id]`/`[data-league-subtab]` (Round 12/18) — any future League-tab interactive element should follow this same one-listener pattern, not attach its own. `reRenderLeagueTables()` only replaces the two tables' `<tbody>` innerHTML (via `leagueTabSeason`, set at the top of `buildLeagueTabHTML`) specifically so a sort click never disturbs the active/inactive sub-tab toggle state or anything else on the card — a future column addition should update `LEAGUE_ACTIVE_SORTERS`/`LEAGUE_INACTIVE_SORTERS` and the `activeTh`/`inactiveTh` header calls together, or the new column simply won't be sortable.
 - `ERA_TEAM_VOLATILITY[decade]` (Round 19) — per-decade multiplier (0.55 in the 1960s ramping to 1.3 in the 2020s) on team-strength CHURN, mirroring the pre-existing `ERA_ATTR_MULT.injury` precedent. Applied at three call sites, all found by grepping this constant: the flat per-season noise + `contenderDeclinePull`/`rebuildPull` output in `generateSeason()`'s drift block, `rollLeagueNews`'s per-event `strengthDelta` roll, and `simulateRivalSeasons`' succession-nudge jump when a rival retires. It scales the RATE of churn, never a threshold (`CONTENDER_DECLINE_THRESHOLD`/`REBUILD_THRESHOLD` stay absolute across eras) — a future 4th churn source should be scaled by this same multiplier at its own call site, not by inventing a second era table. `CONTENDER_DECLINE_RATE`/`REBUILD_RATE` were also raised 0.22→0.32 and thresholds tightened 76/45→72/48 in this same round (stronger rubberbanding, on top of the era scaling) — re-verify with a fresh sweep before changing either further, same standing rule as Round 5/18's tuning of these same two functions.
+- `career.currentSeasonSchedules` (Round 20) — a real per-team, per-game log (`{week, opponentId, won, myScore, oppScore, qbId, comp, att, yards, td, int}` per game) for EVERY team in the league, built fresh every season by `buildScheduleResults`'s `playGame` closure and assigned wholesale in `simulateLeagueStandings`. Deliberately CURRENT-SEASON-ONLY and NOT part of the `season` object `career.seasonLog` retains forever — this is a top-level `career` field, overwritten (not accumulated) every season specifically to avoid a ~32x-per-season storage multiplier compounding over a long career (confirmed user decision, not an oversight). Any future feature wanting a past season's full league-wide schedule detail needs a fresh design decision (change what's persisted), not just a read off old data that was deliberately never kept. The player's OWN entry in this structure (`career.currentSeasonSchedules[career.teamId]`) is a throwaway artifact of the shared-schedule pass and is NEVER read back — the player's real per-game log is still `season.gameLog`, a separate, more detailed simulation (includes sacks/rush, which aren't modeled for any other team).
+- `applyStatLineToGames`/`distributeAcrossGames`/`reconcileWinLossFromGames` (Round 20) — the shared machinery that turns a QB's already-calculated season aggregate into a believable, EXACTLY-summing per-game log and corrects win/loss to match. Any future code that gives an entity a `forcedGames`-style partial season MUST call `reconcileWinLossFromGames` afterward (passing the exact games tagged to that entity) or its `season.wins/losses` will silently stay at `simulatePlayerSeasonStats`'s internal placeholder roll, which is deliberately NOT meant to be the displayed number anymore (see the note above where the old `teamRecord` param was removed). `chart.qb2._reliefWeeks` (set in `simulateRivalSeasons`, consumed and nulled in `simulateDepthChartSeasons`) is the pointer to exactly which of `career.currentSeasonSchedules[teamId]`'s entries belong to the bench QB this season — don't try to re-derive this slice independently elsewhere, use the stored reference so the starter's and bench's tagged games can never overlap or leave a gap.
+- `resolveFullBracketWithRounds(seeds, format)` / `resolveRemainingBracketField(field)` / `finalizeLeaguePlayoffBracket(season, myPlayoffs)` (Round 20) — a real, permanent champion for both conferences and the Super Bowl, every season, previously undetermined unless the player personally won it. `resolveFullBracketWithRounds` is DIFFERENT from the pre-existing `resolveConferenceBracket` (Round 5-era) — the old one only ever records a round when `myTeamId` is actually playing in it, so passing a sentinel like `"__none__"` silently produces zero rounds; the new one always records every matchup, which is what `finalizeLeaguePlayoffBracket` and the Playoff Tree tab actually need. `finalizeLeaguePlayoffBracket` has exactly two call sites and must keep having exactly those two: inside `resolvePlayoffs` (immediately, when `mySeedIdx===-1` — the player missing the playoffs is known instantly) and inside `finalizeRound`'s "whole run is done" branch, right alongside the pre-existing `finalizePlayoffOutcome(season)` call (the player making the playoffs isn't fully resolved until their own reveal, Key Moments included, actually finishes — same timing dependency `finalizePlayoffOutcome` already has). A future third path that can end a player's playoff involvement (there isn't one today) would need this call added too, or that season's `leagueStandings.playoffBracket` silently never gets set. Deliberate design choice, not an oversight: the player's own conference NEVER gets a from-scratch flat re-simulation once they've made the playoffs, even if they're eliminated early — `resolveRemainingBracketField` only continues resolving from the REAL point of elimination (after committing that round's real, possibly Key-Moment-swung result via `confirmRoundAdvancement` if it hasn't been already), so the team that beat the player for real is always a valid path to conference champion. This is also why `buildPlayoffTreeTabHTML`'s `[myConf].rounds` field is deliberately left `null` whenever the player made the playoffs — there is no full matchup-grid for their conference to show without contradicting their own real path (`season.playoffs.rounds`, rendered instead via `renderMyPlayoffPathHTML`); only when they missed the playoffs entirely does their conference get the same flat `rounds` grid the other conference always has.
