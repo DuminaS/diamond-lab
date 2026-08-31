@@ -818,6 +818,66 @@ advances without the player's OWN career ending first (a real, unrelated risk fo
 Playwright test in this game) — deterministic `Math.random()` mocking sidesteps that survival-bias
 problem entirely rather than fighting it with more retries.
 
+### Round 15 (Phase 3 of 4) — universal boom/bust talent development, harsher decline past prime
+
+Third phase of the QB-entity redesign, and per user correction to the original plan: applies to
+EVERY QB entity (starters and bench alike, not bench-only), but boom/bust activity itself only
+happens while young — past that cutoff it stops (a small ordinary plateau drift continues for a few
+more years) and age-driven decline gets meaningfully harsher, scaled by era and a new per-entity
+durability proxy, exactly per the user's own framing: "every QB... but the boom or bust mechanic
+should only be happening when the player is still young... age/injury decline should be harsher,
+especially for older eras (dependent on durability)."
+
+**New `developEntityTalent(entity, decade)`**, called from both `simulateRivalSeasons` and
+`simulateDepthChartSeasons` right after `simulatePlayerSeasonStats` each season — mirrors the
+player's OWN `career.devSpeed`/`developAttributes` boom/bust system, but at a single-scalar
+(`entity.talent`) scale instead of a 12-attribute build, since a rival/bench entity only has one
+number to develop. New per-entity fields `entity.devSpeed` (mirrors `career.devSpeed`, via the SAME
+`rollDevSpeed()`) and `entity.durability` (a new lightweight 20-99 proxy — rivals don't have a full
+attribute build, so this is a standalone stat, not part of one) are rolled LAZILY on first read
+inside this function (`entity.devSpeed==null` / `entity.durability==null` checks) rather than at
+every one of the many rival/bench creation sites — this is the self-heal-on-read pattern from this
+session's earlier fixes, applied here so an existing save never needs migrating.
+
+Three age bands, `TALENT_DEV_YOUNG_CUTOFF=27` / `TALENT_DEV_DECLINE_START=32`:
+- **Young (<=27):** smooth per-season drift scaled by `devSpeed`, plus a rare (devSpeed-volatility-
+  scaled, same shape as the player's `devVolatility`) capped-at-2 breakout/bust-spiral swing that
+  ALSO permanently shifts `devSpeed` itself — a breakout compounds into faster growth for his
+  remaining young seasons, a bust-spiral compounds the opposite way, identical spirit to the
+  player's own system.
+- **Plateau (28-31):** a small ordinary drift either way, but no more career-defining swings — this
+  is the literal "can still develop and regress but the idea of booming or busting sorta stops" the
+  user asked for.
+- **Decline (32+):** `entity.talent` erodes each season, scaled by `ERA_ATTR_MULT[decade].injury`
+  (the EXISTING per-era severity multiplier, reused rather than reinvented) and by
+  `(99-entity.durability)` — a low-durability guy in a rougher era declines harder past his prime
+  than a high-durability one in a modern era. Deliberately implemented as a permanent erosion of the
+  RAW `entity.talent` value (inside this new function, which already has `decade` in scope) rather
+  than as a change to `rivalEffTalent`'s age-EXPRESSION curve — `rivalEffTalent` and the
+  `primeMultiplier` it shares with the player's own `effOverall` calculation are both left
+  completely untouched, so this cannot accidentally alter how the PLAYER's own build ages. This
+  mirrors the exact same separation of concerns the player's own system already has (development
+  changes the build; the prime curves only change how much of a FIXED build expresses at a given
+  age).
+
+Both the young-phase drift and the decline-phase severity were swept BEFORE shipping
+(`talent_dev_sweep.mjs`): a representative talent=60 prospect sees a median +8.4 drift from age
+22→27 with a real (13.7%) minority swinging 15+ points either direction; decline severity was swept
+across durability × era combinations, confirming a genuinely harsher gradient for low-durability
+players in rougher eras (1960s/dur=20 falls ~15.6 points by 40 vs. 2020s/dur=90's ~3.8) without
+anyone collapsing to the floor outright in even the harshest combination.
+
+Verified via a controlled pure-Node extraction (`phase3_extract.js`, same deterministic
+`Math.random()`-mocking approach as Phase 2, for the same career-survival-confound reason): confirmed
+`devSpeed`/`durability` self-heal correctly on first read; confirmed a forced breakout meaningfully
+raises both talent and `devSpeed` permanently; confirmed NO breakout/bust swings ever fire past the
+young cutoff regardless of how high `devSpeed` is (a would-be-constant-swinger simply stops swinging
+on schedule); and confirmed the durability/era decline gradient holds across 3000-trial averages. All
+prior regression suites re-run clean (the handful of failures across the run — the pre-existing
+FA-offer-candidate flakiness, the news-feed test's own naive fixed-name-list false positive, and one
+instance of the Phase 1 merit-override's expected ~15-20% miss rate within its 8-season test window —
+are all previously-documented, unrelated artifacts, not regressions from this phase).
+
 ### Round 4 — difficulty/realism overhaul, all 3 items shipped
 Triggered by user feedback on the Round 3 build: a 63-overall QB was posting 4,721 yards / 39 TD / 104.7 rating, and a 42-overall team was shown beating a 73-overall team in the conference championship, then facing (and being competitive with) a 96-overall team in the Super Bowl. Three asks: (a) tighten stat production further, (b) make team grade matter much more so lopsided upsets are "very very rare," (c) redesign player development to have boom/bust potential instead of smooth linear progression — explicitly flagged by the user as something to brainstorm together, not implement unilaterally. For item (c), presented 4 concrete mechanic options to the user via AskUserQuestion; the user selected all 4 (rare breakout events, real bust/plateau paths, volatility tied to dev-speed tag, dev speed shifting mid-career) — synthesized into one unified system rather than four bolted-on mechanics (see item 3 below).
 
@@ -918,3 +978,4 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `promoteQb2()` / the merit-override branch in `evaluateSuccession` (Round 13, Phase 1) — a NARROW, deliberate exception to the Round 6 rule above ("never let a bench player's stats reach any pooling site"): `computeSeasonAwardRows()` now DOES show a bench player who actually played (`games>0`) on the League tab. This is visibility only — their `awards` field is still computed-but-never-GRANTED, since `resolveSeasonMVP`/`resolveSeasonAllProAndProBowl` are UNTOUCHED and still only ever read `career.leagueRivals`. Don't let a future change accidentally route bench stats into either of those two functions — that's the actual invariant Round 6 was protecting, not "bench players can never be displayed anywhere." The merit-override's `MERIT_GAP_OVERRIDE=16`/`MERIT_OVERRIDE_PROB=0.28` pair was swept (`merit_override_sweep.mjs`) against the SAME ~20-events/15-years baseline the normal succession odds were calibrated to (see the Round 6 note above) — any future change to either number should be re-swept the same way, not shipped on instinct, for the same reason Round 6 got burned once already.
 - This is Phase 1 of a larger 4-phase redesign (bench mobility/trades/free-agent portal, universal boom/bust talent development, free-agency team-fit realism) — see the plan doc referenced in this round's log entry for the full scope and design rationale before starting Phase 2, rather than re-deriving it from scratch.
 - `career.freeAgentPool` / `enterFreeAgentPool(entity, reason)` / `resolveFreeAgentPool(decade, year)` / `evaluateBenchMobility(teamId, decade, year)` / `tradeBenchPlayer(...)` / `pickBenchSigningDestination(entity, year)` (Round 14, Phase 2) — `enterFreeAgentPool` is the ONE choke point for "a QB just lost his job": any FUTURE displacement site (a new team-change event, a new succession branch) MUST route through it rather than setting `retired=true` directly, or that QB silently skips the pool and the whole mobility system has a hole. It's a no-op pass-through to a plain retirement for anyone not `rivalEffTalent>=50`/under `retireAge` — don't lower that bar without re-running `pool_size_sweep.mjs`, since it's what keeps the pool from filling with replacement-level scrubs. `resolveFreeAgentPool` iterates a SNAPSHOT (`.slice()`) of the pool, not the live array, specifically because a mid-pass bench-slot sign can itself call `enterFreeAgentPool` (displacing that slot's incumbent) — reassigning `career.freeAgentPool` from a plain forEach accumulator at the end would silently drop that new arrival; it filters the LIVE array against a `toRemove` Set instead. `pool_hazard_sweep.mjs`'s finding is the one to remember if this ever needs re-tuning: a FLAT per-season retirement hazard cannot be both "low right after a cut" and "near-certain after a few years" at once — this needs the direct `clamp(A*n^POWER, 0, CAP)` shape (currently A=0.05, POWER=2), not a cumulative survival-curve hazard.
+- `developEntityTalent(entity, decade)` / `entity.devSpeed` / `entity.durability` (Round 15, Phase 3) — called from BOTH `simulateRivalSeasons` and `simulateDepthChartSeasons`, right after `simulatePlayerSeasonStats`, for every entity (never bench-only, per an explicit user correction to the original 4-phase plan). Deliberately modifies the RAW `entity.talent` value, never `rivalEffTalent`/`primeMultiplier` — those stay the exact same curve the player's own `effOverall` shares, so this can never accidentally change how the PLAYER's own build ages. `TALENT_DEV_YOUNG_CUTOFF=27`/`TALENT_DEV_DECLINE_START=32` are the two age bands to know about: boom/bust swings (capped at 2 per entity, same as the player's `_breakoutCount<2`) ONLY happen at or below 27 — a future change that needs "does boom/bust still apply" logic elsewhere should key off this same constant, not re-derive its own age threshold. Past 32, decline severity depends on `ERA_ATTR_MULT[decade].injury` (reused, not reinvented) and `entity.durability` — any future re-tuning of either the young-drift or decline-severity dials needs a fresh `talent_dev_sweep.mjs`-style pass first (the standing rule), specifically checking that (a) most young prospects still land near a modest positive median drift with only a real minority swinging hard, and (b) nobody collapses to the floor by their late 30s even in the worst durability/era combination.

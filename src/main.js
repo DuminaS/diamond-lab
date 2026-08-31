@@ -3520,6 +3520,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         return;
       }
       simulatePlayerSeasonStats(r, decade, league, year);
+      developEntityTalent(r, decade);
     });
   }
 
@@ -3546,8 +3547,56 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           return;
         }
         simulatePlayerSeasonStats(p, decade, league, year);
+        developEntityTalent(p, decade);
       });
     });
+  }
+
+  /* ----- Phase 3 of the QB-entity redesign: universal boom/bust talent development while young,
+     tapering to a harsher, era/durability-scaled decline past prime -- applies to every entity
+     (starters AND bench), mirroring the player's own career.devSpeed/developAttributes system at a
+     single-scalar (entity.talent) scale instead of a 12-attribute build. Boom/bust activity itself
+     stops once "young" ends -- past that, only a small ordinary plateau drift happens for a few
+     years, then real decline. entity.devSpeed/durability are rolled once, lazily, on first read
+     here (not at every creation site) so an existing save missing them just gets them the first
+     time this runs -- same self-heal-on-read spirit as this session's other new-field additions. */
+  const TALENT_DEV_YOUNG_CUTOFF = 27, TALENT_DEV_DECLINE_START = 32;
+  // Calibrated via talent_dev_sweep.mjs before shipping: young-phase (22->27) drift on a
+  // representative talent=60 prospect lands a median +8.4, with a real (13.7%) minority swinging
+  // 15+ points either way -- most players develop as expected, a genuine few boom or bust.
+  // Decline-phase (32->40) severity was swept across durability x era combinations, confirming a
+  // real, harsher gradient for low-durability players in rougher eras (e.g. 1960s/dur=20 falls
+  // ~15.6 points by 40 vs. 2020s/dur=90's ~3.8) without anyone collapsing to the floor outright.
+  function developEntityTalent(entity, decade){
+    if(entity.devSpeed==null) entity.devSpeed = rollDevSpeed();
+    if(entity.durability==null) entity.durability = clamp(Math.round((Math.random()+Math.random()+Math.random())/3*79)+20, 20, 99);
+    if(entity.age<=TALENT_DEV_YOUNG_CUTOFF){
+      const baseDrift = clamp(2.4 - (entity.age-22)*0.4, 0, 2.4);
+      const variance = 0.8 + Math.random()*0.4;
+      entity.talent = clamp(entity.talent + baseDrift*entity.devSpeed*variance, 15, 99);
+      // Rare career-defining swing, capped at 2 (matches the player's own _breakoutCount<2 cap) --
+      // also permanently shifts devSpeed itself, so a breakout compounds into more/faster growth
+      // for his remaining young seasons, and a bust-spiral compounds the opposite way.
+      const swingChance = clamp(0.035 + Math.abs(entity.devSpeed-1.0)*0.15, 0.035, 0.2);
+      if((entity._breakoutCount||0)<2 && Math.random()<swingChance){
+        const isBreakout = Math.random()<clamp(0.5+(entity.devSpeed-1.0)*0.5, 0.15, 0.85);
+        const magnitude = 8+randInt(0,10);
+        entity.talent = clamp(entity.talent + (isBreakout?magnitude:-magnitude), 15, 99);
+        entity.devSpeed = clamp(entity.devSpeed + (isBreakout?1:-1)*(0.15+Math.random()*0.1), 0.25, 1.8);
+        entity._breakoutCount = (entity._breakoutCount||0)+1;
+      }
+    } else if(entity.age<TALENT_DEV_DECLINE_START){
+      // Quiet plateau: still a little ordinary drift either way, but no more career-defining
+      // swings -- matches the user's own framing ("can still develop and regress but the idea of
+      // booming or busting sorta stops").
+      entity.talent = clamp(entity.talent + randInt(-1,1), 15, 99);
+    } else {
+      const eraMult = (ERA_ATTR_MULT[decade]||{}).injury || 1;
+      const durFactor = (99-entity.durability)/99;
+      const declineRate = 0.4 + durFactor*1.0;
+      const variance = 0.85 + Math.random()*0.3;
+      entity.talent = clamp(entity.talent - declineRate*eraMult*variance, 15, 99);
+    }
   }
 
   /* ----- Phase 2 of the QB-entity redesign: real bench mobility and a free-agent pool. A bench
