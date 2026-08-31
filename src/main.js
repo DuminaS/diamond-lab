@@ -2832,7 +2832,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       </div>`;
   }
   function openRivalProfile(rivalId){
-    const rival = findRivalById(rivalId);
+    // A League-tab row can now be a bench player (see computeSeasonAwardRows) -- their id is
+    // "bqb_..." and they live in career.leagueDepthCharts, not career.leagueRivals, so fall back
+    // to findDepthChartPlayerById. Both share the exact same object shape (generateBenchPlayer
+    // mirrors the rival object literal), so buildRivalProfileHTML needs no changes either way.
+    const rival = findRivalById(rivalId) || findDepthChartPlayerById(rivalId);
     const overlay = document.getElementById("rivalProfileOverlay");
     if(!rival || !overlay) return;
     overlay.innerHTML = buildRivalProfileHTML(rival);
@@ -3556,11 +3560,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // seasons in real gameplay. Corrected via a 30-team/15-year pure-math sweep before re-shipping
     // (see PROGRESS.md); the "survives -- signs an extension" branch below is the actual fix.
     const declinedSharply = rivalEffTalent(rival) <= rival.talent-15;
-    if(stillEntrenched && !declinedSharply) return;
     const qb2 = chart.qb2;
     const teamName = teamNameAt(teamId, year);
-    if(qb2 && !qb2.retired && rivalEffTalent(qb2) >= rivalEffTalent(rival)-5 && Math.random()<0.22){
-      // Internal promotion: the kid they've been developing (or the steady backup) wins the job.
+    // Internal promotion: the kid they've been developing (or the steady backup) wins the job.
+    // Extracted so both the normal post-entrenchment path below AND the merit-override path just
+    // beneath it share one implementation instead of duplicating the promotion mechanics.
+    function promoteQb2(flavor){
       const oldName = rival.name;
       rival.retired = true;
       const promoted = { ...qb2, contract: rollRivalContract(decade, qb2.talent), entrenchedYears: rollEntrenchedYears(qb2.talent) };
@@ -3568,8 +3573,26 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       chart.qb2 = generateBenchPlayer(teamId, decade, year, career.leagueStrength[teamId] ?? 60, Math.random()<0.4);
       const delta = randInt(-3,6);
       career.leagueStrength[teamId] = clamp((career.leagueStrength[teamId]??60)+delta, 20, 96);
-      career.leagueNewsLog.push({ year, teamId, title:"Backup Wins the Starting Job", delta,
-        flavor:`${teamName} bench ${oldName} in favor of ${promoted.name}, who'd been waiting for exactly this shot.` });
+      career.leagueNewsLog.push({ year, teamId, title:"Backup Wins the Starting Job", delta, flavor: flavor(oldName, promoted.name) });
+    }
+    if(stillEntrenched && !declinedSharply){
+      // Merit override: a genuinely dominant bench QB can still win the job even while the
+      // incumbent is mid-contract -- real teams don't sit a clearly-better arm for years just
+      // because of a depth-chart pecking order. Requires a MUCH bigger gap than the normal
+      // post-entrenchment promotion check below (16 vs. that check's "-5"), so this stays a rare
+      // "won it in camp" upset, not the usual way a job changes hands. Calibrated via a pure-math
+      // sweep (merit_override_sweep.mjs): at gap>=16/28% odds, a team that actually qualifies
+      // resolves within ~2-3 seasons on average, and league-wide this adds only a handful of
+      // events per 15 years -- a clear minority of the ~20-event baseline the normal succession
+      // system was itself calibrated to (see the entrenchment-miscalibration note above).
+      const MERIT_GAP_OVERRIDE = 16, MERIT_OVERRIDE_PROB = 0.28;
+      if(qb2 && !qb2.retired && rivalEffTalent(qb2)-rivalEffTalent(rival)>=MERIT_GAP_OVERRIDE && Math.random()<MERIT_OVERRIDE_PROB){
+        promoteQb2((oldName,newName)=>`${teamName} can't justify sitting ${newName} behind ${oldName} any longer — he simply won the job in camp.`);
+      }
+      return;
+    }
+    if(qb2 && !qb2.retired && rivalEffTalent(qb2) >= rivalEffTalent(rival)-5 && Math.random()<0.22){
+      promoteQb2((oldName,newName)=>`${teamName} bench ${oldName} in favor of ${newName}, who'd been waiting for exactly this shot.`);
     } else if(Math.random()<0.15){
       // External signing: a veteran from outside the sim takes over instead of anyone already on the depth chart.
       const oldName = rival.name;
@@ -5686,8 +5709,36 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       rows.push({ name:r.name, teamId:r.teamId, age:s.age, mine:false, att:s.att, pct:s.pct,
         yards:s.yards, td:s.td, int:s.int, rating:s.rating, awards:s.awards, isRival:r.isRival, id:r.id });
     });
+    // A bench player who actually started games this season (games>0 -- simulatePlayerSeasonStats
+    // rolls a missed-games chance for everyone, so most seasons ARE 0-game no-ops here) is now
+    // visible on the leaderboard too, just like a real backup who got spot starts would show up in
+    // real stats. Their `awards` are computed but deliberately never GRANTED (resolveSeasonMVP/
+    // resolveSeasonAllProAndProBowl only ever read career.leagueRivals, untouched by this) -- this
+    // only adds visibility, it doesn't let a bench player actually win an award.
+    Object.keys(career.leagueDepthCharts||{}).forEach(teamId=>{
+      const t = TEAMS.find(x=>x.id===teamId);
+      if(t && t.start>year) return;
+      const chart = career.leagueDepthCharts[teamId];
+      ["qb2","qb3"].forEach(slot=>{
+        const p = chart[slot];
+        if(!p) return;
+        const s = p.seasons.find(x=>x.year===year);
+        if(!s || !(s.games>0)) return;
+        rows.push({ name:p.name, teamId:p.teamId, age:s.age, mine:false, att:s.att, pct:s.pct,
+          yards:s.yards, td:s.td, int:s.int, rating:s.rating, awards:s.awards, isBench:true, id:p.id });
+      });
+    });
     rows.sort((a,b)=> b.rating-a.rating);
     return rows;
+  }
+  function findDepthChartPlayerById(id){
+    if(!career.leagueDepthCharts || !id) return null;
+    for(const teamId of Object.keys(career.leagueDepthCharts)){
+      const chart = career.leagueDepthCharts[teamId];
+      if(chart.qb2 && chart.qb2.id===id) return chart.qb2;
+      if(chart.qb3 && chart.qb3.id===id) return chart.qb3;
+    }
+    return null;
   }
 
   // ----- End-of-season Award Ceremony: names the year's MVP, All-Pros, and Pro Bowlers. All three
