@@ -3832,7 +3832,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     spawnNewFranchiseRivals(career.year);
     simulateRivalSeasons(decade, league, career.year);
     simulateDepthChartSeasons(decade, league, career.year);
-    TEAMS.filter(t=>t.id!==career.teamId).forEach(t=> evaluateSuccession(t.id, decade, career.year));
+    TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateSuccession(t.id, decade, career.year));
     // Winner-take-all MVP (see resolveSeasonMVP) and fixed-slot Pro Bowl/All-Pro (see
     // resolveSeasonAllProAndProBowl): both decided once, here, after every QB in the league -- the
     // player and every simulated rival -- has this year's season locked in.
@@ -4480,7 +4480,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     }
     // A handful of OTHER teams (never the player's own -- that's ORG_EVENTS' job) get a headline
     // this season, each independently, so most seasons feel different but no two feel alike.
-    const others = TEAMS.filter(t=>t.id!==career.teamId);
+    // t.start<=year excludes a team that hasn't joined the league yet -- this was the third
+    // unguarded `TEAMS.filter(t=>t.id!==career.teamId)` site found (after generateLeagueRivals and
+    // computeSeasonAwardRows), the exact cause of "Around the League" showing a headline for the
+    // Houston Texans in a 1960s-decade career.
+    const others = TEAMS.filter(t=>t.id!==career.teamId && t.start<=year);
     others.forEach(t=>{
       if(Math.random()>=0.1) return;
       const ev = pickWeighted();
@@ -4490,7 +4494,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     });
   }
   function buildLeagueNewsFeedHTML(){
-    const log = career.leagueNewsLog || [];
+    // Display-boundary guard (same pattern as computeSeasonAwardRows): an already-corrupted save
+    // from before the write-time filter above existed can still have a logged entry for a team
+    // that hadn't joined the league yet as of that entry's OWN year -- filter those out here too,
+    // so this is never visible regardless of when a save got corrupted.
+    const log = (career.leagueNewsLog || []).filter(n=>{
+      const t = TEAMS.find(x=>x.id===n.teamId);
+      return !(t && t.start>n.year);
+    });
     if(!log.length) return `<div class="feed-wrap"><div class="feed-empty">No league news yet — check back after your rookie season.</div></div>`;
     const recent = log.slice(-16).reverse();
     const rows = recent.map(n=>`<div class="feed-line ${n.delta>=0?"good":"bad"}"><span class="feed-year tabular">${n.year}</span><span class="feed-text"><b>${svgEscape(teamNameAt(n.teamId, n.year))}</b> — ${svgEscape(n.title)} (${fmtDelta(n.delta)}). ${svgEscape(n.flavor)}</span></div>`).join("");
