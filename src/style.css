@@ -907,6 +907,12 @@
      any scaling at all; this is the safety net for anyone still narrower than that. */
   .bracket-wrap svg{ max-width: 100%; height: auto; }
   .bracket-wrap svg{ display:block; }
+  /* The combined Playoff Tree bracket (both conferences + Super Bowl in one SVG) is genuinely wide
+     -- render it at a real, legible minimum size and let the wrapper scroll horizontally instead of
+     shrinking text down to illegibility on a narrow screen. */
+  .full-bracket-wrap{ max-width: 100%; }
+  .full-bracket-wrap svg{ max-width: none; min-width: 640px; width: auto; height: auto; margin: 0 auto; }
+  .bracket-conf-labels{ display:flex; justify-content:space-between; font-family: var(--mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-muted); margin-bottom: 0.4rem; }
   .bracket-team-name{ font-family: var(--mono); font-size: 11px; fill: var(--ink); }
   .bracket-team-name.me{ fill: var(--field); font-weight: 700; }
   .bracket-team-name.good{ fill: var(--good); font-weight: 700; }
@@ -918,6 +924,7 @@
      tree renderers -- one visual system now, for every conference, every era). ---------- */
   .playoff-node-rect{ fill: var(--surface); stroke: var(--line-strong); stroke-width: 1; }
   .playoff-node.mine .playoff-node-rect{ stroke: #d4af37; stroke-width: 2; filter: drop-shadow(0 0 4px rgba(212,175,55,0.5)); }
+  .playoff-node-divider{ stroke: var(--line-strong); stroke-width: 1; opacity: 0.5; }
   .playoff-node.clickable{ cursor: pointer; }
   .playoff-node.clickable:hover .playoff-node-rect{ stroke: var(--field); }
   .bracket-connector{ stroke: #2a3b4c; stroke-width: 1.5; }

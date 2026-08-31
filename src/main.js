@@ -6535,67 +6535,161 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // round near the center) without changing the chronological processing order -- this is what
   // lets the "other" conference converge toward a center Super Bowl from the opposite direction of
   // "my" conference, while still bookkeeping seed positions in real (round 0 first) order.
-  function renderPlayoffTreeSVG(rounds, year, conf, mirrored){
-    if(!rounds.length) return "";
-    const boxW = 122, boxH = 46, rowGap = 14, colGap = 46, colW = boxW + colGap;
-    const topPad = 24, leftPad = 10;
-    // Every seed's stable INITIAL vertical "home" position, standard bracket-layout technique --
-    // this is what makes a later round's box land exactly centered between the two seeds/boxes
-    // that feed it (the previous version just stacked boxes top-to-bottom per round regardless of
-    // who fed them, which is what produced misaligned boxes and connectors that had to travel far
-    // and cut across other boxes -- both reported bugs).
+  // Short, fixed-width column headers for the bracket SVG specifically -- "Conference Championship"
+  // at full length is wide enough to overflow a single column's width, which (see the Round 28 note
+  // below) is exactly what made the two conferences' rightmost labels visually collide into each
+  // other back when they were two separate side-by-side SVGs. roundDisplayLabel (used everywhere
+  // else -- box score modal titles, etc.) is untouched; this is purely a bracket-header shortening.
+  function shortRoundLabel(label){
+    if(label==="Conference Championship") return "CONF. CHAMPIONSHIP";
+    return String(label).toUpperCase();
+  }
+  // Seed-midpoint layout for ONE conference's column of rounds, same technique as before (every
+  // seed gets a stable initial vertical slot; each later round's box Y is the average of its two
+  // feeding seeds' current Y) PLUS a new overlap-repair pass: after computing each round's natural
+  // Y values, sort them and push any pair closer together than one box-height+gap apart, guarantee-
+  // ing two boxes in the same column can never visually clip into each other regardless of how the
+  // seed math lands (the actual root cause of the reported "blocks clip into each other" bug --
+  // upstream seed tracking can legitimately produce two matchups landing very close together when a
+  // bye is involved, and the old renderer had nothing to catch that). Returns per-round arrays of Y
+  // values (in "local" units, not yet offset into the shared canvas -- renderFullPlayoffTreeSVG
+  // aligns every conference's values into one coordinate space afterward).
+  function layoutBracketColumn(rounds, boxH, rowGap){
     const allSeeds = new Set();
     rounds.forEach(r=>r.matchups.forEach(m=>{ if(m.aSeed!=null) allSeeds.add(m.aSeed); if(m.bSeed!=null) allSeeds.add(m.bSeed); }));
     const seedList = Array.from(allSeeds).sort((a,b)=>a-b);
-    const seedPos = {}; seedList.forEach((seed,i)=>{ seedPos[seed] = topPad + 16 + i*(boxH+rowGap); });
-    const fallbackY = topPad+16;
-    let prevIdPos = {}; // teamId -> {x,y} as of the last round they appeared in, for connectors
-    const boxesHtml = [], connectorsHtml = [];
-    let maxY = topPad;
-    rounds.forEach((round, roundIdx)=>{
-      const displayColIdx = mirrored ? (rounds.length-1-roundIdx) : roundIdx;
-      const x = leftPad + displayColIdx*colW;
-      boxesHtml.push(`<text x="${x+boxW/2}" y="${topPad-8}" text-anchor="middle" class="bracket-round-label">${svgEscape(roundDisplayLabel(round.label, year))}</text>`);
-      const nextIdPos = {};
-      round.matchups.forEach((m, matchIdx)=>{
-        const aY = m.aSeed!=null && seedPos[m.aSeed]!=null ? seedPos[m.aSeed] : fallbackY;
+    const seedPos = {}; seedList.forEach((seed,i)=>{ seedPos[seed] = i*(boxH+rowGap); });
+    const minGap = boxH+rowGap;
+    return rounds.map(round=>{
+      const ys = round.matchups.map(m=>{
+        const aY = m.aSeed!=null && seedPos[m.aSeed]!=null ? seedPos[m.aSeed] : 0;
         const bY = m.bSeed!=null && seedPos[m.bSeed]!=null ? seedPos[m.bSeed] : null;
         const y = bY!=null ? (aY+bY)/2 : aY;
-        maxY = Math.max(maxY, y+boxH/2);
-        const decided = m.winnerId!=null && m.bId!=null;
-        const aWon = decided && m.winnerId===m.aId, bWon = decided && m.winnerId===m.bId;
-        const aMine = m.aId===career.teamId, bMine = m.bId===career.teamId;
-        boxesHtml.push(`<g class="playoff-node${decided?" clickable":""}"${decided?` data-bracket-conf="${conf}" data-bracket-round-idx="${roundIdx}" data-bracket-match-idx="${matchIdx}"`:""}>
-            <title>${svgEscape(teamNameAt(m.aId, year))}${m.bId?` vs ${svgEscape(teamNameAt(m.bId, year))}`:""}</title>
-            <rect x="${x}" y="${y-boxH/2}" width="${boxW}" height="${boxH}" rx="7" class="playoff-node-rect${aMine||bMine?" mine":""}"/>
-            <text x="${x+8}" y="${y-7}" class="bracket-team-name${aWon?" good":""}${decided&&!aWon?" eliminated":""}">${m.aSeed!=null?`#${m.aSeed} `:""}${svgEscape(m.aId)}${decided?` <tspan class="bracket-score">${m.aScore}</tspan>`:""}</text>
-            <text x="${x+8}" y="${y+15}" class="bracket-team-name${bWon?" good":""}${decided&&!bWon?" eliminated":""}">${m.bId ? `${m.bSeed!=null?`#${m.bSeed} `:""}${svgEscape(m.bId)}${decided?` <tspan class="bracket-score">${m.bScore}</tspan>`:""}` : `<tspan class="bracket-bye">BYE</tspan>`}</text>
-          </g>`);
         if(m.aSeed!=null) seedPos[m.aSeed] = y;
         if(m.bSeed!=null) seedPos[m.bSeed] = y;
-        if(m.aId!=null) nextIdPos[m.aId] = { x, y };
-        if(m.bId!=null) nextIdPos[m.bId] = { x, y };
-        // Clean right-angle "elbow" connectors (horizontal out of the source box, vertical in the
-        // gap between columns, horizontal into the destination box) instead of a smooth bezier --
-        // an elbow can never visually cut across an intervening box the way a diagonal curve did,
-        // since its only vertical segment sits entirely within the empty gap between columns.
-        [m.aId, m.bId].forEach(id=>{
-          const prev = id!=null ? prevIdPos[id] : null;
-          if(prev){
-            const sourceIsLeft = prev.x < x;
-            const x1Edge = sourceIsLeft ? prev.x+boxW : prev.x;
-            const x2Edge = sourceIsLeft ? x : x+boxW;
-            const midX = (x1Edge+x2Edge)/2;
-            const won = m.winnerId===id;
-            connectorsHtml.push(`<path d="M${x1Edge},${prev.y} H${midX} V${y} H${x2Edge}" class="bracket-connector${won?" won":""}" fill="none"/>`);
-          }
-        });
+        return y;
       });
-      prevIdPos = nextIdPos;
+      const order = ys.map((y,i)=>({i,y})).sort((a,b)=>a.y-b.y);
+      for(let k=1;k<order.length;k++){ if(order[k].y < order[k-1].y+minGap) order[k].y = order[k-1].y+minGap; }
+      order.forEach(o=>{ ys[o.i] = o.y; });
+      return ys;
     });
-    const w = leftPad*2 + rounds.length*boxW + Math.max(0,rounds.length-1)*colGap;
-    const h = Math.max(maxY+12, topPad+boxH+12);
-    return `<div class="bracket-wrap"><svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Playoff bracket">
+  }
+  // Round 28 rewrite: previously each conference rendered as its OWN separate <svg>, side by side
+  // in a CSS grid -- which meant (a) the two conferences' rightmost "Conference Championship"
+  // column headers sat right at the seam between the two grid cells with nothing to stop their text
+  // from visually overlapping, and (b) there was no real Super Bowl box at all, just a plain text
+  // line below the brackets, completely disconnected from the tree visually. This renders BOTH
+  // conferences AND a real center Super Bowl node in ONE combined SVG/coordinate space -- "my"
+  // conference runs left-to-right toward the center, "the other" conference is mirrored (its own
+  // Wild Card at the far right edge, its Conference Championship adjacent to the Super Bowl column)
+  // so both visually converge toward the middle exactly like a real broadcast bracket graphic.
+  function renderFullPlayoffTreeSVG(myConf, myDisplay, otherConf, otherDisplay, year, pb){
+    const myRounds = myDisplay.rounds, otherRounds = otherDisplay.rounds;
+    if(!myRounds.length && !otherRounds.length) return "";
+    const boxW = 152, boxH = 52, rowGap = 24, colGap = 58, colW = boxW+colGap;
+    const topPad = 34, leftPad = 16, sbGap = 70;
+
+    const myYs = layoutBracketColumn(myRounds, boxH, rowGap);
+    const otherYs = layoutBracketColumn(otherRounds, boxH, rowGap);
+    // Shift every Y (both conferences share ONE coordinate space) so the smallest value lands just
+    // below the header row -- keeps everything on-canvas with no negative coordinates to reason about.
+    const allRaw = [...myYs.flat(), ...otherYs.flat()];
+    const yOffset = topPad + boxH/2 - (allRaw.length ? Math.min(...allRaw) : 0);
+    const shift = arr => arr.map(ys=>ys.map(y=>y+yOffset));
+    const myYs2 = shift(myYs), otherYs2 = shift(otherYs);
+
+    const myX = i => leftPad + i*colW;
+    const myLastX = myRounds.length ? myX(myRounds.length-1) : leftPad;
+    const sbX = myRounds.length ? myLastX+boxW+sbGap : leftPad;
+    const otherLastX = sbX+boxW+sbGap;
+    const otherX = i => otherLastX + (otherRounds.length-1-i)*colW;
+
+    const boxesHtml = [], connectorsHtml = [];
+    let maxY = topPad+boxH, maxX = sbX+boxW;
+
+    function nodeBoxHtml(x, y, m, extraAttr, mineCheckId){
+      const decided = m.winnerId!=null && m.bId!=null;
+      const aWon = decided && m.winnerId===m.aId, bWon = decided && m.winnerId===m.bId;
+      const aMine = m.aId===mineCheckId, bMine = m.bId===mineCheckId;
+      return `<g class="playoff-node${decided&&extraAttr?" clickable":""}"${decided&&extraAttr?` ${extraAttr}`:""}>
+          <title>${svgEscape(teamNameAt(m.aId, year))}${m.bId?` vs ${svgEscape(teamNameAt(m.bId, year))}`:""}</title>
+          <rect x="${x}" y="${y-boxH/2}" width="${boxW}" height="${boxH}" rx="8" class="playoff-node-rect${aMine||bMine?" mine":""}"/>
+          <line x1="${x+8}" y1="${y}" x2="${x+boxW-8}" y2="${y}" class="playoff-node-divider"/>
+          <text x="${x+10}" y="${y-10}" class="bracket-team-name${aWon?" good":""}${decided&&!aWon?" eliminated":""}">${m.aSeed!=null?`#${m.aSeed} `:""}${svgEscape(m.aId)}${decided?` <tspan class="bracket-score">${m.aScore}</tspan>`:""}</text>
+          <text x="${x+10}" y="${y+18}" class="bracket-team-name${bWon?" good":""}${decided&&!bWon?" eliminated":""}">${m.bId ? `${m.bSeed!=null?`#${m.bSeed} `:""}${svgEscape(m.bId)}${decided?` <tspan class="bracket-score">${m.bScore}</tspan>`:""}` : `<tspan class="bracket-bye">BYE</tspan>`}</text>
+        </g>`;
+    }
+    function connectorPath(prev, x, y, won){
+      const sourceIsLeft = prev.x < x;
+      const x1Edge = sourceIsLeft ? prev.x+boxW : prev.x;
+      const x2Edge = sourceIsLeft ? x : x+boxW;
+      const midX = (x1Edge+x2Edge)/2;
+      return `<path d="M${x1Edge},${prev.y} H${midX} V${y} H${x2Edge}" class="bracket-connector${won?" won":""}" fill="none"/>`;
+    }
+    function drawConf(rounds, roundYs, xFn, conf){
+      let prevIdPos = {};
+      rounds.forEach((round, roundIdx)=>{
+        const x = xFn(roundIdx);
+        maxX = Math.max(maxX, x+boxW);
+        boxesHtml.push(`<text x="${x+boxW/2}" y="${topPad-16}" text-anchor="middle" class="bracket-round-label">${svgEscape(shortRoundLabel(round.label))}</text>`);
+        const nextIdPos = {};
+        round.matchups.forEach((m, matchIdx)=>{
+          const y = roundYs[roundIdx][matchIdx];
+          maxY = Math.max(maxY, y+boxH/2);
+          const extraAttr = conf ? `data-bracket-conf="${conf}" data-bracket-round-idx="${roundIdx}" data-bracket-match-idx="${matchIdx}"` : "";
+          boxesHtml.push(nodeBoxHtml(x, y, m, extraAttr, career.teamId));
+          if(m.aId!=null) nextIdPos[m.aId] = { x, y };
+          if(m.bId!=null) nextIdPos[m.bId] = { x, y };
+          [m.aId, m.bId].forEach(id=>{
+            const prev = id!=null ? prevIdPos[id] : null;
+            if(prev) connectorsHtml.push(connectorPath(prev, x, y, m.winnerId===id));
+          });
+        });
+        prevIdPos = nextIdPos;
+      });
+      return prevIdPos;
+    }
+    const myChampPos = myRounds.length ? drawConf(myRounds, myYs2, myX, myConf) : {};
+    const otherChampPos = otherRounds.length ? drawConf(otherRounds, otherYs2, otherX, otherConf) : {};
+    // Look up each side's champion by ID (from playoffTreeConfDisplay's own championId, already
+    // correctly computed) rather than guessing from "whichever team happened to be first in the
+    // last-drawn round" -- that guess breaks the moment a round is only partially revealed (both
+    // teams in an undecided matchup would otherwise be equally valid, arbitrary, wrong candidates).
+    const myChampId = myDisplay.championKnown ? myDisplay.championId : null;
+    const otherChampId = otherDisplay.championKnown ? otherDisplay.championId : null;
+    const myChamp = myChampId!=null ? myChampPos[myChampId] : null;
+    const otherChamp = otherChampId!=null ? otherChampPos[otherChampId] : null;
+
+    // Super Bowl center node -- a real box fed by connector lines from both conference champions,
+    // not a disconnected text line below the tree. Only drawn once at least one side's champion is
+    // actually known (never for a mid-round partial reveal, where "the champion" isn't decided yet).
+    if(myChamp || otherChamp){
+      const sbY = myChamp && otherChamp ? (myChamp.y+otherChamp.y)/2 : (myChamp||otherChamp).y;
+      maxY = Math.max(maxY, sbY+boxH/2);
+      boxesHtml.push(`<text x="${sbX+boxW/2}" y="${topPad-16}" text-anchor="middle" class="bracket-round-label">SUPER BOWL</text>`);
+      let sbMatch;
+      if(pb && myChamp && otherChamp){
+        const [wScore,lScore] = String(pb.superBowlScore).split("-").map(Number);
+        const myWon = pb.superBowlWinnerId===myChampId;
+        sbMatch = { aId: myChampId, bId: otherChampId, aScore: myWon?wScore:lScore, bScore: myWon?lScore:wScore,
+          winnerId: pb.superBowlWinnerId, aSeed:null, bSeed:null };
+      } else {
+        // At least one side's champion is still unknown -- show a real placeholder ("TBD") rather
+        // than exposing a raw null id as literal text in the box.
+        sbMatch = { aId: myChampId || "TBD", bId: otherChampId || "TBD", aScore:null, bScore:null, winnerId:null, aSeed:null, bSeed:null };
+      }
+      boxesHtml.push(nodeBoxHtml(sbX, sbY, sbMatch, pb?`data-bracket-sb="1"`:"", career.teamId));
+      if(myChamp) connectorsHtml.push(connectorPath(myChamp, sbX, sbY, pb ? pb.superBowlWinnerId===myChampId : false));
+      if(otherChamp) connectorsHtml.push(connectorPath(otherChamp, sbX, sbY, pb ? pb.superBowlWinnerId===otherChampId : false));
+    }
+
+    const w = maxX+leftPad, h = maxY+16;
+    // .full-bracket-wrap (not the plain .bracket-wrap the Season tab's own single-path bracket
+    // uses) -- this bracket is genuinely wide (both conferences + the Super Bowl column), and
+    // shrinking it down to fit a narrow container the way the single-path one does would make its
+    // text illegibly small; scrolling horizontally at a legible fixed size reads much better.
+    return `<div class="bracket-wrap full-bracket-wrap"><svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Playoff bracket">
         ${connectorsHtml.join("")}${boxesHtml.join("")}
       </svg></div>`;
   }
@@ -6688,19 +6782,6 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const myDisplay = playoffTreeConfDisplay(myConf, season, pb, myConf);
     const otherDisplay = playoffTreeConfDisplay(otherConf, season, pb, myConf);
 
-    // The "other" conference renders MIRRORED -- its own Wild Card round sits at ITS outer edge,
-    // its Conference Championship approaches the shared boundary between the two columns, same as
-    // "my" conference does from the opposite side -- so the two halves visually converge toward
-    // the middle (where the Super Bowl section sits, right below) instead of both just running
-    // left-to-right independently side by side.
-    function confSectionHTML(conf, display, mirrored){
-      const body = display.rounds.length ? renderPlayoffTreeSVG(display.rounds, year, conf, mirrored)
-        : `<div class="calc-refnote">${display.isReal ? "Missed the playoffs this season." : "Not simulated yet — use Simulate Next Round below."}</div>`;
-      const champLine = display.championKnown && display.championId
-        ? `<div class="calc-refnote">Conference Champion: <b>${svgEscape(teamNameAt(display.championId, year))}</b></div>` : "";
-      return `<div${mirrored?` style="text-align:right;"`:""}><h4>${confLabel(conf, year)}${conf===myConf?" (your conference)":""}</h4>${body}${champLine}</div>`;
-    }
-
     const needsRoundSimulate = [[myConf,myDisplay],[otherConf,otherDisplay]]
       .some(([,d])=> !d.isReal && d.revealedCount<d.totalRounds);
     let actionHtml = "";
@@ -6710,19 +6791,30 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       actionHtml = `<div class="calc-refnote">Waiting on your own playoff run to finish (see the Season tab) before the Super Bowl can be decided.</div>`;
     }
 
+    // Round 28: both conferences and a real Super Bowl node now render together in ONE combined
+    // bracket (see renderFullPlayoffTreeSVG) instead of two separate side-by-side SVGs plus a
+    // disconnected text line for the Super Bowl -- see that function's own comment for why.
+    const hasAnyRounds = myDisplay.rounds.length>0 || otherDisplay.rounds.length>0;
+    const bracketHtml = hasAnyRounds ? renderFullPlayoffTreeSVG(myConf, myDisplay, otherConf, otherDisplay, year, pb)
+      : `<div class="calc-refnote">Not simulated yet — use Simulate Next Round below.</div>`;
+    const confLabelsHtml = `<div class="bracket-conf-labels"><span>${confLabel(myConf, year)} (your conference)</span><span>${confLabel(otherConf, year)}</span></div>`;
+    const champLines = [
+      myDisplay.championKnown && myDisplay.championId ? `Conference Champion: <b>${svgEscape(teamNameAt(myDisplay.championId, year))}</b>` : "",
+      otherDisplay.championKnown && otherDisplay.championId ? `Conference Champion: <b>${svgEscape(teamNameAt(otherDisplay.championId, year))}</b>` : "",
+    ].filter(Boolean);
+    const champHtml = champLines.length ? `<div class="calc-refnote" style="margin-top:0.6rem;">${champLines.join(" &nbsp;·&nbsp; ")}</div>` : "";
+
     let sbHtml = "";
     if(pb){
       const sbWinnerName = svgEscape(teamNameAt(pb.superBowlWinnerId, year)), sbLoserName = svgEscape(teamNameAt(pb.superBowlLoserId, year));
-      sbHtml = `<div class="section-label" style="margin-top:1.5rem;">${svgEscape(superBowlDisplayName(year))}</div>
-        <div class="calc-refnote">${sbWinnerName} def. ${sbLoserName}, <span class="tabular">${pb.superBowlScore}</span>${pb.superBowlWinnerId===career.teamId ? " — your Super Bowl!" : ""}</div>`;
+      sbHtml = `<div class="calc-refnote" style="margin-top:0.4rem;">${svgEscape(superBowlDisplayName(year))}: ${sbWinnerName} def. ${sbLoserName}, <span class="tabular">${pb.superBowlScore}</span>${pb.superBowlWinnerId===career.teamId ? " — your Super Bowl!" : ""}</div>`;
     }
 
     const innerHtml = `<div class="playoff-tree-inner">
         ${actionHtml ? `<div class="playoff-tree-actions">${actionHtml}</div>` : ""}
-        <div class="standings-columns">
-          ${confSectionHTML(myConf, myDisplay, false)}
-          ${confSectionHTML(otherConf, otherDisplay, true)}
-        </div>
+        ${confLabelsHtml}
+        ${bracketHtml}
+        ${champHtml}
         ${sbHtml}
       </div>`;
     // Reuses the SAME era-themed chrome (eraWrap/eraChrome) already established for event cards --
@@ -9116,6 +9208,29 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
       const round = display.rounds[roundIdx];
       const match = round && round.matchups[matchIdx];
       if(match) openBracketBoxScore(match, season.year, round.label);
+    }
+    // Super Bowl node click -- same box-score modal, built from the permanent playoffBracket record
+    // (the SB node is only ever clickable once pb exists -- see renderFullPlayoffTreeSVG).
+    const sbNode = e.target.closest("[data-bracket-sb]");
+    if(sbNode && playoffTreeSeason){
+      const season = playoffTreeSeason;
+      const pb = season.leagueStandings && season.leagueStandings.playoffBracket;
+      if(pb){
+        const [wScore,lScore] = String(pb.superBowlScore).split("-").map(Number);
+        const myConf = conferenceOf(career.teamId, season.year);
+        const otherConf = myConf==="AFC" ? "NFC" : "AFC";
+        const myDisplay = playoffTreeConfDisplay(myConf, season, pb, myConf);
+        const otherDisplay = playoffTreeConfDisplay(otherConf, season, pb, myConf);
+        const myWon = pb.superBowlWinnerId===myDisplay.championId;
+        // A real playoff game the player personally played (they reached the Super Bowl) already
+        // has a real box score attached to that round -- reuse it via qbLineHTML's isMine branch
+        // instead of estimating, exactly like any other node's box-score modal.
+        const myRealSB = (season.playoffs && season.playoffs.rounds || []).find(r=>r.round==="Super Bowl");
+        const match = { aId: myDisplay.championId, bId: otherDisplay.championId,
+          aScore: myWon?wScore:lScore, bScore: myWon?lScore:wScore, winnerId: pb.superBowlWinnerId,
+          realRound: myRealSB || null };
+        if(match.aId!=null && match.bId!=null) openBracketBoxScore(match, season.year, "Super Bowl");
+      }
     }
   });
   function simulateNextPlayoffTreeRound(){
