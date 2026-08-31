@@ -2667,6 +2667,20 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function contenderDeclinePull(strength){
     return strength>CONTENDER_DECLINE_THRESHOLD ? (strength-CONTENDER_DECLINE_THRESHOLD)*CONTENDER_DECLINE_RATE : 0;
   }
+  // The symmetric counterpart contenderDeclinePull never had: without this, nothing ever pulls a
+  // bad team back toward the middle, and a 31-team/20-season pure-math sweep of the exact real
+  // drift formula (team_parity_sweep.js) showed the predictable result -- ~48% of the league
+  // pinned at the extremes (many literally stuck at the 20 floor) with almost nothing in a healthy
+  // middle band. Deliberately mirrors CONTENDER_DECLINE_THRESHOLD/RATE exactly (45/0.22) for
+  // symmetry -- the same sweep confirmed this pair drops the extreme share to ~3% and roughly
+  // doubles the middle-band share, while still letting a team sit at an extreme for a while (a real
+  // tank or a real early dynasty can still exist -- it just can't get stuck there permanently, the
+  // same relationship the existing decline pull already has with a dynasty at the top end).
+  const REBUILD_THRESHOLD = 45;
+  const REBUILD_RATE = 0.22;
+  function rebuildPull(strength){
+    return strength<REBUILD_THRESHOLD ? (REBUILD_THRESHOLD-strength)*REBUILD_RATE : 0;
+  }
   function regularSeasonOffenseGrade(effOverall, age, decade){
     const clu = eraEffective(age, decade).CLU;
     const clutchEdge = (clu-65)*0.03;
@@ -3455,7 +3469,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // depth-chart bench players (simulateDepthChartSeasons) can run the IDENTICAL formula instead of
   // a parallel copy. Mutates entity.seasons/totals/age and returns the season object (callers that
   // need "how did he actually play this year" for a succession decision use the return value).
-  function simulatePlayerSeasonStats(entity, decade, league, year){
+  function simulatePlayerSeasonStats(entity, decade, league, year, forcedGames){
     const talentEdge = entity.talent - 65;
     const ageMult = primeMultiplier(entity.age);
     const delta = talentEdge*ageMult;
@@ -3465,8 +3479,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const tdRate = clamp(league.tdRate + delta*(delta>=0?cal.td.up:cal.td.down)*RIVAL_STAT_SCALE, cal.td.lo, cal.td.hi);
     const intRate = clamp(league.intRate - delta*(delta>=0?cal.int.up:cal.int.down)*RIVAL_STAT_SCALE, cal.int.lo, cal.int.hi);
     const attPerGame = clamp(league.attPerGame + randInt(-3,3), 4, 45);
+    // forcedGames (Part C of the bench-realism fix): when a caller already knows exactly how many
+    // real games this entity played -- specifically a bench QB inheriting the starter's own missed
+    // games as his relief appearances -- use that directly instead of rolling an independent
+    // missed-games chance. Every existing call site omits this and keeps the original behavior.
     const missedGames = Math.random()<0.18 ? randInt(1, 7) : 0;
-    const gamesPlayed = clamp(league.games - missedGames, 0, league.games);
+    const gamesPlayed = forcedGames!=null ? clamp(forcedGames, 0, league.games) : clamp(league.games - missedGames, 0, league.games);
     const attempts = Math.round(attPerGame*gamesPlayed);
     const completions = Math.round(attempts*comp);
     const yards = Math.round(attempts*ypa);
@@ -3519,14 +3537,32 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         });
         return;
       }
-      simulatePlayerSeasonStats(r, decade, league, year);
+      const seasonResult = simulatePlayerSeasonStats(r, decade, league, year);
       developEntityTalent(r, decade);
+      // Part C of the bench-realism fix: whatever games the starter's OWN missed-games roll took
+      // away from him this season are real, actually-played relief snaps for QB2 -- never QB3,
+      // matching real depth charts (a team's third QB essentially never plays). This is what makes
+      // a bench player's stats causally connected to the team's actual season instead of an
+      // independently-rolled parallel statline nobody's games explain -- simulateDepthChartSeasons
+      // (called right after this in the season loop) reads _reliefGames to decide whether QB2 gets
+      // a real stat-line at all this year.
+      const missedGames = league.games - seasonResult.games;
+      if(missedGames>0){
+        const chart = career.leagueDepthCharts[r.teamId];
+        if(chart && chart.qb2 && !chart.qb2.retired) chart.qb2._reliefGames = missedGames;
+      }
     });
   }
 
   // Bench-player equivalent of simulateRivalSeasons -- same math (simulatePlayerSeasonStats), much
   // simpler retirement handling (no team-grade impact, no news; a bench player quietly ages out and
   // is replaced by a fresh prospect at the same slot). Never touches career.leagueRivals.
+  // Part C of the bench-realism fix: a bench player ONLY gets a real stat-line this season if
+  // simulateRivalSeasons (called just before this, same season loop) tagged him with real relief
+  // games (`_reliefGames`, from the starter's own missed-games roll) -- otherwise he genuinely
+  // didn't play, so he gets no season entry at all (not a zero-stat one), matching "no stats
+  // because he didn't play." He still ages and develops either way -- prospects don't stop growing
+  // just because they didn't see the field this year.
   function simulateDepthChartSeasons(decade, league, year){
     if(!career.leagueDepthCharts) return;
     Object.keys(career.leagueDepthCharts).forEach(teamId=>{
@@ -3546,8 +3582,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           chart[slot] = generateBenchPlayer(teamId, decade, year, teamGrade, slot==="qb3" ? Math.random()<0.65 : Math.random()<0.3);
           return;
         }
-        simulatePlayerSeasonStats(p, decade, league, year);
+        if(p._reliefGames>0){
+          simulatePlayerSeasonStats(p, decade, league, year, p._reliefGames);
+        } else {
+          p.age++;
+        }
         developEntityTalent(p, decade);
+        p._reliefGames = 0;
       });
     });
   }
@@ -3571,9 +3612,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(entity.devSpeed==null) entity.devSpeed = rollDevSpeed();
     if(entity.durability==null) entity.durability = clamp(Math.round((Math.random()+Math.random()+Math.random())/3*79)+20, 20, 99);
     if(entity.age<=TALENT_DEV_YOUNG_CUTOFF){
-      const baseDrift = clamp(2.4 - (entity.age-22)*0.4, 0, 2.4);
-      const variance = 0.8 + Math.random()*0.4;
-      entity.talent = clamp(entity.talent + baseDrift*entity.devSpeed*variance, 15, 99);
+      // Zero-centered ordinary drift, NOT a guaranteed gain every season -- an earlier version used
+      // `clamp(2.4-(age-22)*0.4, 0, 2.4)`, which floors at 0 and can only ever add talent on an
+      // ordinary (non-swing) season. A league-wide sweep (qb_inflation_sweep.js) showed this
+      // systematically inflates the WHOLE league's average talent over a long career (every
+      // cohort's "ordinary" seasons only ever push up), measurably increasing how many rivals reach
+      // 5000+ yard seasons versus a no-development baseline. Real development is genuinely mixed --
+      // most players hover near their rolled talent with real variance both ways; `devSpeed` alone
+      // (not age) determines whether a given prospect leans up or down on average, matching how the
+      // rare breakout/bust-spiral swing below already treats devSpeed as the sole directional
+      // signal.
+      const lean = (entity.devSpeed-1.0)*2.2;
+      const variance = (Math.random()-0.5)*3.2;
+      entity.talent = clamp(entity.talent + lean + variance, 15, 99);
       // Rare career-defining swing, capped at 2 (matches the player's own _breakoutCount<2 cap) --
       // also permanently shifts devSpeed itself, so a breakout compounds into more/faster growth
       // for his remaining young seasons, and a bust-spiral compounds the opposite way.
@@ -4090,16 +4141,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       if(justSeason.awards && justSeason.awards.length) nudge += justSeason.awards.length*1.5;
       else if(justSeason.rating < decadeAvgRating-8) nudge -= 2;
       nudge -= contenderDeclinePull(s);
+      nudge += rebuildPull(s);
       career.leagueStrength[r.teamId] = clamp(s + Math.round(nudge), 20, 96);
     });
     rollLeagueNews(career.year);
-    // The player's own team faces identical decline pressure -- the counteracting force is the
-    // same skill-linked nudge this always had (how far above/below neutral effOverall actually
+    // The player's own team faces identical decline/rebuild pressure -- the counteracting force is
+    // the same skill-linked nudge this always had (how far above/below neutral effOverall actually
     // played this season), unchanged from before this pass.
     const teamNoise = randInt(-2,2);
     const teamSkillNudge = Math.round((effOverall-neutralOverall)*primeMult*0.14);
     const teamDeclinePull = Math.round(contenderDeclinePull(safeNum(career.teamStrength,60)));
-    career.teamStrength = clamp(safeNum(career.teamStrength,60) + teamNoise + teamSkillNudge - teamDeclinePull, 20, 97);
+    const teamRebuildPull = Math.round(rebuildPull(safeNum(career.teamStrength,60)));
+    career.teamStrength = clamp(safeNum(career.teamStrength,60) + teamNoise + teamSkillNudge - teamDeclinePull + teamRebuildPull, 20, 97);
     career.leagueStrength[career.teamId] = career.teamStrength;
     // Supporting cast drifts on its own light noise -- most of its real movement comes from the
     // "oline"/"starleaves" ORG_EVENTS above, this just keeps it from being permanently frozen
@@ -5987,6 +6040,32 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     }
     return null;
   }
+  // The counterpart to computeSeasonAwardRows: everyone who did NOT actually play a game this
+  // season -- bench players with no season entry for `year` (didn't get relief duty, see Part C of
+  // the bench-realism fix) plus every career.freeAgentPool entry (no team at all). One combined
+  // list per design, each row tagged so it's still clear at a glance who's where.
+  function computeInactiveQbRows(year){
+    const rows = [];
+    Object.keys(career.leagueDepthCharts||{}).forEach(teamId=>{
+      const t = TEAMS.find(x=>x.id===teamId);
+      if(t && t.start>year) return;
+      const chart = career.leagueDepthCharts[teamId];
+      ["qb2","qb3"].forEach(slot=>{
+        const p = chart[slot];
+        if(!p || p.retired) return;
+        const playedThisYear = p.seasons.some(s=>s.year===year);
+        if(playedThisYear) return; // already shown on the active tab
+        rows.push({ name:p.name, id:p.id, age:p.age, overall:rivalEffTalent(p),
+          tag:`Bench — ${teamNameAt(teamId, year)}` });
+      });
+    });
+    (career.freeAgentPool||[]).forEach(p=>{
+      rows.push({ name:p.name, id:p.id, age:p.age, overall:rivalEffTalent(p),
+        tag:`Free Agent — ${p.joblessSeasons||0} season${(p.joblessSeasons||0)===1?"":"s"} unsigned` });
+    });
+    rows.sort((a,b)=> b.overall-a.overall);
+    return rows;
+  }
 
   // ----- End-of-season Award Ceremony: names the year's MVP, All-Pros, and Pro Bowlers. All three
   // are decided exactly once, league-wide -- MVP by resolveSeasonMVP (the single most
@@ -6087,15 +6166,41 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <div class="calc-refnote">Three QBs from your own draft class — same rookie year, same age curve, tracked stat-for-stat alongside you all career long. The foundation for a future head-to-head rivals mechanic — for now, a running comparison.</div>
       </div>` : "";
 
+    // Everyone who did NOT actually play a real game this season -- benched all year, or on nobody's
+    // roster at all -- lives on a separate sub-tab instead of cluttering the main leaderboard, which
+    // is now genuinely "QBs who took real snaps this year" (see Part C of the bench-realism fix).
+    const inactiveRows = computeInactiveQbRows(year);
+    const inactiveRowsHtml = inactiveRows.map(r=>`<tr>
+        <td><button type="button" class="rival-link" data-rival-id="${r.id}">${svgEscape(r.name)}</button></td>
+        <td class="tabular">${r.age}</td>
+        <td class="tabular">${r.overall}</td>
+        <td>${svgEscape(r.tag)}</td>
+      </tr>`).join("");
+
     return `<div class="league-tab">
-        <div class="calc-refnote">${year} passing leaderboard — every starting QB in the league this season, judged by the exact same Pro Bowl / All-Pro / MVP rules as you (see the Stat Calculator tab in Admin &amp; Testing for the formulas). You ranked <b>#${myRank}</b> of ${rows.length} in passer rating. League-wide this season: Pro Bowl ×${proBowlCount}, All-Pro ×${allProCount}, MVP ×${mvpCount}.</div>
-        <div class="table-wrap">
-          <table class="league-table">
-            <thead><tr><th>#</th><th>QB</th><th class="tabular">Age</th><th class="tabular">Comp%</th><th class="tabular">Att</th><th class="tabular">Yds</th><th class="tabular">TD</th><th class="tabular">INT</th><th class="tabular">Rating</th><th>Awards</th></tr></thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
+        <div class="mode-toggle league-subtabs">
+          <button type="button" class="league-subtab-btn active" data-league-subtab="active">Played This Season</button>
+          <button type="button" class="league-subtab-btn" data-league-subtab="inactive">Inactive / Free Agents (${inactiveRows.length})</button>
         </div>
-        ${classHtml}
+        <div class="league-subtab-panel active" data-league-panel="active">
+          <div class="calc-refnote">${year} passing leaderboard — every QB who actually played real games for their team this season, judged by the exact same Pro Bowl / All-Pro / MVP rules as you (see the Stat Calculator tab in Admin &amp; Testing for the formulas). You ranked <b>#${myRank}</b> of ${rows.length} in passer rating. League-wide this season: Pro Bowl ×${proBowlCount}, All-Pro ×${allProCount}, MVP ×${mvpCount}.</div>
+          <div class="table-wrap">
+            <table class="league-table">
+              <thead><tr><th>#</th><th>QB</th><th class="tabular">Age</th><th class="tabular">Comp%</th><th class="tabular">Att</th><th class="tabular">Yds</th><th class="tabular">TD</th><th class="tabular">INT</th><th class="tabular">Rating</th><th>Awards</th></tr></thead>
+              <tbody>${rowsHtml}</tbody>
+            </table>
+          </div>
+          ${classHtml}
+        </div>
+        <div class="league-subtab-panel" data-league-panel="inactive">
+          <div class="calc-refnote">${inactiveRows.length ? "Bench QBs who didn't get real snaps this season, plus every QB currently unsigned — nobody here has stats to show because none of them actually played." : "Nobody's sitting inactive right now — every bench QB in the league got at least a look this season."}</div>
+          ${inactiveRows.length ? `<div class="table-wrap">
+            <table class="league-table">
+              <thead><tr><th>QB</th><th class="tabular">Age</th><th class="tabular">Overall</th><th>Status</th></tr></thead>
+              <tbody>${inactiveRowsHtml}</tbody>
+            </table>
+          </div>` : ""}
+        </div>
         <div class="section-label" style="margin-top:1.5rem;">Around the League</div>
         <div class="calc-refnote">Front-office news from other teams — this is why their grades move, not just dice.</div>
         ${buildLeagueNewsFeedHTML()}
@@ -8143,6 +8248,17 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
   document.getElementById("careerContent").addEventListener("click", (e)=>{
     const link = e.target.closest("[data-rival-id]");
     if(link) openRivalProfile(link.dataset.rivalId);
+    // League tab's "Played This Season" / "Inactive / Free Agents" toggle -- pure show/hide, both
+    // panels' HTML is already in the DOM (see buildLeagueTabHTML), so no re-render is needed here.
+    const subtabBtn = e.target.closest("[data-league-subtab]");
+    if(subtabBtn){
+      const key = subtabBtn.dataset.leagueSubtab;
+      const container = subtabBtn.closest(".league-tab");
+      if(container){
+        container.querySelectorAll(".league-subtab-btn").forEach(b=> b.classList.toggle("active", b===subtabBtn));
+        container.querySelectorAll(".league-subtab-panel").forEach(p=> p.classList.toggle("active", p.dataset.leaguePanel===key));
+      }
+    }
   });
 
   // Trophy Room: static screen (never recreated), so all wiring happens once, here.

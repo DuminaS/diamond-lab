@@ -944,6 +944,76 @@ that line to the front of the returned string instead. Verified via Playwright: 
 real seasons (so more than one transaction exists) and confirmed "— present day" renders as the
 FIRST line in the feed, not the last.
 
+### Round 18 — league parity, elite-QB stat inflation, and honest bench-stat generation
+
+Three more reports, all confirmed or partially confirmed via diagnostic sweeps BEFORE touching any
+code (the standing rule), following a planned 4-part approach.
+
+**Part A — too many teams stuck at either extreme.** A 31-team/20-season pure-math sweep of the
+EXACT real team-strength drift formula (`team_parity_sweep.js`) showed why: `contenderDeclinePull`
+only ever pulls a team DOWN once it clears a high threshold — nothing pulls a bad team back UP
+toward the middle. Result: ~48% of the league ends up at the extremes (many literally pinned at the
+20 floor), with almost nothing in a healthy middle band. Fixed with a new, exactly symmetric
+`rebuildPull(strength)` (`REBUILD_THRESHOLD=45`, `REBUILD_RATE=0.22` — deliberately the same numbers
+as the existing decline pull), applied both to the per-rival team-strength loop and the player's own
+team-strength drift line in `generateSeason()`. Re-swept against the ACTUAL updated formula (not
+just the standalone extraction): extreme share drops to ~0.6% average, middle-band share nearly
+doubles to ~48%. Dynasties and tanks still exist — a team can still sit at an extreme for a while
+early on — they just can't get stuck there permanently, the identical relationship the existing
+decline pull already has at the top end.
+
+**Part B — Phase 3's own systematic talent-inflation bug.** The user separately reported "15 QBs
+throwing 5000 yards" league-wide; a sweep using the real stat formula could NOT reproduce that scale
+(worst case found: 7/31 rivals over 5000 yards in a season) — but it DID find that this session's own
+Round 15 (Phase 3) `developEntityTalent` has a real, if modest, systematic upward bias: its young-
+phase `baseDrift` floors at 0 and can only ever ADD talent on an ordinary season, so the league's
+average rival talent measurably inflates over a long career (median +8.4 by age 27, never negative
+on its own). Fixed by replacing it with a genuinely zero-centered drift keyed only on `devSpeed`
+(`lean = (devSpeed-1.0)*2.2`, symmetric `variance`), leaving the rare capped breakout/bust-spiral
+swing underneath completely unchanged (that asymmetry IS intentional — real boom/bust events, not
+ordinary noise). Re-swept against the actual code: median drift is now ~0.0, and the 5000+-yard-
+season count is back down close to a no-development baseline. **Open question, not fully resolved**:
+the "15 QBs" figure itself was never reproduced even before this fix — if it's still happening at
+that scale on the current build, something the sweep's simplifications don't capture (it approximates
+award-eligibility rather than the full cross-league MVP/Pro-Bowl/All-Pro ranking) needs a fresh,
+targeted look with a concrete recent example, not a further guess-and-tighten pass.
+
+**Part C — bench-stat generation was completely disconnected from the team's real season.** The
+actual root cause of "everyone in the league seemingly has stats": `simulateDepthChartSeasons`
+rolled a full, INDEPENDENT season of stats for every bench player every year (own `attPerGame`, own
+missed-games roll, ~82% chance of a non-zero statline), with zero connection to whether the team's
+real starter actually missed any games. Fixed by making bench-player stats causally follow the
+starter's own season: `simulatePlayerSeasonStats` gained an optional `forcedGames` parameter (fully
+backward compatible — every existing call site omits it); `simulateRivalSeasons` now reads its own
+return value's `games` field to compute the starter's real `missedGames` and stashes it on
+`chart.qb2._reliefGames` (QB2 only, never QB3 — mirrors real depth charts, per user direction);
+`simulateDepthChartSeasons` only calls `simulatePlayerSeasonStats` (with `forcedGames`) when
+`_reliefGames>0` — otherwise the bench player just ages and develops with NO season entry at all
+that year, matching "no stats because he didn't play." This makes the Round 13 `games>0` leaderboard
+filter genuinely meaningful for the first time (previously mostly decorative, since a bench player
+almost always HAD a nonzero-but-hidden statline). Verified with a deterministic pure-Node test
+(mocked `Math.random()` forcing the starter's own missed-games roll to fire/not-fire): confirmed a
+full-attendance season leaves QB2 with zero season entries (still aging), and a forced starter
+absence gives QB2 a season entry with games matching EXACTLY what the starter missed.
+
+**Part D — a new "Inactive / Free Agents" sub-tab within League.** New `computeInactiveQbRows(year)`
+gathers every bench player with no season entry for `year` (didn't get relief duty) plus every
+`career.freeAgentPool` entry, one combined list tagged `"Bench — {team}"` or `"Free Agent — N
+seasons unsigned"`. `buildLeagueTabHTML` now renders two panels behind a `.mode-toggle`-style pill
+toggle (`.league-subtab-btn`/`.league-subtab-panel`, pure show/hide via a new case in the existing
+delegated `#careerContent` click listener — no re-render needed, both panels are already in the DOM).
+The main "Played This Season" panel is now honestly named — with Part C shipped, it genuinely only
+ever contains QBs who took real snaps. Verified via Playwright: a seeded free agent is absent from
+the default panel, appears correctly tagged after toggling, and toggling correctly hides the active
+panel.
+
+All four parts verified against the ACTUAL updated code (not just standalone extractions) before
+shipping. Full regression suite re-run; a few pre-existing/known-flaky browser tests (older,
+single-blind-click retry loops, already documented earlier this session) needed a retry or two — the
+underlying mechanisms they check were independently re-confirmed via the deterministic/pure-math
+routes above, and nothing in Parts A-D touches code those flaky tests exercise beyond the intended
+changes.
+
 ### Round 4 — difficulty/realism overhaul, all 3 items shipped
 Triggered by user feedback on the Round 3 build: a 63-overall QB was posting 4,721 yards / 39 TD / 104.7 rating, and a 42-overall team was shown beating a 73-overall team in the conference championship, then facing (and being competitive with) a 96-overall team in the Super Bowl. Three asks: (a) tighten stat production further, (b) make team grade matter much more so lopsided upsets are "very very rare," (c) redesign player development to have boom/bust potential instead of smooth linear progression — explicitly flagged by the user as something to brainstorm together, not implement unilaterally. For item (c), presented 4 concrete mechanic options to the user via AskUserQuestion; the user selected all 4 (rare breakout events, real bust/plateau paths, volatility tied to dev-speed tag, dev speed shifting mid-career) — synthesized into one unified system rather than four bolted-on mechanics (see item 3 below).
 
@@ -1044,5 +1114,7 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `promoteQb2()` / the merit-override branch in `evaluateSuccession` (Round 13, Phase 1) — a NARROW, deliberate exception to the Round 6 rule above ("never let a bench player's stats reach any pooling site"): `computeSeasonAwardRows()` now DOES show a bench player who actually played (`games>0`) on the League tab. This is visibility only — their `awards` field is still computed-but-never-GRANTED, since `resolveSeasonMVP`/`resolveSeasonAllProAndProBowl` are UNTOUCHED and still only ever read `career.leagueRivals`. Don't let a future change accidentally route bench stats into either of those two functions — that's the actual invariant Round 6 was protecting, not "bench players can never be displayed anywhere." The merit-override's `MERIT_GAP_OVERRIDE=16`/`MERIT_OVERRIDE_PROB=0.28` pair was swept (`merit_override_sweep.mjs`) against the SAME ~20-events/15-years baseline the normal succession odds were calibrated to (see the Round 6 note above) — any future change to either number should be re-swept the same way, not shipped on instinct, for the same reason Round 6 got burned once already.
 - This is Phase 1 of a larger 4-phase redesign (bench mobility/trades/free-agent portal, universal boom/bust talent development, free-agency team-fit realism) — see the plan doc referenced in this round's log entry for the full scope and design rationale before starting Phase 2, rather than re-deriving it from scratch.
 - `career.freeAgentPool` / `enterFreeAgentPool(entity, reason)` / `resolveFreeAgentPool(decade, year)` / `evaluateBenchMobility(teamId, decade, year)` / `tradeBenchPlayer(...)` / `pickBenchSigningDestination(entity, year)` (Round 14, Phase 2) — `enterFreeAgentPool` is the ONE choke point for "a QB just lost his job": any FUTURE displacement site (a new team-change event, a new succession branch) MUST route through it rather than setting `retired=true` directly, or that QB silently skips the pool and the whole mobility system has a hole. It's a no-op pass-through to a plain retirement for anyone not `rivalEffTalent>=50`/under `retireAge` — don't lower that bar without re-running `pool_size_sweep.mjs`, since it's what keeps the pool from filling with replacement-level scrubs. `resolveFreeAgentPool` iterates a SNAPSHOT (`.slice()`) of the pool, not the live array, specifically because a mid-pass bench-slot sign can itself call `enterFreeAgentPool` (displacing that slot's incumbent) — reassigning `career.freeAgentPool` from a plain forEach accumulator at the end would silently drop that new arrival; it filters the LIVE array against a `toRemove` Set instead. `pool_hazard_sweep.mjs`'s finding is the one to remember if this ever needs re-tuning: a FLAT per-season retirement hazard cannot be both "low right after a cut" and "near-certain after a few years" at once — this needs the direct `clamp(A*n^POWER, 0, CAP)` shape (currently A=0.05, POWER=2), not a cumulative survival-curve hazard.
-- `developEntityTalent(entity, decade)` / `entity.devSpeed` / `entity.durability` (Round 15, Phase 3) — called from BOTH `simulateRivalSeasons` and `simulateDepthChartSeasons`, right after `simulatePlayerSeasonStats`, for every entity (never bench-only, per an explicit user correction to the original 4-phase plan). Deliberately modifies the RAW `entity.talent` value, never `rivalEffTalent`/`primeMultiplier` — those stay the exact same curve the player's own `effOverall` shares, so this can never accidentally change how the PLAYER's own build ages. `TALENT_DEV_YOUNG_CUTOFF=27`/`TALENT_DEV_DECLINE_START=32` are the two age bands to know about: boom/bust swings (capped at 2 per entity, same as the player's `_breakoutCount<2`) ONLY happen at or below 27 — a future change that needs "does boom/bust still apply" logic elsewhere should key off this same constant, not re-derive its own age threshold. Past 32, decline severity depends on `ERA_ATTR_MULT[decade].injury` (reused, not reinvented) and `entity.durability` — any future re-tuning of either the young-drift or decline-severity dials needs a fresh `talent_dev_sweep.mjs`-style pass first (the standing rule), specifically checking that (a) most young prospects still land near a modest positive median drift with only a real minority swinging hard, and (b) nobody collapses to the floor by their late 30s even in the worst durability/era combination.
+- `developEntityTalent(entity, decade)` / `entity.devSpeed` / `entity.durability` (Round 15, Phase 3; young-drift formula corrected in Round 18) — called from BOTH `simulateRivalSeasons` and `simulateDepthChartSeasons`, right after `simulatePlayerSeasonStats`, for every entity (never bench-only, per an explicit user correction to the original 4-phase plan). Deliberately modifies the RAW `entity.talent` value, never `rivalEffTalent`/`primeMultiplier` — those stay the exact same curve the player's own `effOverall` shares, so this can never accidentally change how the PLAYER's own build ages. `TALENT_DEV_YOUNG_CUTOFF=27`/`TALENT_DEV_DECLINE_START=32` are the two age bands to know about: boom/bust swings (capped at 2 per entity, same as the player's `_breakoutCount<2`) ONLY happen at or below 27 — a future change that needs "does boom/bust still apply" logic elsewhere should key off this same constant, not re-derive its own age threshold. **IMPORTANT, Round 18 correction**: the young-phase drift MUST stay zero-centered (`lean = (devSpeed-1.0)*2.2` plus symmetric variance) — the original Round 15 version (`clamp(2.4-(age-22)*0.4, 0, 2.4)`, floored at 0) looked reasonable in isolation but is a systematic per-season positive bias that compounds into real league-wide talent inflation over a long career (confirmed via `qb_inflation_sweep.js`/re-swept post-fix) — never reintroduce an age-only, floor-at-0 drift term here. Past 32, decline severity depends on `ERA_ATTR_MULT[decade].injury` (reused, not reinvented) and `entity.durability` — any future re-tuning of the young-drift or decline-severity dials needs a fresh sweep first (the standing rule), specifically checking that (a) the young-phase median drift stays near zero (not systematically positive OR negative), and (b) nobody collapses to the floor by their late 30s even in the worst durability/era combination.
+- `rebuildPull(strength)` / `REBUILD_THRESHOLD=45` / `REBUILD_RATE=0.22` (Round 18) — the symmetric counterpart `contenderDeclinePull` never had. Applied alongside `contenderDeclinePull` at BOTH sites in `generateSeason()`'s team-strength block (the per-rival loop AND the player's own team-strength line) — if a future change ever adds a THIRD site that drifts team strength on a similar cadence (not a one-off org-event nudge, an ongoing per-season baseline), it needs this pull too, or that team can silently re-develop the pinned-at-extremes problem this round fixed (confirmed via `team_parity_sweep.js`: ~48% of the league at the extremes with no rebuild pull vs. ~0.6% with it, re-verified against the actual post-fix formula). Deliberately kept at the SAME threshold/rate magnitude as the existing decline pull for symmetry — re-verify with a fresh sweep before changing either number independently.
+- `forcedGames` param on `simulatePlayerSeasonStats` / `chart.qb2._reliefGames` (Round 18) — this is now the ONLY path by which a bench player gets a real season entry: `simulateDepthChartSeasons` skips the stats call entirely (just ages/develops) unless `_reliefGames>0`, which only `simulateRivalSeasons` ever sets (derived from the team's actual starter's own missed-games roll that season). A bench player's `.seasons` array being SHORTER than his real age/career length is correct and expected now — don't "fix" a bench player with gaps in his season history, that gap IS him not playing that year. QB3 NEVER gets `_reliefGames` (only qb2) — a future change that wants QB3 to ever play (e.g. QB2 also hurt) needs new logic, this doesn't fall out of the existing mechanism automatically.
 - `teamCompetitiveWindow(teamId)` / the age-based carve-outs in `buildFreeAgentOffers` (Round 16, Phase 4, the LAST phase of the QB-entity redesign — see Round 13-16 for the full arc) — `isYoungPlayer`/`isOldAccomplished` are computed from `career.age`/`tier` fresh at the top of `buildFreeAgentOffers`, not stored anywhere; don't try to read them from `career` elsewhere. The rebuild-youth carve-out (`rebuildYouthFit`) BYPASSES the normal `Math.abs(needRank-rank)>1` gate entirely and forces `role:"starter"` — if this function is ever restructured, keep that bypass explicit and early (before the normal gate check), not folded into the gate's own condition, or a future edit could silently narrow it back down without noticing. Every offer now carries a `reason` string — `renderFAOffers` already renders it via `.fa-offer-reason`; any NEW offer-construction path (there's currently only the one home re-sign + the one away-candidate loop) should set a `reason` too, or that offer will just render with no line there instead of erroring (the `o.reason ? ... : ""` guard is silent-safe, which means a missing reason is easy to miss in review — check for it explicitly).

@@ -729,6 +729,9 @@
   table.league-table td.bad{ color: var(--danger); }
   .league-classmates{ margin-top: 1.3rem; }
   .league-classmates h4{ margin: 0 0 0.5rem; }
+  .league-subtabs{ margin-bottom: 0.9rem; }
+  .league-subtab-panel{ display: none; }
+  .league-subtab-panel.active{ display: block; }
 
   /* ---------- Award Ceremony tab ---------- */
   .award-ceremony{ display:flex; flex-direction:column; gap: 1.4rem; }
