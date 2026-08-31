@@ -5456,8 +5456,23 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function teamNeedRank(teamId){
     const rival = rivalForTeam(teamId);
     const qbQuality = rival ? rivalEffTalent(rival) : 60;
-    const need = clamp(100 - qbQuality + randInt(-12,12), 0, 100);
+    // Phase 4 addition: an aging starter on a short leash reads as real future need even while
+    // he's still playing fine right now -- a team doesn't wait for its 36-year-old, one-year-left
+    // starter to actually decline before it starts genuinely listening on the position.
+    const runwayBonus = (rival && rival.age>=34 && rival.contract.years<=1) ? 15 : 0;
+    const need = clamp(100 - qbQuality + runwayBonus + randInt(-12,12), 0, 100);
     if(need>=78) return 4; if(need>=58) return 3; if(need>=38) return 2; if(need>=18) return 1; return 0;
+  }
+  // Phase 4: a rough proxy for "what is this team actually trying to do right now" -- a genuinely
+  // strong team is playing to win now, a genuinely weak one is rebuilding, everyone else is
+  // somewhere in between. Deliberately just career.leagueStrength (already-tracked, no new data
+  // needed) rather than scanning multiple seasons of win history -- simple enough to reason about,
+  // and leagueStrength already reflects exactly the kind of team-quality trend this needs.
+  function teamCompetitiveWindow(teamId){
+    const grade = career.leagueStrength[teamId] ?? 60;
+    if(grade>=72) return "win-now";
+    if(grade<=45) return "rebuild";
+    return "retool";
   }
   function buildFreeAgentOffers(decade, tier, oldTeamId){
     const rank = tierRank(tier);
@@ -5487,12 +5502,26 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade,
       });
     }
+    // Phase 4: team fit now also reasons about the PLAYER's own profile (age, not just current
+    // tier) against the offering team's competitive window, not just a flat tier-vs-need band.
+    const isYoungPlayer = career.age<=27;
+    const isOldAccomplished = career.age>=34 && (tier==="elite"||tier==="good");
     for(const t of candidates){
       if(offers.length>=4) break;
       const needRank = teamNeedRank(t.id);
+      const window = teamCompetitiveWindow(t.id);
       if(comeback<1 && needRank>=3) continue; // fresh off a suspension — only desperate teams call
-      if(Math.abs(needRank-rank)>1) continue; // depth-chart mismatch: wouldn't happen, skip it
-      const role = needRank>rank ? "starter" : needRank===rank ? "starter" : "competition";
+      // A rebuilding team without a real answer at QB always wants a real look at a promising young
+      // arm, even one whose current tier doesn't line up with their desperation by the numbers --
+      // this is specifically what makes a young, merely-mediocre player still draw a genuine QB1
+      // shot from a team with nothing at the position, instead of being filtered out entirely.
+      const rebuildYouthFit = window==="rebuild" && isYoungPlayer && needRank>=3;
+      // An old, still-accomplished player realistically only draws real interest from a team
+      // actually trying to win now -- a rebuilding team isn't spending a roster spot on a short-
+      // term rental just because he grades out fine on paper.
+      if(isOldAccomplished && window!=="win-now" && !rebuildYouthFit) continue;
+      if(!rebuildYouthFit && Math.abs(needRank-rank)>1) continue; // depth-chart mismatch
+      const role = rebuildYouthFit ? "starter" : (needRank>rank ? "starter" : needRank===rank ? "starter" : "competition");
       const tierForApy = role==="competition" ? (tier==="minimum"?"minimum":"backup") : (tier==="minimum"?"minimum":tier);
       const baseApy = veteranAPY(decade, tierForApy);
       // Rolled once here and carried on the offer object itself, not re-rolled at signing time --
@@ -5504,8 +5533,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       // sometimes (comedically) an overpay for a player they'll regret. Independent of repMult/
       // leverage, which are about the PLAYER's own standing, not this team's competence.
       const awayGmMult = clamp(0.85 + (gmGradeForOffer/100)*0.3 + (Math.random()-0.5)*0.1, 0.78, 1.2);
+      // One legible line for WHY this team is calling -- makes the team-fit logic above visible to
+      // the player instead of just felt through the numbers.
+      const reason = rebuildYouthFit ? "Rebuilding, and they don't have a real answer at the position."
+        : window==="win-now" ? "In win-now mode — they want a proven arm, not a project."
+        : window==="rebuild" ? "Rebuilding, and open to seeing what he's got."
+        : "Retooling, and QB is squarely in the mix.";
       offers.push({
-        teamId: t.id, role, isHome:false,
+        teamId: t.id, role, isHome:false, reason,
         apy: Math.round(baseApy*repMult*leverage*comeback*awayGmMult*(0.88+Math.random()*0.3)),
         years: role==="competition" ? 1 : (tier==="elite"?4:tier==="good"?3:tier==="average"?2:1),
         patience: randInt(35,70) - (role==="competition"?10:0), pushCount:0, withdrawn:false,
@@ -5548,6 +5583,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <div class="fa-offer-terms tabular">${fmtMoney(o.apy)}/yr · ${o.years} yr${o.years===1?"":"s"}</div>
         <div class="fa-offer-grade">Team grade <b class="tabular">${grade}</b> <span class="fa-grade-tag">${gradeTag}</span></div>
         <div class="fa-offer-cast">O-Line <b>${castLetterGrade(o.oline)}</b> &nbsp;·&nbsp; Weapons <b>${castLetterGrade(o.weapons)}</b></div>
+        ${o.reason ? `<div class="fa-offer-reason">${svgEscape(o.reason)}</div>` : ""}
         ${agentNote}
         <div class="event-choices">
           <button class="choice-btn fa-accept" data-i="${i}"><div class="cb-title">Accept</div></button>

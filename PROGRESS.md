@@ -878,6 +878,61 @@ FA-offer-candidate flakiness, the news-feed test's own naive fixed-name-list fal
 instance of the Phase 1 merit-override's expected ~15-20% miss rate within its 8-season test window —
 are all previously-documented, unrelated artifacts, not regressions from this phase).
 
+### Round 16 (Phase 4 of 4) — free-agency team-fit realism, final phase
+
+Fourth and final phase of the QB-entity redesign. Free agency now reasons about a team's actual
+competitive situation and the player's own profile (age, not just current-season tier), instead of
+a flat tier-vs-team-need band — the exact behaviors the user asked for: a young/mediocre player
+draws a real QB1 shot from a team with nothing at the position, and an old/accomplished player only
+draws real interest from a team actually trying to win now.
+
+**New `teamCompetitiveWindow(teamId)`** buckets a team as `"win-now"` (`leagueStrength>=72`),
+`"rebuild"` (`<=45`), or `"retool"` — deliberately just the already-tracked `career.leagueStrength`
+rather than scanning multiple seasons of a rival's win history (the original plan's first draft);
+simpler to reason about and `leagueStrength` already reflects the trend that matters here.
+
+**`teamNeedRank`** gets one addition: a team with an aging (34+), short-leash (`contract.years<=1`)
+starter now reads as real future need even while he's still playing fine — a `+15` bump to the
+underlying `need` score before bucketing.
+
+**`buildFreeAgentOffers`**'s candidate loop gets two new rules layered on top of the existing
+tier-vs-need gate, keyed off the player's own age (`isYoungPlayer<=27`, `isOldAccomplished` =
+age>=34 AND tier is good/elite):
+- **Rebuild-youth carve-out**: a `"rebuild"`-window team with real need (`needRank>=3`) always
+  connects with a young player and always offers `role:"starter"`, bypassing the tier-gap gate
+  entirely — this is what lets a merely-average young QB draw a genuine starting shot from a
+  team with nothing at the position, instead of being filtered out by the numbers alone.
+- **Win-now exclusion**: an old, accomplished player is excluded from any team that ISN'T in
+  `"win-now"` mode (unless the rebuild-youth carve-out somehow also applies, which it structurally
+  can't for an old player) — a rebuilding team doesn't spend a roster spot on a short-term rental.
+
+Each offer now also carries a **`reason`** string (rendered as a new `.fa-offer-reason` line in
+`renderFAOffers`) naming WHY that specific team is calling — reusing the existing flavor-text
+convention from `LEAGUE_NEWS_EVENTS`/`ORG_EVENTS` — so the team-fit logic above is legible to the
+player through the UI, not just felt through which offers happen to show up.
+
+Verified via 2 targeted Playwright scenarios (not a pure-math sweep — these are gate/exclusion
+rules, not new probability dials, so there's no distribution to calibrate, just correctness to
+confirm): (1) forced an old (36), maxed-out elite-tier build with exactly one `"win-now"`-grade team
+and every other team depressed to `"rebuild"` — confirmed the ONLY offer that appeared was the
+win-now team, with the correct reason text, and no rebuild team ever showed interest; (2) forced a
+young (25), mediocre-build player against one desperate `"rebuild"` team (a terrible, entrenched
+rival) with every OTHER team's rival made deliberately excellent (so they're naturally excluded by
+the existing gap gate, isolating the carve-out under test) — confirmed the rebuild team appeared
+with `role:"starter"` and the correct "don't have a real answer at the position" reason, despite the
+player's own mediocre tier not naturally matching that team's raw need band. Full regression suite
+re-run clean (one failure, the already-documented Around the League test's naive fixed-name-list
+false positive, confirmed non-regression by its own zero-violations rigorous check passing).
+
+**This closes out the 4-phase QB-entity redesign** (Rounds 13-16): merit-based promotion + league
+visibility, real bench trades + a free-agent portal, universal boom/bust development, and now
+free-agency team-fit. See each round's own entry and the architecture notes below for the individual
+pieces; together they turn the league's ~90+ other QBs from a mostly-static backdrop into entities
+that develop, bust, get hurt (already existed), get traded, land on waivers, and get signed based on
+actual team situation and player profile — matching what was originally a single combined user ask
+this session, deliberately shipped in verified, independently-calibrated increments rather than one
+large unreviewable change.
+
 ### Round 4 — difficulty/realism overhaul, all 3 items shipped
 Triggered by user feedback on the Round 3 build: a 63-overall QB was posting 4,721 yards / 39 TD / 104.7 rating, and a 42-overall team was shown beating a 73-overall team in the conference championship, then facing (and being competitive with) a 96-overall team in the Super Bowl. Three asks: (a) tighten stat production further, (b) make team grade matter much more so lopsided upsets are "very very rare," (c) redesign player development to have boom/bust potential instead of smooth linear progression — explicitly flagged by the user as something to brainstorm together, not implement unilaterally. For item (c), presented 4 concrete mechanic options to the user via AskUserQuestion; the user selected all 4 (rare breakout events, real bust/plateau paths, volatility tied to dev-speed tag, dev speed shifting mid-career) — synthesized into one unified system rather than four bolted-on mechanics (see item 3 below).
 
@@ -979,3 +1034,4 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - This is Phase 1 of a larger 4-phase redesign (bench mobility/trades/free-agent portal, universal boom/bust talent development, free-agency team-fit realism) — see the plan doc referenced in this round's log entry for the full scope and design rationale before starting Phase 2, rather than re-deriving it from scratch.
 - `career.freeAgentPool` / `enterFreeAgentPool(entity, reason)` / `resolveFreeAgentPool(decade, year)` / `evaluateBenchMobility(teamId, decade, year)` / `tradeBenchPlayer(...)` / `pickBenchSigningDestination(entity, year)` (Round 14, Phase 2) — `enterFreeAgentPool` is the ONE choke point for "a QB just lost his job": any FUTURE displacement site (a new team-change event, a new succession branch) MUST route through it rather than setting `retired=true` directly, or that QB silently skips the pool and the whole mobility system has a hole. It's a no-op pass-through to a plain retirement for anyone not `rivalEffTalent>=50`/under `retireAge` — don't lower that bar without re-running `pool_size_sweep.mjs`, since it's what keeps the pool from filling with replacement-level scrubs. `resolveFreeAgentPool` iterates a SNAPSHOT (`.slice()`) of the pool, not the live array, specifically because a mid-pass bench-slot sign can itself call `enterFreeAgentPool` (displacing that slot's incumbent) — reassigning `career.freeAgentPool` from a plain forEach accumulator at the end would silently drop that new arrival; it filters the LIVE array against a `toRemove` Set instead. `pool_hazard_sweep.mjs`'s finding is the one to remember if this ever needs re-tuning: a FLAT per-season retirement hazard cannot be both "low right after a cut" and "near-certain after a few years" at once — this needs the direct `clamp(A*n^POWER, 0, CAP)` shape (currently A=0.05, POWER=2), not a cumulative survival-curve hazard.
 - `developEntityTalent(entity, decade)` / `entity.devSpeed` / `entity.durability` (Round 15, Phase 3) — called from BOTH `simulateRivalSeasons` and `simulateDepthChartSeasons`, right after `simulatePlayerSeasonStats`, for every entity (never bench-only, per an explicit user correction to the original 4-phase plan). Deliberately modifies the RAW `entity.talent` value, never `rivalEffTalent`/`primeMultiplier` — those stay the exact same curve the player's own `effOverall` shares, so this can never accidentally change how the PLAYER's own build ages. `TALENT_DEV_YOUNG_CUTOFF=27`/`TALENT_DEV_DECLINE_START=32` are the two age bands to know about: boom/bust swings (capped at 2 per entity, same as the player's `_breakoutCount<2`) ONLY happen at or below 27 — a future change that needs "does boom/bust still apply" logic elsewhere should key off this same constant, not re-derive its own age threshold. Past 32, decline severity depends on `ERA_ATTR_MULT[decade].injury` (reused, not reinvented) and `entity.durability` — any future re-tuning of either the young-drift or decline-severity dials needs a fresh `talent_dev_sweep.mjs`-style pass first (the standing rule), specifically checking that (a) most young prospects still land near a modest positive median drift with only a real minority swinging hard, and (b) nobody collapses to the floor by their late 30s even in the worst durability/era combination.
+- `teamCompetitiveWindow(teamId)` / the age-based carve-outs in `buildFreeAgentOffers` (Round 16, Phase 4, the LAST phase of the QB-entity redesign — see Round 13-16 for the full arc) — `isYoungPlayer`/`isOldAccomplished` are computed from `career.age`/`tier` fresh at the top of `buildFreeAgentOffers`, not stored anywhere; don't try to read them from `career` elsewhere. The rebuild-youth carve-out (`rebuildYouthFit`) BYPASSES the normal `Math.abs(needRank-rank)>1` gate entirely and forces `role:"starter"` — if this function is ever restructured, keep that bypass explicit and early (before the normal gate check), not folded into the gate's own condition, or a future edit could silently narrow it back down without noticing. Every offer now carries a `reason` string — `renderFAOffers` already renders it via `.fa-offer-reason`; any NEW offer-construction path (there's currently only the one home re-sign + the one away-candidate loop) should set a `reason` too, or that offer will just render with no line there instead of erroring (the `o.reason ? ... : ""` guard is silent-safe, which means a missing reason is easy to miss in review — check for it explicitly).

@@ -391,6 +391,7 @@
   .fa-grade-tag{ font-family: var(--mono); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em; background: var(--surface-raised); border: 1px solid var(--line); border-radius: 3px; padding: 0.05rem 0.35rem; margin-left: 0.2rem; }
   .fa-offer-cast{ font-size: 0.76rem; color: var(--ink-muted); margin-top: 0.15rem; }
   .fa-offer-cast b{ color: var(--ink); }
+  .fa-offer-reason{ font-size: 0.74rem; color: var(--ink-muted); font-style: italic; margin-top: 0.35rem; }
   .fa-offer .event-choices{ flex-direction: row; flex-wrap: wrap; margin-top: 0.7rem; gap: 0.5rem; }
   .fa-offer .choice-btn{ flex: 1 1 auto; padding: 0.55rem 0.8rem; }
   .event-card h3{ font-size: 1.4rem; margin-top: 0.4rem; }
