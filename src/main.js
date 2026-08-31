@@ -2194,6 +2194,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       _cutShieldSeasons: 0,
       leagueRivals: [],
       leagueDepthCharts: {},
+      freeAgentPool: [],
       rivalries: {},
       isBackup: false,
       _backupSeasonsCount: 0,
@@ -3423,11 +3424,29 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // Pro Bowl over me" bug), while the team the player just LEFT was quietly left with no starter
   // at all. Skipped while career.isBackup is true -- that's the one deliberate exception where an
   // incumbent is SUPPOSED to share the player's own team slot (see Round 7 notes).
+  // Phase 2 of the QB-entity redesign: a QB who loses his job doesn't just vanish into a plain
+  // "retired" flag -- if he's still plausibly good enough to play (rivalEffTalent>=50) and hasn't
+  // hit his own retireAge yet, he goes into career.freeAgentPool instead, a shared jobless-QB
+  // portal any team might sign him from later (see resolveFreeAgentPool). He's the SAME object
+  // reference already sitting in career.leagueRivals (or, for a bench player, no longer referenced
+  // by any depth chart) -- when eventually signed, flipping entity.retired back to false and
+  // updating entity.teamId is all that's needed, since nothing else needs re-pushing. If he's not
+  // viable (washed up or past retireAge), this is just a normal, permanent retirement -- exactly
+  // the prior behavior, unchanged.
+  function enterFreeAgentPool(entity, reason){
+    entity.retired = true;
+    entity.exitReason = reason;
+    const stillViable = rivalEffTalent(entity)>=50 && entity.age<entity.retireAge;
+    if(!stillViable) return;
+    if(!career.freeAgentPool) career.freeAgentPool = [];
+    entity.joblessSeasons = 0;
+    career.freeAgentPool.push(entity);
+  }
   function reassignRivalsForTeamChange(oldTeamId, newTeamId){
     if(!career.leagueRivals || career.isBackup) return;
     const decade = decadeForYear(career.year);
     const incoming = career.leagueRivals.find(r=>r.teamId===newTeamId && !r.retired);
-    if(incoming){ incoming.retired = true; incoming.exitReason = "displaced"; }
+    if(incoming) enterFreeAgentPool(incoming, "displaced");
     if(oldTeamId && oldTeamId!==newTeamId && !career.leagueRivals.some(r=>r.teamId===oldTeamId && !r.retired)){
       career.leagueRivals.push(spawnFreshRival(oldTeamId, decade, career.year, "repl"+career.year));
     }
@@ -3531,6 +3550,123 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     });
   }
 
+  /* ----- Phase 2 of the QB-entity redesign: real bench mobility and a free-agent pool. A bench
+     player traded away lands on the ACQUIRING team's actual roster (not a vanish-and-regenerate);
+     a waived one enters career.freeAgentPool, a shared jobless-QB portal any team might sign from
+     later, with retirement odds that climb the longer he stays unsigned. The player never controls
+     any of this -- same spirit as rollLeagueNews. ----- */
+  // Once per season per bench slot: a modest independent chance the player is traded or waived.
+  // Deliberately small (BENCH_MOBILITY_RATE=6%) since there are ~2x as many bench slots as starter
+  // slots league-wide, so this shouldn't dominate overall roster churn -- see pool_size_sweep.mjs
+  // confirming the resulting free-agent pool stays small (a handful of entries) over a full career
+  // at this rate, not runaway.
+  function evaluateBenchMobility(teamId, decade, year){
+    const chart = career.leagueDepthCharts[teamId];
+    if(!chart) return;
+    const BENCH_MOBILITY_RATE = 0.06;
+    ["qb2","qb3"].forEach(slot=>{
+      const p = chart[slot];
+      if(!p || p.retired) return;
+      if(Math.random()>=BENCH_MOBILITY_RATE) return;
+      if(Math.random()<0.5){
+        tradeBenchPlayer(p, teamId, slot, decade, year);
+      } else {
+        chart[slot] = generateBenchPlayer(teamId, decade, year, career.leagueStrength[teamId] ?? 60, Math.random()<0.4);
+        enterFreeAgentPool(p, "waived");
+        career.leagueNewsLog.push({ year, teamId, title:"Waives a Depth QB", delta:0,
+          flavor:`${teamNameAt(teamId, year)} part ways with ${p.name} to open up a roster spot.` });
+      }
+    });
+  }
+  // A real trade: finds a destination team whose equivalent bench slot is clearly weaker
+  // (rivalEffTalent gap >= 10), moves the player there directly, and pushes whoever previously
+  // occupied that slot into the free-agent pool (continuity preserved for them too, not silently
+  // overwritten) rather than just regenerating a replacement. The origin slot gets backfilled via
+  // the existing generateBenchPlayer, same as any other bench departure.
+  function tradeBenchPlayer(player, fromTeamId, fromSlot, decade, year){
+    const isUpgradeFor = (teamId)=>{
+      const chart = career.leagueDepthCharts[teamId];
+      if(!chart) return null;
+      return ["qb2","qb3"].find(slot=>{
+        const incumbent = chart[slot];
+        return !incumbent || rivalEffTalent(player)-rivalEffTalent(incumbent)>=10;
+      }) || null;
+    };
+    const candidates = TEAMS.filter(t=>t.id!==fromTeamId && t.start<=year && isUpgradeFor(t.id));
+    if(!candidates.length) return; // no real destination this season -- stays put
+    const destTeam = pick(candidates);
+    const destChart = career.leagueDepthCharts[destTeam.id];
+    const destSlot = isUpgradeFor(destTeam.id);
+    const displaced = destChart[destSlot];
+    if(displaced) enterFreeAgentPool(displaced, "traded-away");
+    const fromChart = career.leagueDepthCharts[fromTeamId];
+    fromChart[fromSlot] = generateBenchPlayer(fromTeamId, decade, year, career.leagueStrength[fromTeamId] ?? 60, Math.random()<0.4);
+    player.teamId = destTeam.id;
+    player.contract = rollRivalContract(decade, player.talent);
+    player.entrenchedYears = rollEntrenchedYears(player.talent);
+    destChart[destSlot] = player;
+    career.leagueNewsLog.push({ year, teamId: destTeam.id, title:"Trades for Depth", delta:0,
+      flavor:`${teamNameAt(destTeam.id, year)} trade for ${player.name}, adding a real arm to the QB room.` });
+  }
+  // Once per season: ages every pool entry by one jobless season, applies the swept retirement
+  // hazard (retireChance(n)=clamp(0.05*n^2,0,0.95) -- see pool_hazard_sweep.mjs; low at n=1,
+  // effectively certain by n~5), then gives survivors a modest chance a team signs them to an
+  // open/weak BENCH slot (a starter job is handled separately, by evaluateSuccession's external-
+  // signing branch pulling from this same pool -- see there). Iterates a snapshot of the pool so an
+  // incumbent displaced mid-pass (pushed in via enterFreeAgentPool) isn't processed again this same
+  // tick, then filters the LIVE pool against exactly what was decided, so that newly-arrived entry
+  // isn't accidentally dropped by a naive reassignment.
+  function resolveFreeAgentPool(decade, year){
+    if(!career.freeAgentPool) career.freeAgentPool = [];
+    const toRemove = new Set();
+    const poolSnapshot = career.freeAgentPool.slice();
+    poolSnapshot.forEach(entity=>{
+      const n = (entity.joblessSeasons||0) + 1;
+      entity.joblessSeasons = n;
+      const retireChanceVal = clamp(0.05*n*n, 0, 0.95);
+      if(Math.random()<retireChanceVal){
+        entity.retired = true;
+        entity.exitReason = "retired-unsigned";
+        toRemove.add(entity);
+        return;
+      }
+      if(Math.random()<0.15){
+        const dest = pickBenchSigningDestination(entity, year);
+        if(dest){
+          const { teamId, slot } = dest;
+          const chart = career.leagueDepthCharts[teamId];
+          const incumbent = chart[slot];
+          if(incumbent) enterFreeAgentPool(incumbent, "waived-for-fa");
+          entity.teamId = teamId;
+          entity.retired = false;
+          entity.exitReason = null;
+          entity.contract = rollRivalContract(decade, entity.talent);
+          entity.entrenchedYears = rollEntrenchedYears(entity.talent);
+          entity.joblessSeasons = 0;
+          chart[slot] = entity;
+          toRemove.add(entity);
+          career.leagueNewsLog.push({ year, teamId, title:"Signs a Free-Agent Backup", delta:0,
+            flavor:`${teamNameAt(teamId, year)} bring in ${entity.name} off the open market to compete for QB depth.` });
+        }
+      }
+    });
+    career.freeAgentPool = career.freeAgentPool.filter(e=>!toRemove.has(e));
+  }
+  function pickBenchSigningDestination(entity, year){
+    const candidates = [];
+    TEAMS.forEach(t=>{
+      if(t.id===entity.teamId || t.start>year) return;
+      const chart = career.leagueDepthCharts[t.id];
+      if(!chart) return;
+      ["qb2","qb3"].forEach(slot=>{
+        const incumbent = chart[slot];
+        if(incumbent && !incumbent.retired && rivalEffTalent(incumbent)>=rivalEffTalent(entity)-5) return;
+        candidates.push({ teamId: t.id, slot });
+      });
+    });
+    return candidates.length ? pick(candidates) : null;
+  }
+
   /* ----- Succession: does a team stick with its starter, promote from within, sign a veteran
      replacement, or add a fresh rookie to the depth chart? Runs once per team per season, after
      both the starter and the bench have their year's stats in hand. "Entrenched" (rollEntrenchedYears)
@@ -3567,7 +3703,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // beneath it share one implementation instead of duplicating the promotion mechanics.
     function promoteQb2(flavor){
       const oldName = rival.name;
-      rival.retired = true;
+      enterFreeAgentPool(rival, "lost-job");
       const promoted = { ...qb2, contract: rollRivalContract(decade, qb2.talent), entrenchedYears: rollEntrenchedYears(qb2.talent) };
       career.leagueRivals.push(promoted);
       chart.qb2 = generateBenchPlayer(teamId, decade, year, career.leagueStrength[teamId] ?? 60, Math.random()<0.4);
@@ -3594,21 +3730,42 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(qb2 && !qb2.retired && rivalEffTalent(qb2) >= rivalEffTalent(rival)-5 && Math.random()<0.22){
       promoteQb2((oldName,newName)=>`${teamName} bench ${oldName} in favor of ${newName}, who'd been waiting for exactly this shot.`);
     } else if(Math.random()<0.15){
-      // External signing: a veteran from outside the sim takes over instead of anyone already on the depth chart.
+      // External signing: prefer an ACTUAL free agent already sitting in career.freeAgentPool if
+      // one's a plausible fit for this team's grade -- this is what makes the pool a real
+      // destination for displaced QBs (Phase 2) rather than an inert holding pen. Falls back to
+      // conjuring a fresh veteran from outside the sim (the original behavior) only when the pool
+      // has nobody suitable.
       const oldName = rival.name;
-      rival.retired = true;
+      enterFreeAgentPool(rival, "lost-job");
       const teamGrade = career.leagueStrength[teamId] ?? 60;
-      const newTalent = clamp(teamGrade + randInt(-10,20), 20, 99);
-      career.leagueRivals.push({
-        id: "riv_"+teamId+"_"+year+"_fa", name: randomFullName(), teamId,
-        talent: newTalent, age: randInt(26,34), retireAge: clamp(30+randInt(0,10), 30, 45),
-        draftYear: year-randInt(3,10), seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0 },
-        retired:false, contract: rollRivalContract(decade, newTalent), entrenchedYears: rollEntrenchedYears(newTalent),
-      });
+      const poolCandidate = (career.freeAgentPool||[]).filter(p=>p.teamId!==teamId)
+        .sort((a,b)=>rivalEffTalent(b)-rivalEffTalent(a))[0];
+      let signed;
+      if(poolCandidate && rivalEffTalent(poolCandidate)>=teamGrade-15){
+        career.freeAgentPool = career.freeAgentPool.filter(p=>p!==poolCandidate);
+        poolCandidate.teamId = teamId;
+        poolCandidate.retired = false;
+        poolCandidate.exitReason = null;
+        poolCandidate.contract = rollRivalContract(decade, poolCandidate.talent);
+        poolCandidate.entrenchedYears = rollEntrenchedYears(poolCandidate.talent);
+        signed = poolCandidate;
+        // A former starter is already IN career.leagueRivals (just marked retired); a former
+        // bench player never was -- only push if he's not already tracked there.
+        if(!career.leagueRivals.includes(poolCandidate)) career.leagueRivals.push(poolCandidate);
+      } else {
+        const newTalent = clamp(teamGrade + randInt(-10,20), 20, 99);
+        signed = { id: "riv_"+teamId+"_"+year+"_fa", name: randomFullName(), teamId,
+          talent: newTalent, age: randInt(26,34), retireAge: clamp(30+randInt(0,10), 30, 45),
+          draftYear: year-randInt(3,10), seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0 },
+          retired:false, contract: rollRivalContract(decade, newTalent), entrenchedYears: rollEntrenchedYears(newTalent) };
+        career.leagueRivals.push(signed);
+      }
       const delta = randInt(-4,8);
       career.leagueStrength[teamId] = clamp((career.leagueStrength[teamId]??60)+delta, 20, 96);
       career.leagueNewsLog.push({ year, teamId, title:"Free-Agent Quarterback Signing", delta,
-        flavor:`${teamName} move on from ${oldName} and hand the job to a veteran brought in from outside.` });
+        flavor: poolCandidate===signed
+          ? `${teamName} move on from ${oldName} and hand the job to ${signed.name}, plucked off the open market after his last team let him go.`
+          : `${teamName} move on from ${oldName} and hand the job to a veteran brought in from outside.` });
     } else {
       // Survives -- signs a fresh extension, protected again for a while. This is what actually
       // keeps a good, stable starter stable long-term instead of facing a fresh coin-flip every
@@ -3856,6 +4013,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     simulateRivalSeasons(decade, league, career.year);
     simulateDepthChartSeasons(decade, league, career.year);
     TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateSuccession(t.id, decade, career.year));
+    // Phase 2 of the QB-entity redesign: real bench mobility (trade/waive) and free-agent-pool
+    // resolution (retirement hazard + teams signing off the pool), both once per team per season,
+    // same resolution point as everything else above.
+    TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateBenchMobility(t.id, decade, career.year));
+    resolveFreeAgentPool(decade, career.year);
     // Winner-take-all MVP (see resolveSeasonMVP) and fixed-slot Pro Bowl/All-Pro (see
     // resolveSeasonAllProAndProBowl): both decided once, here, after every QB in the league -- the
     // player and every simulated rival -- has this year's season locked in.

@@ -757,6 +757,67 @@ a working profile instead of crashing. All prior regression suites re-run clean 
 failure, "reached a free-agency offers screen," is the already-documented pre-existing FA-candidate-
 generation flakiness, unrelated to this change — confirmed passing on retry).
 
+### Round 14 (Phase 2 of 4) — real bench trades and a free-agent portal
+
+Second phase of the QB-entity redesign. Depth-chart bench players can now genuinely move between
+teams instead of only ever aging out and being regenerated in place, and a QB who loses his job
+(starter or bench) doesn't just vanish — he either lands directly on an acquiring team's roster (a
+real trade) or enters a shared jobless-QB pool other teams might sign him from later, exactly per
+the user's explicit direction. All of this is simulated background roster movement the player has
+no control over, same spirit as `rollLeagueNews` — none of it is a player-facing mechanic.
+
+**`career.freeAgentPool = []`** (new career field, self-heals `?? []` on older saves). **New
+`enterFreeAgentPool(entity, reason)`**: the single choke point every "this QB just lost his job"
+site now routes through. If the entity is still plausibly good enough to play
+(`rivalEffTalent>=50`) and hasn't hit his own `retireAge`, he goes into the pool; otherwise this is
+just a normal, permanent retirement — unchanged from the prior behavior. Wired into 3 existing
+displacement sites: `evaluateSuccession`'s internal-promotion branch (the QB who just lost his job
+to the QB2 who beat him for it), its external-signing branch, and `reassignRivalsForTeamChange` (a
+rival displaced when the PLAYER takes over a team). The external-signing branch was also changed to
+PREFER an actual free agent already sitting in the pool over conjuring a brand-new veteran from thin
+air — the pool is a real destination now, not an inert holding pen.
+
+**New `evaluateBenchMobility(teamId, decade, year)`** (once per season per bench slot, 6% roll —
+`BENCH_MOBILITY_RATE`) decides trade vs. waive. **New `tradeBenchPlayer(player, fromTeamId,
+fromSlot, decade, year)`** finds a destination team whose equivalent slot is clearly weaker
+(`rivalEffTalent` gap >= 10), moves the player there DIRECTLY (a real roster move, landing him on
+the acquiring team's actual depth chart — per the user's explicit correction to an earlier
+"displace-and-discard" draft of this plan), and pushes whoever previously held that slot into the
+free-agent pool via `enterFreeAgentPool` rather than silently overwriting them. The origin slot
+backfills with `generateBenchPlayer`, same as any other bench departure.
+
+**New `resolveFreeAgentPool(decade, year)`** (once per season): ages every pool entry by one jobless
+season and applies a swept retirement hazard, then gives survivors a modest (15%) chance a team
+signs them to an open/weak bench slot via **new `pickBenchSigningDestination(entity, year)`**
+(starter-job pool pulls are handled separately, by the external-signing branch above). Calibrated
+via two pure-math sweeps BEFORE shipping (the standing rule, not optional): `pool_hazard_sweep.mjs`
+found that a flat/constant per-season hazard can't satisfy "low chance at 1 jobless season, near-
+certain by 4-5" at the same time — landed on evaluating retirement chance directly as
+`clamp(0.05 * joblessSeasons^2, 0, 0.95)` instead (5%/20%/45%/80%/95% at seasons 1-5); separately,
+`pool_size_sweep.mjs` confirmed the resulting pool stays small (a handful of entries) over a
+25-season career at these rates rather than growing unbounded.
+
+**A real, non-obvious implementation trap worth flagging for future edits**: `resolveFreeAgentPool`
+iterates a SNAPSHOT of the pool (`career.freeAgentPool.slice()`), not the live array, because
+`enterFreeAgentPool` (called from inside this same function, when a bench-slot sign displaces an
+incumbent) pushes a new entry into the very array being processed. Reassigning
+`career.freeAgentPool = survivors` at the end from a naive forEach accumulator would silently
+discard that mid-pass addition; instead this collects a `toRemove` Set and filters the LIVE array
+against it at the end, so anything added mid-pass survives into next season correctly.
+
+Verified two ways: (1) a controlled pure-Node extraction (`phase2_extract.js`, mocking
+`Math.random()` to force exact branches deterministically) confirming a rigged 95-talent bench QB
+actually lands on the acquiring team's roster with the displaced incumbent correctly entering the
+pool (not discarded), the waive path correctly pools its displaced player too, 20 pool entries at
+`joblessSeasons=10` overwhelmingly retire in one pass, and a viable surviving free agent gets signed
+to a genuinely weak destination slot; (2) real Playwright gameplay for the pool retirement hazard
+specifically (20 seeded entries at `joblessSeasons=10`, confirmed the pool shrank from 20 to 3 after
+one real season advance). The pure-Node route was necessary for the trade/waive/sign mechanics
+specifically because verifying them via real gameplay requires surviving many organic season
+advances without the player's OWN career ending first (a real, unrelated risk for any multi-season
+Playwright test in this game) — deterministic `Math.random()` mocking sidesteps that survival-bias
+problem entirely rather than fighting it with more retries.
+
 ### Round 4 — difficulty/realism overhaul, all 3 items shipped
 Triggered by user feedback on the Round 3 build: a 63-overall QB was posting 4,721 yards / 39 TD / 104.7 rating, and a 42-overall team was shown beating a 73-overall team in the conference championship, then facing (and being competitive with) a 96-overall team in the Super Bowl. Three asks: (a) tighten stat production further, (b) make team grade matter much more so lopsided upsets are "very very rare," (c) redesign player development to have boom/bust potential instead of smooth linear progression — explicitly flagged by the user as something to brainstorm together, not implement unilaterally. For item (c), presented 4 concrete mechanic options to the user via AskUserQuestion; the user selected all 4 (rare breakout events, real bust/plateau paths, volatility tied to dev-speed tag, dev speed shifting mid-career) — synthesized into one unified system rather than four bolted-on mechanics (see item 3 below).
 
@@ -856,3 +917,4 @@ Empirical calibration tooling (kept in `/tmp/gtest`, not persisted — recreate 
 - `expansionDraftCheck()`'s team-year filter (Round 12 fix) — uses `t.start===career.year`, NOT `career.year+1`. The whole waiver→expansion→trade→free-agency chain runs from `advanceCareer()`, called by `nextSeason()` AFTER `career.year` is already incremented for the season about to be played — so a franchise joining THIS season already has `t.start===career.year` by the time this function runs. `+1` was checking one year too far ahead, attaching the player to a team `divisionsForYear`/the standings math wouldn't recognize yet for the season actually being simulated (the "#0 of N in the conference, team missing from standings" bug). Any other code that reasons about "does a new team exist yet" at this point in the chain should use `career.year` directly for the same reason, not `+1`.
 - `promoteQb2()` / the merit-override branch in `evaluateSuccession` (Round 13, Phase 1) — a NARROW, deliberate exception to the Round 6 rule above ("never let a bench player's stats reach any pooling site"): `computeSeasonAwardRows()` now DOES show a bench player who actually played (`games>0`) on the League tab. This is visibility only — their `awards` field is still computed-but-never-GRANTED, since `resolveSeasonMVP`/`resolveSeasonAllProAndProBowl` are UNTOUCHED and still only ever read `career.leagueRivals`. Don't let a future change accidentally route bench stats into either of those two functions — that's the actual invariant Round 6 was protecting, not "bench players can never be displayed anywhere." The merit-override's `MERIT_GAP_OVERRIDE=16`/`MERIT_OVERRIDE_PROB=0.28` pair was swept (`merit_override_sweep.mjs`) against the SAME ~20-events/15-years baseline the normal succession odds were calibrated to (see the Round 6 note above) — any future change to either number should be re-swept the same way, not shipped on instinct, for the same reason Round 6 got burned once already.
 - This is Phase 1 of a larger 4-phase redesign (bench mobility/trades/free-agent portal, universal boom/bust talent development, free-agency team-fit realism) — see the plan doc referenced in this round's log entry for the full scope and design rationale before starting Phase 2, rather than re-deriving it from scratch.
+- `career.freeAgentPool` / `enterFreeAgentPool(entity, reason)` / `resolveFreeAgentPool(decade, year)` / `evaluateBenchMobility(teamId, decade, year)` / `tradeBenchPlayer(...)` / `pickBenchSigningDestination(entity, year)` (Round 14, Phase 2) — `enterFreeAgentPool` is the ONE choke point for "a QB just lost his job": any FUTURE displacement site (a new team-change event, a new succession branch) MUST route through it rather than setting `retired=true` directly, or that QB silently skips the pool and the whole mobility system has a hole. It's a no-op pass-through to a plain retirement for anyone not `rivalEffTalent>=50`/under `retireAge` — don't lower that bar without re-running `pool_size_sweep.mjs`, since it's what keeps the pool from filling with replacement-level scrubs. `resolveFreeAgentPool` iterates a SNAPSHOT (`.slice()`) of the pool, not the live array, specifically because a mid-pass bench-slot sign can itself call `enterFreeAgentPool` (displacing that slot's incumbent) — reassigning `career.freeAgentPool` from a plain forEach accumulator at the end would silently drop that new arrival; it filters the LIVE array against a `toRemove` Set instead. `pool_hazard_sweep.mjs`'s finding is the one to remember if this ever needs re-tuning: a FLAT per-season retirement hazard cannot be both "low right after a cut" and "near-certain after a few years" at once — this needs the direct `clamp(A*n^POWER, 0, CAP)` shape (currently A=0.05, POWER=2), not a cumulative survival-curve hazard.
