@@ -2435,62 +2435,71 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
      (flat vs. league, no opponent identity at all) while buildScheduleResults() ran a REAL
      opponent-identity-aware simulation for every OTHER team in the league and then discarded
      its own result for the player, overwriting it with that abstracted number. That was two
-     disconnected systems pretending to be one. Now the player gets a real schedule (division
-     rivals home-and-home, the rest of the league filling out the slate, same shape
-     buildScheduleResults already uses for everyone else), each game resolved by the same
-     simulateGameScore() engine the playoffs already use against that specific opponent's real
-     team grade, and a per-game stat line sampled around the season's calibrated rates so the
-     box scores have real game-to-game texture instead of one deterministic season formula.
-     buildScheduleResults' overwrite of the player's row now hands back this real total instead
-     of a second, disconnected number. See regularSeasonOffenseGrade (Round 4) for how the
-     offensive grade fed into simulateGameScore is now computed -- it blends effOverall with
-     career.teamStrength instead of just nudging effOverall by a small team-quality edge. */
-  // Real scheduling formulas never redraw the whole "everything else" slate at random every
-  // single season -- division rivals are locked in home-and-home every year (handled below), and
-  // the rest of the schedule rotates through a fixed cycle of other divisions (one from the same
-  // conference, one from the other conference), the pairing changing on a multi-year wheel rather
-  // than reshuffling uniformly at random every year. rotationPick is keyed purely off the year (and
-  // an offset so the two wheels don't always turn in lockstep), so the same division-vs-division
-  // pairing recurs in cycles -- exactly the "makes sense as a real schedule format" structure,
-  // without trying to reproduce any one era's exact formula down to the game.
-  function rotationPick(divs, cycleYear){
-    if(!divs.length) return null;
-    return divs[((cycleYear % divs.length) + divs.length) % divs.length];
-  }
-  function pickRegularSeasonOpponents(n){
-    const year = career.year;
-    const myDiv = divisionOf(career.teamId, year);
-    const rivals = (myDiv ? myDiv.teams : []).filter(id=>id!==career.teamId);
-    const others = teamsAvailable(year).map(t=>t.id).filter(id=> id!==career.teamId && !rivals.includes(id));
-    const pool = [];
-    rivals.forEach(id=>{ pool.push(id); pool.push(id); }); // home-and-home vs. every division rival, same as real scheduling
+     disconnected systems pretending to be one. Then (Round 20) the player got their OWN real
+     schedule (division rivals home-and-home, rest of the league filling the slate), but generated
+     independently of everyone else's shared schedule -- which could occasionally make the two
+     disagree about who's playing whom in a given week (see the Round 25/26 history on
+     buildWeekMatchups). As of Round 27, the player is just another team inside ONE shared
+     schedule (see buildSeasonSchedule, called once per season before anyone's games are
+     simulated) -- no separate opponent-picking logic of its own anymore. Each game is still
+     resolved by the same simulateGameScore() engine the playoffs already use against that
+     specific opponent's real team grade, with a per-game stat line sampled around the season's
+     calibrated rates so the box scores have real game-to-game texture instead of one
+     deterministic season formula. See regularSeasonOffenseGrade (Round 4) for how the offensive
+     grade fed into simulateGameScore is computed -- it blends effOverall with career.teamStrength
+     instead of just nudging effOverall by a small team-quality edge. */
+  // The player's own opponent-by-week list is read straight off the shared season schedule (see
+  // buildSeasonSchedule) -- this is what makes the player just another team in the same single
+  // standings/schedule board. A season's worth of slots (one per scheduled week, byes excluded)
+  // gets split into "started" (this QB actually played, full per-game stat simulation, exactly as
+  // before) and "missed" (injury/suspension/backup-incumbent -- a placeholder result only, no
+  // personal stat line) -- see missedGamesBackup/genericMissedGames below for how that split is
+  // decided and reported back to generateSeason().
+  function simulateRegularSeasonGames({ schedule, gamesPlayed, missedGamesBackup, genericMissedGames,
+      incumbentWinRate, effOverall, comp, ypa, tdRate, intRate, attPerGame, perfMult, effRush, sackRate, age, decade }){
+    const mySlots = schedule.weeks
+      .map((pairs, wIdx)=>{
+        const pair = pairs.find(([a,b])=>a===career.teamId || b===career.teamId);
+        if(!pair) return null;
+        return { week: wIdx+1, opponentId: pair[0]===career.teamId ? pair[1] : pair[0] };
+      })
+      .filter(Boolean);
+    // Normally mySlots.length===schedule.gamesN exactly; clamp against it anyway so the rare
+    // odd-team-count shortfall (see scheduleGamesIntoWeeks) degrades gracefully into "one fewer
+    // game played" instead of a negative count.
+    const totalMissed = clamp(mySlots.length - gamesPlayed, 0, mySlots.length);
+    const missedIdxs = shuffle(mySlots.map((_,i)=>i)).slice(0, totalMissed);
+    const incumbentCount = clamp(missedGamesBackup, 0, totalMissed);
+    const incumbentIdxSet = new Set(missedIdxs.slice(0, incumbentCount));
+    const missedIdxSet = new Set(missedIdxs);
+    const genericWinProb = clamp(0.5 + (career.teamStrength-65)*0.01, 0.12, 0.88);
 
-    const allDivs = myDiv ? divisionsForYear(year) : [];
-    const sameConfOthers = allDivs.filter(d=> d.conf===myDiv.conf && d.name!==myDiv.name);
-    const otherConfDivs = allDivs.filter(d=> d.conf!==myDiv.conf);
-    const sameConfTarget = rotationPick(sameConfOthers, year);
-    const otherConfTarget = rotationPick(otherConfDivs, year + Math.ceil(otherConfDivs.length/2));
-    const structuredTeams = [
-      ...(otherConfTarget ? otherConfTarget.teams : []),
-      ...(sameConfTarget ? sameConfTarget.teams : []),
-    ].filter(id=> others.includes(id));
-    const remainderTeams = others.filter(id=> !structuredTeams.includes(id));
-
-    shuffle(structuredTeams).forEach(id=>{ if(pool.length<n) pool.push(id); });
-    shuffle(remainderTeams).forEach(id=>{ if(pool.length<n) pool.push(id); });
-    const fillPool = others.length ? others : (rivals.length ? rivals : teamsAvailable(year).map(t=>t.id).filter(id=>id!==career.teamId));
-    while(pool.length<n && fillPool.length) pool.push(pick(fillPool));
-    return shuffle(pool).slice(0, n);
-  }
-  function simulateRegularSeasonGames({ gamesPlayed, effOverall, comp, ypa, tdRate, intRate,
-      attPerGame, perfMult, effRush, sackRate, age, decade }){
-    const opponents = pickRegularSeasonOpponents(gamesPlayed);
     const myOff = regularSeasonOffenseGrade(effOverall, age, decade);
     const games = [];
-    let tComp=0,tAtt=0,tYards=0,tTd=0,tInt=0,tSacks=0,tRushAtt=0,tRushYards=0,tRushTd=0,wins=0;
-    opponents.forEach((oppId, idx)=>{
+    let tComp=0,tAtt=0,tYards=0,tTd=0,tInt=0,tSacks=0,tRushAtt=0,tRushYards=0,tRushTd=0,wins=0,started=0;
+    let backupWins=0, backupLosses=0, incumbentWins=0, incumbentLosses=0;
+    mySlots.forEach((slot, idx)=>{
+      const oppId = slot.opponentId;
       const oppGrade = oppId===career.teamId ? career.teamStrength : (career.leagueStrength[oppId] ?? 60);
       const oppRival = rivalForTeam(oppId);
+      if(missedIdxSet.has(idx)){
+        // A generic backup (or the named incumbent, if this slot's the one covering him) plays
+        // this week instead -- team quality alone decides it, not this QB's skill, and no personal
+        // stat line gets attached. Still a real, scored entry on the shared schedule so the team's
+        // weekly board never shows a hole where a game should be.
+        const isIncumbent = incumbentIdxSet.has(idx);
+        const won = Math.random() < (isIncumbent ? incumbentWinRate : genericWinProb);
+        if(isIncumbent){ if(won) incumbentWins++; else incumbentLosses++; }
+        else { if(won) backupWins++; else backupLosses++; }
+        const { winnerScore, loserScore } = approxGameScore(won?career.teamStrength:oppGrade, won?oppGrade:career.teamStrength);
+        games.push({ week: slot.week, opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
+          opponentGrade: Math.round(oppGrade), opponentQbId: oppRival?oppRival.id:null,
+          opponentQbName: oppRival?oppRival.name:null, opponentQbOverall: oppRival?rivalEffTalent(oppRival):null,
+          won, myScore: won?winnerScore:loserScore, oppScore: won?loserScore:winnerScore,
+          comp:0, att:0, yards:0, td:0, int:0, sacks:0, rushAtt:0, rushYards:0, rushTd:0, startedByBackup:true });
+        return;
+      }
+      started++;
       const oppOffense = opponentOffenseGrade(oppId, QB_INFLUENCE_REGULAR);
       const scoreSim = simulateGameScore(myOff, oppOffense, career.defense);
       const won = scoreSim.won;
@@ -2517,7 +2526,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       tComp+=gComp; tAtt+=gAtt; tYards+=gYards; tTd+=gTd; tInt+=gInt; tSacks+=gSacks;
       tRushAtt+=gRushAtt; tRushYards+=gRushYards; tRushTd+=gRushTd;
 
-      games.push({ week: idx+1, opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
+      games.push({ week: slot.week, opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
         opponentGrade: Math.round(oppGrade),
         opponentQbId: oppRival ? oppRival.id : null,
         opponentQbName: oppRival ? oppRival.name : null,
@@ -2527,7 +2536,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         rushAtt: gRushAtt, rushYards: gRushYards, rushTd: gRushTd });
     });
     return { games, comp:tComp, att:tAtt, yards:tYards, td:tTd, int:tInt, sacks:tSacks,
-      rushAtt:tRushAtt, rushYards:tRushYards, rushTd:tRushTd, wins, losses: gamesPlayed-wins };
+      rushAtt:tRushAtt, rushYards:tRushYards, rushTd:tRushTd, wins, losses: started-wins,
+      backupWins, backupLosses, incumbentWins, incumbentLosses };
   }
 
   /* ----- league-wide standings: EVERY team's non-player games are resolved through a shared,
@@ -2620,10 +2630,31 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // reproduces that spread. Validated via week_schedule_sweep2.mjs: 0 collisions, 0 leftover
   // teams, 0 placement failures, and division games landing roughly evenly across every week of a
   // 32-team/17-game season instead of bunched at the front.
-  function scheduleGamesIntoWeeks(divs, allIds, gamesN){
+  // Real bye weeks were introduced league-wide in 1990 -- before that, every team played every
+  // single week of the season with no week off (season weeks === games, no slack). From 1990
+  // onward each team gets exactly one bye, so the calendar runs one week longer than the game
+  // count. An ODD number of teams (only possible during a mid-decade expansion year) makes at
+  // least one team's bye mathematically unavoidable every single week regardless of era, so that
+  // case always gets extra slack weeks even in a pre-bye decade -- 2 extra rather than 1, since
+  // the underlying greedy scheduler (see scheduleGamesIntoWeeks) is noticeably more likely to
+  // leave a team a game short of gamesN with only 1 spare week to work with when the team count
+  // doesn't divide evenly; validated via schedule_bye_sweep.mjs (odd-count shortfall dropped from
+  // ~2.8 teams/season at 1 spare week to ~0.7 teams/season at 2).
+  function weeksForSeason(decade, teamCount){
+    const gamesN = LEAGUE[decade].games;
+    const byeEra = decade!=="1960s" && decade!=="1970s" && decade!=="1980s";
+    let weeks = byeEra ? gamesN+1 : gamesN;
+    if(teamCount % 2 !== 0) weeks = Math.max(weeks, gamesN+2);
+    return weeks;
+  }
+  // weeksN is now independent of gamesN (see weeksForSeason) -- a team can go multiple weeks
+  // without playing (a real bye, or just bad luck in the greedy fill below), it just needs to reach
+  // exactly gamesN total games by the end of weeksN weeks. Two-team-double-booking is still
+  // structurally impossible (tryPlaceInWeek always checks both teams are free that week first).
+  function scheduleGamesIntoWeeks(divs, allIds, gamesN, weeksN){
     const remaining = {}; allIds.forEach(id=>{ remaining[id] = gamesN; });
-    const weeks = Array.from({length: gamesN}, ()=>[]);
-    const usedThisWeek = Array.from({length: gamesN}, ()=>new Set());
+    const weeks = Array.from({length: weeksN}, ()=>[]);
+    const usedThisWeek = Array.from({length: weeksN}, ()=>new Set());
     function tryPlaceInWeek(w, a, b){
       if(usedThisWeek[w].has(a) || usedThisWeek[w].has(b)) return false;
       weeks[w].push([a,b]);
@@ -2639,21 +2670,24 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         if(tryPlaceInWeek(w, a, b)) return true;
       }
       for(let w=half[0]; w<half[1]; w++){ if(remaining[a]>0 && remaining[b]>0 && tryPlaceInWeek(w,a,b)) return true; }
-      for(let w=0; w<gamesN; w++){ if(remaining[a]>0 && remaining[b]>0 && tryPlaceInWeek(w,a,b)) return true; }
+      for(let w=0; w<weeksN; w++){ if(remaining[a]>0 && remaining[b]>0 && tryPlaceInWeek(w,a,b)) return true; }
       return false;
     }
-    const mid = Math.floor(gamesN/2);
+    const mid = Math.floor(weeksN/2);
     divs.forEach(d=>{
       for(let i=0;i<d.teams.length;i++){
         for(let j=i+1;j<d.teams.length;j++){
           placeGameInHalf(d.teams[i], d.teams[j], [0, mid || 1]);
-          placeGameInHalf(d.teams[i], d.teams[j], [mid, gamesN]);
+          placeGameInHalf(d.teams[i], d.teams[j], [mid, weeksN]);
         }
       }
     });
     // remaining slate (cross-division/filler): same flat greedy-per-week matching as before,
     // just with no division-rival preference bias left to apply -- those are already placed above.
-    for(let w=0; w<gamesN; w++){
+    // A team left over some week (odd pool size, or everyone else already used) simply sits that
+    // week -- a real bye -- and gets another shot at a partner in a later week instead of ever
+    // being double-booked.
+    for(let w=0; w<weeksN; w++){
       const pool = shuffle(allIds.filter(id=> remaining[id]>0 && !usedThisWeek[w].has(id)));
       pool.forEach(a=>{
         if(usedThisWeek[w].has(a) || remaining[a]<=0) return;
@@ -2661,46 +2695,111 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         if(cands.length) tryPlaceInWeek(w, a, pick(cands));
       });
     }
+    // Repair pass: the greedy fill above can still leave a handful of teams short of gamesN (each
+    // one's remaining free weeks just never lined up with another short team's free weeks in the
+    // same single pass). Re-scan every still-short team against every OTHER still-short team, in
+    // full passes, until a whole pass places nothing new -- this must retry ALL leftover teams each
+    // pass, not just re-attempt the same first one repeatedly (an earlier version of this loop did
+    // exactly that: it picked leftover[0] and, on failure, dropped it for the rest of ITS OWN pass
+    // but then reintroduced it unchanged at the top of the very next pass, so a single unfixable
+    // team could burn the entire retry budget forever while other, actually-fixable teams next to
+    // it in the list never got a turn -- confirmed and fixed via schedule_bye_sweep.mjs, which
+    // showed near-zero improvement from more retries until this was corrected).
+    let changed = true, guard2 = 0;
+    while(changed && guard2++<200){
+      changed = false;
+      const leftover = allIds.filter(id=>remaining[id]>0);
+      for(let i=0;i<leftover.length;i++){
+        const a = leftover[i];
+        if(remaining[a]<=0) continue;
+        for(let j=0;j<leftover.length;j++){
+          const b = leftover[j];
+          if(b===a || remaining[b]<=0) continue;
+          let placed = false;
+          for(let w=0; w<weeksN; w++){
+            if(!usedThisWeek[w].has(a) && !usedThisWeek[w].has(b)){
+              tryPlaceInWeek(w,a,b);
+              placed = true; changed = true;
+              break;
+            }
+          }
+          if(placed) break;
+        }
+      }
+    }
     return weeks;
   }
-
-  function buildScheduleResults(season){
-    const year = season.year;
-    const gamesN = LEAGUE[season.decade].games;
+  // One schedule per season, shared by literally every team including the player's own -- this is
+  // what makes a cross-schedule conflict (the same team appearing in two different matchups the
+  // same week, once as the player's real opponent and once via an independently-generated shared
+  // schedule) structurally impossible, not just less likely. Built once, early in generateSeason(),
+  // before either the player's own game-by-game stats or anyone else's results are simulated --
+  // both draw their opponent-by-week assignments from this SAME weeks array.
+  function buildSeasonSchedule(year, decade){
     const divs = divisionsForYear(year);
     const allIds = divs.flatMap(d=>d.teams);
+    const gamesN = LEAGUE[decade].games;
+    const weeksN = weeksForSeason(decade, allIds.length);
+    const weeks = scheduleGamesIntoWeeks(divs, allIds, gamesN, weeksN);
+    return { divs, allIds, gamesN, weeksN, weeks };
+  }
+
+  // `schedule` is the SAME weeks array (see buildSeasonSchedule) that already decided the player's
+  // own opponent-by-week assignments back in generateSeason() -- this pass never generates a
+  // second, independent schedule for the player's team. Wherever a scheduled pairing involves
+  // career.teamId, the result is read straight off season.gameLog (already real, already known)
+  // instead of being rolled again via simpleGameWinner -- this is what makes a cross-schedule
+  // conflict (the same team's record disagreeing with itself, or a team appearing in two different
+  // matchups the same week) structurally impossible rather than just less likely.
+  function buildScheduleResults(season, schedule){
+    const allIds = schedule.allIds;
     const wins = {}, losses = {};
     allIds.forEach(id=>{ wins[id]=0; losses[id]=0; });
     // Real per-team, per-game log (opponent/week/score) -- current season only, never persisted
-    // into career.seasonLog (see career.currentSeasonSchedules below). `week` is now a real,
-    // shared week index (see scheduleGamesIntoWeeks) -- both teams in a game get the SAME week
-    // number and are correctly each other's opponent that week.
+    // into career.seasonLog (see career.currentSeasonSchedules below). `week` is a real, shared
+    // week index (see scheduleGamesIntoWeeks) -- both teams in a game get the SAME week number and
+    // are correctly each other's opponent that week. A team can have fewer entries than another
+    // team this season if it drew a bye some week(s) the other team didn't.
     const gameLogs = {}; allIds.forEach(id=>{ gameLogs[id] = []; });
     const strengthOf = id => id===career.teamId ? career.teamStrength : (career.leagueStrength[id] ?? 60);
-    const weeks = scheduleGamesIntoWeeks(divs, allIds, gamesN);
-    weeks.forEach((weekPairs, weekIdx)=>{
+    const myResultByWeek = {};
+    (season.gameLog||[]).forEach(g=>{ myResultByWeek[g.week] = g; });
+    schedule.weeks.forEach((weekPairs, weekIdx)=>{
       const week = weekIdx+1;
       weekPairs.forEach(([a,b])=>{
-        const w = simpleGameWinner(a, strengthOf(a), b, strengthOf(b));
-        const loser = w===a ? b : a;
-        const { winnerScore, loserScore } = approxGameScore(strengthOf(w), strengthOf(loser));
+        const myId = a===career.teamId ? a : (b===career.teamId ? b : null);
+        let w, winnerScore, loserScore;
+        const myGame = myId!=null ? myResultByWeek[week] : null;
+        if(myGame){
+          const oppId = myId===a ? b : a;
+          w = myGame.won ? myId : oppId;
+          winnerScore = myGame.won ? myGame.myScore : myGame.oppScore;
+          loserScore = myGame.won ? myGame.oppScore : myGame.myScore;
+        } else {
+          w = simpleGameWinner(a, strengthOf(a), b, strengthOf(b));
+          const loser = w===a ? b : a;
+          ({ winnerScore, loserScore } = approxGameScore(strengthOf(w), strengthOf(loser)));
+        }
         if(w===a){ wins[a]++; losses[b]++; } else { wins[b]++; losses[a]++; }
         gameLogs[a].push({ week, opponentId: b, won: w===a, myScore: w===a?winnerScore:loserScore, oppScore: w===a?loserScore:winnerScore });
         gameLogs[b].push({ week, opponentId: a, won: w===b, myScore: w===b?winnerScore:loserScore, oppScore: w===b?loserScore:winnerScore });
       });
     });
-    // overwrite the player's own team with its real, already-simulated record -- their OWN
-    // game-by-game log stays season.gameLog (a separate, more detailed simulation); gameLogs[career.teamId]
-    // is a throwaway artifact of this pass and is never read back for the player's own team.
+    // Defensive safety net only, not the source of truth anymore -- with the player's own games
+    // now read directly off the exact same schedule above, wins[career.teamId]/losses[...] should
+    // already exactly equal season.teamWins/teamLosses. Left in case season.gameLog ever falls
+    // short of covering every scheduled week (see the odd-team-count shortfall note on
+    // scheduleGamesIntoWeeks) so the standings table can never silently disagree with the season object.
     wins[career.teamId] = season.teamWins; losses[career.teamId] = season.teamLosses;
     const results = {};
     allIds.forEach(id=>{ const w=wins[id], l=losses[id], t=w+l; results[id] = { id, wins:w, losses:l, winPct: t>0?w/t:0 }; });
     return { results, gameLogs };
   }
 
-  function simulateLeagueStandings(season){
-    const { results, gameLogs } = buildScheduleResults(season);
+  function simulateLeagueStandings(season, schedule){
+    const { results, gameLogs } = buildScheduleResults(season, schedule);
     career.currentSeasonSchedules = gameLogs;
+    career.currentSeasonWeeksN = schedule.weeksN;
     const format = playoffFormatForYear(season.year);
     const divs = divisionsForYear(season.year);
     const seeded = {};
@@ -3276,8 +3375,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     advanceToNextPlayoffRound(playoffs, season);
   }
 
-  function resolvePlayoffs(effOverall, season){
-    const { seeded, results, format, divisions } = simulateLeagueStandings(season);
+  function resolvePlayoffs(effOverall, season, schedule){
+    const { seeded, results, format, divisions } = simulateLeagueStandings(season, schedule);
     season.leagueStandings = { results, seeded, format, divisions };
     const year = season.year;
     const myConf = conferenceOf(career.teamId, year);
@@ -4234,6 +4333,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function generateSeason(){
     const decade = decadeForYear(career.year);
     const league = LEAGUE[decade];
+    // Built once, right at the top, before anyone's games (the player's own included) are
+    // simulated -- see buildSeasonSchedule. Every other team's shared results (buildScheduleResults,
+    // called later via resolvePlayoffs) reuses this exact same schedule rather than generating a
+    // second one, which is what makes the player's real games structurally unable to disagree with
+    // the shared weekly board/standings.
+    const schedule = buildSeasonSchedule(career.year, decade);
     if(career.isBackup) resolveBackupSeasonSnaps(decade, league);
     const schemeId = career.teamScheme ? career.teamScheme[career.teamId] : null;
     const eff = schemeEffective(career.age, decade, schemeId);
@@ -4356,8 +4461,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const sackRate = clamp(0.075 - (eff.PKT-neutral.PKT)*0.0012 - (safeNum(career.oline,60)-65)*0.0006, 0.015, 0.16);
 
     const perfMult = 1 - perfPenalty*0.01;
+    // the team's season doesn't stop when this QB is hurt — a generic backup covers the missed
+    // games, playing off team quality alone (not this player's skill), so "team record" and "your
+    // record as the starter" can and often do differ. Games missed specifically because a NAMED
+    // incumbent started ahead of you (missedGamesBackup) use HIS real simulated win rate instead of
+    // the generic roll -- resolveBackupSeasonSnaps already ran his actual season, so his own W/L
+    // gives a real rate rather than a flat team-strength-only guess.
+    const genericMissedGames = missedGamesInjury + missedGamesSuspension;
+    const incumbentTotalGames = backupIncumbentWins + backupIncumbentLosses;
+    const incumbentWinRate = incumbentTotalGames>0 ? backupIncumbentWins/incumbentTotalGames
+      : clamp(0.5 + (career.teamStrength-65)*0.01, 0.12, 0.88);
     const regSeason = simulateRegularSeasonGames({
-      gamesPlayed, effOverall, comp, ypa, tdRate, intRate, attPerGame, perfMult, effRush, sackRate,
+      schedule, gamesPlayed, missedGamesBackup, genericMissedGames, incumbentWinRate,
+      effOverall, comp, ypa, tdRate, intRate, attPerGame, perfMult, effRush, sackRate,
       age: career.age, decade,
     });
     const gameLog = regSeason.games, wins = regSeason.wins, losses = regSeason.losses;
@@ -4366,19 +4482,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       rushAtt = regSeason.rushAtt, rushYards = regSeason.rushYards, rushTd = regSeason.rushTd;
     const rating = passerRating(completions, attempts, yards, td, interceptions);
     const winPct = gamesPlayed>0 ? wins/gamesPlayed : 0;
-
-    // the team's season doesn't stop when this QB is hurt — a generic backup covers the missed
-    // games, playing off team quality alone (not this player's skill), so "team record" and "your
-    // record as the starter" can and often do differ. Games missed specifically because a NAMED
-    // incumbent started ahead of you (missedGamesBackup) use HIS real simulated record instead of
-    // this generic roll -- resolveBackupSeasonSnaps already ran his actual season.
-    const genericMissedGames = missedGamesInjury + missedGamesSuspension;
-    const backupWinProb = clamp(0.5 + (career.teamStrength-65)*0.01, 0.12, 0.88);
-    let backupWins=0;
-    for(let i=0;i<genericMissedGames;i++){ if(Math.random()<backupWinProb) backupWins++; }
-    const backupLosses = genericMissedGames-backupWins;
-    const incumbentWins = backupIncumbentWins;
-    const incumbentLosses = backupIncumbentLosses;
+    const backupWins = regSeason.backupWins, backupLosses = regSeason.backupLosses;
+    const incumbentWins = regSeason.incumbentWins, incumbentLosses = regSeason.incumbentLosses;
 
     // All three season awards are judged on what actually happened this season -- passer rating
     // relative to that year's league average, raw production, team success, and (for Pro Bowl /
@@ -4412,7 +4517,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       contractApy: career.contract.apy, contractTier: career.contract.tier,
     };
 
-    const playoffs = resolvePlayoffs(effOverall, season);
+    const playoffs = resolvePlayoffs(effOverall, season, schedule);
     season.playoffs = playoffs;
     // NOTE: no Super Bowl Champion award, no ring, here -- resolvePlayoffs has only generated
     // round 1 of the postseason (if the team made it at all). Whether this season ends in a ring
@@ -6240,8 +6345,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   }
 
   // Game-by-game regular season log: the player's real weekly schedule (division rivals home-and-
-  // home, the rest of the league filling out the slate -- see pickRegularSeasonOpponents), each
-  // game resolved against that WEEK's actual opponent team grade (see simulateRegularSeasonGames),
+  // home, the rest of the league filling out the slate -- see buildSeasonSchedule), each game
+  // resolved against that WEEK's actual opponent team grade (see simulateRegularSeasonGames),
   // with a per-game stat line so the season totals aren't just one deterministic formula anymore.
   // Resolves a game-log qbId to whichever entity actually played that game -- a current starter
   // (career.leagueRivals) or a bench QB2/QB3 (career.leagueDepthCharts) -- for any OTHER team's
@@ -6255,50 +6360,32 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return null;
   }
   // Every real matchup for one week across the WHOLE league -- real NFL schedule pages browse by
-  // week (see every game that week), not by team, which is what this replaces the old team-picker
-  // schedule tab with. Weaves in the player's own REAL game (season.gameLog -- a separate, more
-  // detailed simulation from the shared league schedule, unchanged from how it's always worked) for
-  // their own row; the opponent's OWN shared-schedule entry for that week is deliberately SKIPPED
-  // (not overwritten or shown twice) so a team's schedule can never visibly contradict itself --
-  // that team simply doesn't appear on the board this specific week, reading like a bye rather than
-  // a collision. This is a known, narrow boundary between the two separate simulations (the
-  // player's own regular season has always been simulated independently of the shared league-wide
-  // schedule) -- fully unifying them would be a much larger change than this pass's scope.
+  // week (see every game that week), not by team. As of the Round 27 schedule unification, the
+  // player is just another entry in career.currentSeasonSchedules (built from the exact same
+  // shared schedule as everyone else -- see buildSeasonSchedule/generateSeason), so there is no
+  // longer a second, independently-simulated source to reconcile here: a team's own id is the only
+  // thing gating whether its card renders, and a missing entry for a given week just means that
+  // team drew a real bye, never a silently-dropped or double-booked game (see the Round 25/26
+  // history on this function for the two real bugs the old two-source version had).
   function buildWeekMatchups(season, week){
     const teamIds = divisionsForYear(season.year).flatMap(d=>d.teams);
     const seen = new Set();
     const matchups = [];
-    const myGame = (season.gameLog||[]).find(g=>g.week===week);
-    if(myGame){
-      seen.add(season.teamId); seen.add(myGame.opponentId);
-      matchups.push({ aId: season.teamId, aScore: myGame.myScore, aWon: myGame.won, aQb: null,
-        bId: myGame.opponentId, bScore: myGame.oppScore, bQb: resolveScheduleQb(myGame.opponentQbId) });
-    }
     teamIds.forEach(id=>{
-      // Only "seen" (this exact team's own card already on the board) skips it -- NOT "their
-      // intended opponent happens to be seen for some unrelated reason." A real, reported bug:
-      // when the player's real opponent this week (from season.gameLog, a separate simulation)
-      // coincides with some OTHER team's shared-schedule opponent, the old code checked
-      // seen.has(g.opponentId) and silently dropped that OTHER team entirely -- an innocent third
-      // party losing its whole displayed game because of a conflict that has nothing to do with
-      // it. Standings still counted its real game correctly (that comes from the aggregate
-      // results, untouched by this); only the WEEKLY BOARD was silently missing it.
       if(seen.has(id)) return;
       const log = career.currentSeasonSchedules && career.currentSeasonSchedules[id];
       const g = log && log.find(x=>x.week===week);
-      if(!g) return;
-      seen.add(id);
-      // Only ALSO claim (suppress) the opponent's own separate card if this pairing is still
-      // genuinely intact from both sides -- if the opponent was already claimed by something else
-      // (the one case that can happen: the player's own real opponent this week), `id` still gets
-      // its own card shown from its own real result, rather than vanishing. This is a narrow,
-      // accepted trade-off (see the Round 22 note on the player's-own-schedule/shared-schedule
-      // boundary): the team on the OTHER side of that specific conflict can end up named in two
-      // different cards this week (once as the player's real opponent, once here) -- better than
-      // a team's entire game silently disappearing from the board.
-      if(!seen.has(g.opponentId)) seen.add(g.opponentId);
-      matchups.push({ aId: id, aScore: g.myScore, aWon: g.won, aQb: resolveScheduleQb(g.qbId),
-        bId: g.opponentId, bScore: g.oppScore, bQb: null });
+      if(!g) return; // real bye week for this team
+      seen.add(id); seen.add(g.opponentId);
+      // Each team's own currentSeasonSchedules entry only carries ITS OWN qbId (attached later by
+      // simulateRivalSeasons/simulateDepthChartSeasons) -- there's no separate opponentQbId field
+      // on this shape, so the opponent's QB link is resolved by looking up ITS OWN matching entry
+      // for the same week instead (guaranteed to exist now that both sides share one schedule).
+      const oppLog = career.currentSeasonSchedules && career.currentSeasonSchedules[g.opponentId];
+      const oppEntry = oppLog && oppLog.find(x=>x.week===week);
+      const mine = id===season.teamId, oppMine = g.opponentId===season.teamId;
+      matchups.push({ aId: id, aScore: g.myScore, aWon: g.won, aQb: mine?null:resolveScheduleQb(g.qbId),
+        bId: g.opponentId, bScore: g.oppScore, bQb: oppMine?null:resolveScheduleQb(oppEntry && oppEntry.qbId) });
     });
     return matchups;
   }
@@ -6319,8 +6406,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   let scheduleTabSeason = null;
   function renderScheduleTabInner(){
     const season = scheduleTabSeason;
-    const gamesN = LEAGUE[season.decade].games;
-    const options = Array.from({length: gamesN}, (_,i)=>i+1)
+    // The calendar now runs longer than the game count once bye weeks exist (see
+    // weeksForSeason/buildSeasonSchedule) -- career.currentSeasonWeeksN is the real week count for
+    // THIS season, set alongside currentSeasonSchedules in simulateLeagueStandings. Falls back to
+    // the old games-only count only if it's somehow missing (e.g. a schedule tab render before any
+    // season has actually been simulated yet).
+    const weeksN = career.currentSeasonWeeksN || LEAGUE[season.decade].games;
+    const options = Array.from({length: weeksN}, (_,i)=>i+1)
       .map(w=>`<option value="${w}"${w===scheduleTabWeek?" selected":""}>Week ${w}</option>`).join("");
     const matchups = buildWeekMatchups(season, scheduleTabWeek);
     const cards = matchups.map(m=>`<div class="week-matchup-card">
