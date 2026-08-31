@@ -6275,11 +6275,28 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         bId: myGame.opponentId, bScore: myGame.oppScore, bQb: resolveScheduleQb(myGame.opponentQbId) });
     }
     teamIds.forEach(id=>{
+      // Only "seen" (this exact team's own card already on the board) skips it -- NOT "their
+      // intended opponent happens to be seen for some unrelated reason." A real, reported bug:
+      // when the player's real opponent this week (from season.gameLog, a separate simulation)
+      // coincides with some OTHER team's shared-schedule opponent, the old code checked
+      // seen.has(g.opponentId) and silently dropped that OTHER team entirely -- an innocent third
+      // party losing its whole displayed game because of a conflict that has nothing to do with
+      // it. Standings still counted its real game correctly (that comes from the aggregate
+      // results, untouched by this); only the WEEKLY BOARD was silently missing it.
       if(seen.has(id)) return;
       const log = career.currentSeasonSchedules && career.currentSeasonSchedules[id];
       const g = log && log.find(x=>x.week===week);
-      if(!g || seen.has(g.opponentId)) return;
-      seen.add(id); seen.add(g.opponentId);
+      if(!g) return;
+      seen.add(id);
+      // Only ALSO claim (suppress) the opponent's own separate card if this pairing is still
+      // genuinely intact from both sides -- if the opponent was already claimed by something else
+      // (the one case that can happen: the player's own real opponent this week), `id` still gets
+      // its own card shown from its own real result, rather than vanishing. This is a narrow,
+      // accepted trade-off (see the Round 22 note on the player's-own-schedule/shared-schedule
+      // boundary): the team on the OTHER side of that specific conflict can end up named in two
+      // different cards this week (once as the player's real opponent, once here) -- better than
+      // a team's entire game silently disappearing from the board.
+      if(!seen.has(g.opponentId)) seen.add(g.opponentId);
       matchups.push({ aId: id, aScore: g.myScore, aWon: g.won, aQb: resolveScheduleQb(g.qbId),
         bId: g.opponentId, bScore: g.oppScore, bQb: null });
     });
