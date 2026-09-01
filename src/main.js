@@ -2237,6 +2237,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       _cutShieldSeasons: 0,
       leagueRivals: [],
       leagueDepthCharts: {},
+      teamSeasonHistory: {},
       freeAgentPool: [],
       rivalries: {},
       isBackup: false,
@@ -3141,7 +3142,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // coaching/gmGrade/oline/weapons only ever exist for whichever team the player currently belongs
   // to, never for an arbitrary other team). This is where the depth chart moved OFF a QB's own
   // profile TO -- team-organizational info belongs on the team, not the person.
-  function buildTeamPageHTML(teamId){
+  function buildTeamPageHTML(teamId, faRoleLabel){
     const year = career.year;
     const div = divisionOf(teamId, year);
     const name = teamNameAt(teamId, year);
@@ -3152,6 +3153,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const qbLine = qb
       ? `<button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button> (${rivalEffTalent(qb)} ovr)`
       : (isMine ? `${svgEscape(career.name)} (you)` : "—");
+    const schemeId = career.teamScheme ? career.teamScheme[teamId] : null;
+    const scheme = SCHEMES.find(s=>s.id===schemeId);
+    // Round 33 item 5: only shown when this page was opened from a real Free Agency offer for THIS
+    // team (faRoleLabel is that offer's own already-computed role string -- reused directly rather
+    // than re-deriving a second, potentially-contradictory depth-chart-position estimate).
+    const faRoleHtml = faRoleLabel ? `<div class="calc-refnote" style="margin-top:0.4rem;">If you sign here: <b>${svgEscape(faRoleLabel)}</b></div>` : "";
     const chart = (career.leagueDepthCharts||{})[teamId];
     const depthChartHtml = chart ? `<div class="rival-facts">
         <div class="rival-facts-label">Depth Chart</div>
@@ -3160,6 +3167,20 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <li>QB3 — ${svgEscape(chart.qb3.name)} (${rivalEffTalent(chart.qb3)} ovr, age ${chart.qb3.age}, ${svgEscape(chart.qb3.contract.tier)})</li>
         </ul>
       </div>` : "";
+    // Round 33 item 5: a real, permanent past-seasons record (see recordTeamSeasonHistory) --
+    // starts accumulating only from whenever this feature first ran for this team, same limitation
+    // Trophy Room/Achievements both already have for pre-existing careers.
+    const hist = (career.teamSeasonHistory && career.teamSeasonHistory[teamId]) || [];
+    const histRows = hist.slice().reverse().map(h=>{
+      const titles = [h.wonConference?"Conf. Champs":"", h.wonDivision?"Div. Champs":""].filter(Boolean).join(", ");
+      return `<tr><td>${h.year}</td><td>${h.qbName?svgEscape(h.qbName):"—"}</td><td class="tabular">${h.qbRings}</td>
+          <td class="tabular">${h.wins}-${h.losses}</td><td>${titles||"—"}</td><td>${h.scheme?svgEscape(h.scheme):"—"}</td></tr>`;
+    }).join("");
+    const histHtml = histRows ? `<div class="section-label" style="margin-top:1rem;">Past Seasons</div>
+        <div class="table-wrap"><table class="career-table">
+          <thead><tr><th>Year</th><th>QB</th><th class="tabular">QB Rings</th><th class="tabular">Record</th><th>Titles</th><th>Scheme</th></tr></thead>
+          <tbody>${histRows}</tbody>
+        </table></div>` : "";
     const viewFullTeamTabHtml = isMine
       ? `<button type="button" class="btn btn-ghost" id="teamProfileGotoTab">View full Team tab →</button>` : "";
     return `
@@ -3167,18 +3188,21 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <div class="rival-eyebrow">${confLabel(div.conf, year)} ${svgEscape(div.name)}</div>
         <h3>${svgEscape(name)}${isMine?" (your team)":""}</h3>
         <div class="rival-meta">Team Grade <b>${overall}</b> (${svgEscape(g.flavor)})</div>
+        ${scheme ? `<div class="rival-meta">Scheme: <b>${svgEscape(scheme.name)}</b></div>` : ""}
         <div class="rival-stats-grid">
           <div><div class="rv-label">Starting QB</div><div class="rv-value">${qbLine}</div></div>
         </div>
+        ${faRoleHtml}
         ${depthChartHtml}
+        ${histHtml}
         ${viewFullTeamTabHtml}
         <button type="button" class="btn btn-ghost rival-close">Close</button>
       </div>`;
   }
-  function openTeamProfile(teamId){
+  function openTeamProfile(teamId, faRoleLabel){
     const overlay = document.getElementById("teamProfileOverlay");
     if(!teamId || !overlay) return;
-    overlay.innerHTML = buildTeamPageHTML(teamId);
+    overlay.innerHTML = buildTeamPageHTML(teamId, faRoleLabel);
     overlay.classList.add("open");
     overlay.setAttribute("aria-hidden", "false");
     const closeBtn = overlay.querySelector(".rival-close");
@@ -3361,10 +3385,55 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // career.totals.rings (finalizePlayoffOutcome, unchanged) for the player or the rival's own
     // totals for anyone else.
     if(superBowlWinnerId!==career.teamId) awardRivalSuperBowlRing(superBowlWinnerId);
+    // Round 33: patch the conference-champion fact into each conference winner's ALREADY-RECORDED
+    // season-history entry (pushed by recordTeamSeasonHistory back in resolvePlayoffs) -- this is
+    // the one fact that isn't known until the bracket actually confirms, unlike W-L/division/scheme.
+    markConferenceChampionInHistory(bd.myChampionId, season.year);
+    markConferenceChampionInHistory(bd.otherChampionId, season.year);
   }
   function awardRivalSuperBowlRing(teamId){
     const rival = rivalForTeam(teamId);
     if(rival) rival.totals.rings = (rival.totals.rings||0)+1;
+  }
+  // Round 33 item 5: a real, permanent per-team season-by-season record, the backbone of the Team
+  // page's new "Past Seasons" table -- who started at QB, their ring count (career total, snapshotted
+  // as of that team's season), win-loss, whether they won their division (known immediately, straight
+  // off that division's own standings sort) or their conference (patched in later, once known -- see
+  // markConferenceChampionInHistory), and what scheme they ran. Recorded once per season, for EVERY
+  // team, the moment standings/seeding are final (resolvePlayoffs) -- necessarily starts accumulating
+  // only from the point this feature shipped forward; there is no way to retroactively reconstruct a
+  // season that was never recorded, the same limitation Trophy Room/Achievements both already have.
+  function recordTeamSeasonHistory(season){
+    const ls = season.leagueStandings;
+    const year = season.year;
+    const divWinnerIds = new Set();
+    (ls.divisions || divisionsForYear(year)).forEach(d=>{
+      const ranked = d.teams.map(id=>ls.results[id]).sort((a,b)=>b.winPct-a.winPct);
+      if(ranked[0]) divWinnerIds.add(ranked[0].id);
+    });
+    if(!career.teamSeasonHistory) career.teamSeasonHistory = {};
+    divisionsForYear(year).flatMap(d=>d.teams).forEach(teamId=>{
+      const r = ls.results[teamId];
+      if(!r) return;
+      const isMine = teamId===career.teamId;
+      const rival = isMine ? null : rivalForTeam(teamId);
+      const qbName = isMine ? career.name : (rival ? rival.name : null);
+      const qbRings = isMine ? career.totals.rings : (rival ? (rival.totals.rings||0) : 0);
+      const schemeId = career.teamScheme ? career.teamScheme[teamId] : null;
+      const scheme = SCHEMES.find(s=>s.id===schemeId);
+      if(!career.teamSeasonHistory[teamId]) career.teamSeasonHistory[teamId] = [];
+      career.teamSeasonHistory[teamId].push({
+        year, wins: r.wins, losses: r.losses, qbName, qbRings,
+        wonDivision: divWinnerIds.has(teamId), wonConference: false,
+        scheme: scheme ? scheme.name : null,
+      });
+    });
+  }
+  function markConferenceChampionInHistory(teamId, year){
+    const hist = career.teamSeasonHistory && career.teamSeasonHistory[teamId];
+    if(!hist) return;
+    const entry = hist.find(h=>h.year===year);
+    if(entry) entry.wonConference = true;
   }
 
   /* ----- Live, stepwise postseason resolution -----
@@ -3577,6 +3646,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       myRounds: [], otherRounds: [],
       myChampionId: null, otherChampionId: null,
     };
+    // Round 33 item 5: snapshot this season into every team's permanent history the moment the
+    // regular season/standings/seeding are known -- W-L and division are final right here; the
+    // conference-champion fact gets patched into this SAME entry later, by
+    // markConferenceChampionInHistory, once that conference's bracket actually confirms.
+    recordTeamSeasonHistory(season);
     const mySeeds = seeded[myConf];
     const mySeedIdx = mySeeds.findIndex(t=>t.id===career.teamId);
 
@@ -6182,7 +6256,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const grade = Math.round(career.leagueStrength[o.teamId] ?? 60);
       const gradeTag = grade>=72 ? "Contender" : grade>=52 ? "Solid" : "Rebuilding";
       return `<div class="fa-offer">
-        <div class="fa-offer-head"><b>${teamName}</b><span class="fa-role">${roleLabel}</span></div>
+        <div class="fa-offer-head"><b><button type="button" class="rival-link" data-team-id="${o.teamId}" data-fa-role="${svgEscape(roleLabel)}">${teamName}</button></b><span class="fa-role">${roleLabel}</span></div>
         <div class="fa-offer-terms tabular">${fmtMoney(o.apy)}/yr · ${o.years} yr${o.years===1?"":"s"}</div>
         <div class="fa-offer-grade">Team grade <b class="tabular">${grade}</b> <span class="fa-grade-tag">${gradeTag}</span></div>
         <div class="fa-offer-cast">O-Line <b>${castLetterGrade(o.oline)}</b> &nbsp;·&nbsp; Weapons <b>${castLetterGrade(o.weapons)}</b></div>
@@ -9485,9 +9559,11 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
     const link = e.target.closest("[data-rival-id]");
     if(link) openRivalProfile(link.dataset.rivalId);
     // Round 32 item 4: "click into the team" -- a generic page for any team, reachable from a QB's
-    // own profile (the team-name eyebrow) or the Standings tab's team names.
+    // own profile (the team-name eyebrow), the Standings tab's team names, or (Round 33) a Free
+    // Agency offer card, in which case data-fa-role carries that offer's own role string so the
+    // team page can show "if you sign here" without re-deriving a second depth-chart estimate.
     const teamLink = e.target.closest("[data-team-id]");
-    if(teamLink) openTeamProfile(teamLink.dataset.teamId);
+    if(teamLink) openTeamProfile(teamLink.dataset.teamId, teamLink.dataset.faRole || null);
     // League tab's "Played This Season" / "Inactive / Free Agents" toggle -- pure show/hide, both
     // panels' HTML is already in the DOM (see buildLeagueTabHTML), so no re-render is needed here.
     const subtabBtn = e.target.closest("[data-league-subtab]");
