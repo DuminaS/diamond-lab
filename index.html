@@ -58,6 +58,7 @@
     <div class="menu-actions" style="margin-top:1.75rem;">
       <button class="btn btn-primary" id="startBtn">Start the combine</button>
       <button class="btn btn-ghost" id="trophyRoomBtn">Trophy Room</button>
+      <button class="btn btn-ghost" id="achievementsBtn">Achievements</button>
     </div>
 
     <div class="active-career-strip" id="activeCareerStrip"></div>
@@ -238,6 +239,19 @@
     </div>
   </section>
 
+  <!-- ACHIEVEMENTS: every achievement ever unlocked across every career on this browser -->
+  <section class="screen" id="screen-achievements">
+    <div class="section-label">Achievements</div>
+    <h2 style="font-size:clamp(1.6rem,5vw,2.2rem);">Every milestone, every character.</h2>
+    <p class="lede" style="margin-top:0.6rem;">Unlocked achievements show who got there first. Locked ones only give you a hint — same as Steam.</p>
+
+    <div id="achievementsGlobalGrid" style="margin-top:1.25rem;"></div>
+
+    <div class="menu-actions" style="margin-top:1.75rem;">
+      <button class="btn btn-ghost" id="achievementsBackBtn">Back to menu</button>
+    </div>
+  </section>
+
 </main>
 
 <div class="km-overlay" id="keyMomentOverlay" aria-hidden="true"></div>
@@ -247,6 +261,10 @@
 <div class="baseball-card-overlay" id="baseballCardOverlay" aria-hidden="true"></div>
 <div class="modal-overlay" id="bracketBoxScoreOverlay" aria-hidden="true"></div>
 <div id="achievementToastContainer" aria-hidden="true"></div>
+<div id="fastForwardBanner" class="ff-banner" aria-hidden="true">
+  <span class="ff-banner-text">⏩ Fast-forwarding — <span id="ffBannerReason">skipping ahead…</span></span>
+  <button type="button" id="fastForwardStopBtn" class="ff-banner-stop">Stop</button>
+</div>
 <div id="buildStamp" aria-hidden="true"></div>
 
 <footer>Gridiron Lab — ratings, stat lines, and career outcomes are illustrative simulation, not real statistics or events.</footer>

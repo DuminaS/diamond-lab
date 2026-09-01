@@ -981,9 +981,57 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const newlyUnlocked = [];
     ACHIEVEMENTS.forEach(a=>{
       if(career.achievements.unlocked[a.key]) return;
-      if(a.check()){ career.achievements.unlocked[a.key] = true; newlyUnlocked.push(a); }
+      if(a.check()){ career.achievements.unlocked[a.key] = true; newlyUnlocked.push(a); recordGlobalFirstUnlock(a); }
     });
     if(newlyUnlocked.length) queueAchievementToasts(newlyUnlocked);
+  }
+
+  // ----- Global (cross-career) achievement record: "every achievement you've ever earned, across
+  // every QB you've ever built, and which one got there first" -- distinct from career.achievements
+  // above, which is scoped to the CURRENT career only and discarded once that career ends (only its
+  // key LIST survives, copied into a Trophy Room entry's `achievements` array). Same storage
+  // convention as Trophy Room (safeStorage-wrapped localStorage + an in-memory session mirror so a
+  // blocked-storage context still behaves correctly for the life of this page load).
+  const ACHIEVEMENTS_GLOBAL_KEY = "gridironlab.achievementsGlobal";
+  let _sessionAchievementsGlobal = null;
+  function loadGlobalAchievementsRaw(){
+    if(_sessionAchievementsGlobal) return Object.assign({}, _sessionAchievementsGlobal);
+    if(!store) return {};
+    try{ return JSON.parse(store.getItem(ACHIEVEMENTS_GLOBAL_KEY)||"{}"); }catch(e){ return {}; }
+  }
+  function saveGlobalAchievements(obj){
+    _sessionAchievementsGlobal = Object.assign({}, obj);
+    if(!store) return;
+    try{ store.setItem(ACHIEVEMENTS_GLOBAL_KEY, JSON.stringify(obj)); }catch(e){}
+  }
+  // The ONLY writer -- called the moment checkAchievements() unlocks something NEW in the CURRENT,
+  // live career, so "first unlocked by" is captured in real time as it actually happens (never
+  // overwritten once set -- first claim wins, permanently, even if a later/faster career could in
+  // principle have earned it "more impressively").
+  function recordGlobalFirstUnlock(def){
+    const g = loadGlobalAchievementsRaw();
+    if(g[def.key]) return;
+    g[def.key] = { name: career.name, team: teamNameAt(career.teamId, career.year), year: career.year };
+    saveGlobalAchievements(g);
+  }
+  // Read path used by the Achievements screen: backfills from Trophy Room history (oldest career
+  // first) for anything the live-write path above never got a chance to record -- lets a player who
+  // already earned achievements in past careers, before this cross-career view existed, still see
+  // accurate "first unlocked by" credit instead of the record only starting from whenever this
+  // feature happened to ship. Self-healing and idempotent: once an achievement is backfilled it's
+  // saved back, so this scan only ever does real work the first time it finds something missing.
+  function loadGlobalAchievementsWithBackfill(){
+    const g = loadGlobalAchievementsRaw();
+    let changed = false;
+    loadTrophyRoom().slice().sort((a,b)=>a.completedAt-b.completedAt).forEach(entry=>{
+      (entry.achievements||[]).forEach(key=>{
+        if(g[key]) return;
+        g[key] = { name: entry.name, team: (entry.teams&&entry.teams.length)?entry.teams[entry.teams.length-1]:null, year: entry.finalYear };
+        changed = true;
+      });
+    });
+    if(changed) saveGlobalAchievements(g);
+    return g;
   }
 
   function achievementStatusFor(key){
@@ -1538,6 +1586,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career: document.getElementById("screen-career"),
     careerSummary: document.getElementById("screen-career-summary"),
     trophyroom: document.getElementById("screen-trophyroom"),
+    achievements: document.getElementById("screen-achievements"),
   };
   function showScreen(name){
     Object.values(screens).forEach(s=>s.classList.remove("active"));
@@ -7365,6 +7414,38 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       <div class="pb-grid" style="margin-top:1rem;">${cards}</div>`;
   }
 
+  // Menu-level Achievements screen: every achievement ever unlocked across EVERY career on this
+  // browser (not just the current one), plus which character got there first -- same Steam-style
+  // unlocked/locked split buildAchievementsTabHTML already uses (full blurb once earned, a vague
+  // hint while locked), just scoped to the whole account instead of one career. Unlocked entries
+  // sort first so a completionist's progress reads top-to-bottom without hunting through locked
+  // filler; within each group, original ACHIEVEMENTS order is kept.
+  function buildGlobalAchievementsHTML(){
+    const g = loadGlobalAchievementsWithBackfill();
+    const unlockedCount = ACHIEVEMENTS.filter(def=>g[def.key]).length;
+    const sorted = ACHIEVEMENTS.map((def,i)=>({def,i})).sort((a,b)=>{
+      const ua = !!g[a.def.key], ub = !!g[b.def.key];
+      if(ua!==ub) return ua ? -1 : 1;
+      return a.i-b.i;
+    }).map(x=>x.def);
+    const cards = sorted.map(def=>{
+      const rec = g[def.key];
+      const unlocked = !!rec;
+      const subLine = unlocked
+        ? `<div class="pb-card-sub">First unlocked by <b>${svgEscape(rec.name)}</b>${rec.team?` — ${svgEscape(rec.team)}`:""}${rec.year?`, ${rec.year}`:""}</div>`
+        : "";
+      return `<div class="pb-card${unlocked?"":" is-locked"}">
+          <div class="pb-slot" style="cursor:default;">${achievementFrameHTML(def, unlocked)}</div>
+          <div class="pb-card-name">${svgEscape(def.name)}</div>
+          <div class="pb-card-tier">${unlocked?"Unlocked":"Locked"}</div>
+          <div class="pb-card-hint">${unlocked ? svgEscape(def.blurb) : svgEscape(def.hint)}</div>
+          ${subLine}
+        </div>`;
+    }).join("");
+    return `<div class="calc-refnote">${unlockedCount} of ${ACHIEVEMENTS.length} achievements unlocked across every QB you've ever built on this browser.</div>
+      <div class="pb-grid" style="margin-top:1rem;">${cards}</div>`;
+  }
+
   function buildEventLogFeedHTML(){
     const lines = (career.transactions||[]).slice().reverse();
     if(!lines.length) return `<div class="feed-wrap"><div class="feed-empty">No transactions logged yet.</div></div>`;
@@ -7595,8 +7676,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       document.getElementById("playOnBtn").addEventListener("click", nextSeason);
       document.getElementById("retireBtn").addEventListener("click", ()=>{ career.exitReason="retired"; finishCareer(); });
     } else {
-      actions.innerHTML = `<button class="btn btn-primary" id="continueBtn">Continue career</button>${tradeBtnHtml}`;
+      actions.innerHTML = `<button class="btn btn-primary" id="continueBtn">Continue career</button>${tradeBtnHtml}<button class="btn btn-ghost" id="fastForwardBtn">Fast-Forward ⏩</button>`;
       document.getElementById("continueBtn").addEventListener("click", nextSeason);
+      document.getElementById("fastForwardBtn").addEventListener("click", startFastForward);
     }
     const reqTradeBtn = document.getElementById("reqTradeBtn");
     if(reqTradeBtn) reqTradeBtn.addEventListener("click", requestTrade);
@@ -8161,6 +8243,75 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.age++; career.year++; career.seasonNumber++;
     if(career._tradeRequestCooldown>0) career._tradeRequestCooldown--;
     advanceCareer();
+  }
+
+  /* ----- Fast-forward: "Simulate to Free Agency" -----
+     Auto-advances through every purely-narrative interstitial (no real choice) between now and
+     whatever the next GENUINE decision turns out to be -- most commonly free agency (a contract
+     running out), but also an injury choice, an infraction, a locker-room choice, being waived, or
+     reaching retirement eligibility. The classification rule is generic, not a hand-maintained list
+     of event names: a screen with exactly ONE .choice-btn has nothing to actually decide (click it
+     and move on); two or more is a real choice (stop, hand control back). This holds for every
+     event in the game today (relationship/lifepath/rivalry/positive/org/suspension/injury-leave/
+     expansion/trade beats are always single-button; injury/infraction/locker-room/waived/free-
+     agency screens always offer 2+) and stays correct automatically if a future event is added,
+     since it's a property of the rendered screen, not a name on a list.
+     The season-card's own action row is a separate, explicit check below (it uses .btn, not
+     .choice-btn) -- its real-decision signal is specifically the Retire button existing (available
+     every season from age 29 on), not a raw button count, since "Request a trade" is a standing
+     optional side-lever that sits next to Continue every season without ever forcing a decision. */
+  let fastForwardActive = false;
+  let fastForwardStepsLeft = 0;
+  const FAST_FORWARD_MAX_STEPS = 500;
+  function startFastForward(){
+    if(fastForwardActive) return;
+    fastForwardActive = true;
+    fastForwardStepsLeft = FAST_FORWARD_MAX_STEPS;
+    const banner = document.getElementById("fastForwardBanner");
+    if(banner){ banner.classList.add("show"); banner.setAttribute("aria-hidden", "false"); }
+    fastForwardStep();
+  }
+  function stopFastForward(){
+    fastForwardActive = false;
+    const banner = document.getElementById("fastForwardBanner");
+    if(banner){ banner.classList.remove("show"); banner.setAttribute("aria-hidden", "true"); }
+  }
+  function scheduleFastForwardStep(){
+    // A real (if tiny) delay, not a synchronous recursive loop -- yields back to the browser every
+    // step so a long unbroken run can never freeze the tab, so the Stop button stays responsive
+    // mid-run, and so count-up stat animations at least get a frame to start before the next swap.
+    setTimeout(fastForwardStep, 20);
+  }
+  function fastForwardStep(){
+    if(!fastForwardActive) return;
+    if(fastForwardStepsLeft-- <= 0){ stopFastForward(); return; }
+
+    // A Key Moment mini-game is a genuine, skill-based decision -- always stop for it, exactly
+    // like every other real choice, never auto-resolved.
+    const km = document.getElementById("keyMomentOverlay");
+    if(km && km.classList.contains("open")){ stopFastForward(); return; }
+
+    // Mid-reveal on a playoff round: jump straight to its end. simToEnd's own recursion (see
+    // revealOneQuarter) already pauses itself the instant a Key Moment fires, so this can never
+    // silently blow past one -- the overlay check above will catch it on the very next step.
+    const simEndBtn = document.querySelector("#playoffRoundsHolder [id^='pqSimEnd-']:not([disabled])");
+    if(simEndBtn){ simEndBtn.click(); scheduleFastForwardStep(); return; }
+
+    const content = document.getElementById("careerContent");
+    const choiceBtns = content ? Array.from(content.querySelectorAll(".event-choices .choice-btn")) : [];
+    if(choiceBtns.length===1){ choiceBtns[0].click(); scheduleFastForwardStep(); return; }
+    if(choiceBtns.length>=2){ stopFastForward(); return; }
+
+    const actions = document.getElementById("seasonActions");
+    if(actions && !actions.classList.contains("pending-reveal")){
+      if(document.getElementById("retireBtn")){ stopFastForward(); return; }
+      const goBtn = document.getElementById("continueBtn") || document.getElementById("playOnBtn");
+      if(goBtn && !goBtn.disabled){ goBtn.click(); scheduleFastForwardStep(); return; }
+    }
+
+    // Nothing recognized -- the career just ended (Hall of Fame screen) or we've landed somewhere
+    // fast-forward doesn't have a rule for. Stop rather than guess.
+    stopFastForward();
   }
 
   function updateHeaderCareerTicker(){
@@ -9209,6 +9360,18 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
     showScreen("trophyroom");
   });
   document.getElementById("trophyRoomBackBtn").addEventListener("click", ()=> showScreen("menu"));
+
+  // Achievements screen: static (never recreated), same wire-once convention as Trophy Room above.
+  document.getElementById("achievementsBtn").addEventListener("click", ()=>{
+    document.getElementById("achievementsGlobalGrid").innerHTML = buildGlobalAchievementsHTML();
+    showScreen("achievements");
+  });
+  document.getElementById("achievementsBackBtn").addEventListener("click", ()=> showScreen("menu"));
+
+  // Fast-forward stop button lives outside #careerContent (see index.html) specifically so it
+  // survives every innerHTML swap fast-forward itself triggers -- wired once, here, same as every
+  // other static overlay control in this file.
+  document.getElementById("fastForwardStopBtn").addEventListener("click", stopFastForward);
   document.querySelectorAll("#trophyRoomSortRow .tr-sort-btn").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       trophyRoomSortKey = btn.dataset.sort;

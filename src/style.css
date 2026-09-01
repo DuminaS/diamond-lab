@@ -321,6 +321,7 @@
   .pb-card-tier{ font-size:0.64rem; color:var(--gold); text-transform:uppercase; letter-spacing:0.05em; font-weight:700; }
   .pb-card.is-locked .pb-card-tier{ color:var(--ink-muted); }
   .pb-card-hint{ font-size:0.66rem; color:var(--ink-muted); line-height:1.35; }
+  .pb-card-sub{ font-size:0.62rem; color:var(--field); line-height:1.35; margin-top:0.15rem; border-top:1px solid var(--line); padding-top:0.35rem; width:100%; }
 
   /* ===== Team tab ===== */
   .team-grade-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:0.8rem; margin-top:0.9rem; }
@@ -335,6 +336,12 @@
 
   /* ===== Achievement toast (Steam-style "Achievement Unlocked" popup) ===== */
   #achievementToastContainer{ position:fixed; right:1rem; bottom:1rem; z-index:500; display:flex; flex-direction:column-reverse; gap:0.5rem; pointer-events:none; max-width:min(300px,calc(100vw - 2rem)); }
+  .ff-banner{ position:fixed; top:1rem; left:50%; transform:translate(-50%,-140%); z-index:520; display:flex; align-items:center; gap:0.8rem; background:var(--surface); border:1.5px solid var(--field); border-radius:999px; padding:0.5rem 0.6rem 0.5rem 1.1rem; box-shadow:0 10px 28px rgba(0,0,0,0.55); transition:transform 0.3s cubic-bezier(.2,.8,.3,1); font-family:var(--mono); font-size:0.78rem; }
+  .ff-banner.show{ transform:translate(-50%,0); }
+  .ff-banner-text{ color:var(--ink); white-space:nowrap; }
+  .ff-banner-stop{ background:none; border:1px solid var(--line-strong); color:var(--ink-muted); border-radius:999px; padding:0.25rem 0.8rem; font-family:var(--mono); font-size:0.72rem; cursor:pointer; }
+  .ff-banner-stop:hover{ border-color:var(--danger); color:var(--danger); }
+  @media (prefers-reduced-motion: reduce){ .ff-banner{ transition:none; } }
   .achievement-toast{ display:flex; align-items:center; gap:0.7rem; background:var(--surface); border:1.5px solid var(--gold); border-radius:10px; padding:0.55rem 1rem 0.55rem 0.55rem; box-shadow:0 10px 28px rgba(0,0,0,0.55); transform:translateX(120%); opacity:0; transition:transform 0.4s cubic-bezier(.2,.8,.3,1), opacity 0.4s ease; }
   .achievement-toast.show{ transform:translateX(0); opacity:1; }
   .achievement-toast.hide{ transform:translateX(120%); opacity:0; }
