@@ -3078,17 +3078,24 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const rivalryHtml = rec ? fanMeterRow("Rivalry", rec.score,
       `${rivalryLevelLabel(rec.score)} — ${rec.meetings} meeting${rec.meetings===1?"":"s"}${rec.playoffMeetings?`, ${rec.playoffMeetings} in the playoffs`:""}.`) : "";
     const contractLine = (!rival.retired && rival.contract) ? `<div class="rival-meta">Contract: <b>${fmtMoney(rival.contract.apy)}</b>/yr · ${rival.contract.years} year${rival.contract.years===1?"":"s"} left · ${svgEscape(rival.contract.tier)}${rival.entrenchedYears>0?"":" · expiring"}</div>` : "";
-    const chart = (career.leagueDepthCharts||{})[rival.teamId];
-    const depthChartHtml = (!rival.retired && chart) ? `<div class="rival-facts">
-        <div class="rival-facts-label">Depth Chart</div>
-        <ul>
-          <li>QB2 — ${svgEscape(chart.qb2.name)} (${rivalEffTalent(chart.qb2)} ovr, age ${chart.qb2.age}, ${svgEscape(chart.qb2.contract.tier)})</li>
-          <li>QB3 — ${svgEscape(chart.qb3.name)} (${rivalEffTalent(chart.qb3)} ovr, age ${chart.qb3.age}, ${svgEscape(chart.qb3.contract.tier)})</li>
-        </ul>
+    // Round 32 item 4: the depth chart moved OFF a QB's own profile (it's team-organizational
+    // info, not something about this specific person) and onto the team page instead (see
+    // buildTeamPageHTML/openTeamProfile, reachable from teamNameAt links) -- a QB's own profile now
+    // shows what a player profile should: his own season-by-season stat line and awards.
+    const seasonsRows = (rival.seasons||[]).slice().reverse().map(s=>`
+        <tr><td>${s.year}</td><td>${s.age}</td><td class="tabular">${s.comp}/${s.att}</td>
+        <td class="tabular">${s.yards.toLocaleString()}</td><td class="tabular">${s.td}</td><td class="tabular">${s.int}</td>
+        <td class="tabular">${s.rating.toFixed(1)}</td><td class="tabular">${s.wins}-${s.losses}</td>
+        <td>${(s.awards||[]).join(", ")||"—"}</td></tr>`).join("");
+    const seasonsTableHtml = seasonsRows ? `<div class="table-wrap" style="margin-top:0.8rem;">
+        <table class="career-table">
+          <thead><tr><th>Year</th><th>Age</th><th>Comp/Att</th><th>Yards</th><th>TD</th><th>INT</th><th>Rating</th><th>Record</th><th>Awards</th></tr></thead>
+          <tbody>${seasonsRows}</tbody>
+        </table>
       </div>` : "";
     return `
       <div class="rival-card">
-        <div class="rival-eyebrow">${svgEscape(teamNameAt(rival.teamId, career.year))}${rival.retired?" · Retired":""}</div>
+        <div class="rival-eyebrow"><button type="button" class="rival-link" data-team-id="${rival.teamId}">${svgEscape(teamNameAt(rival.teamId, career.year))}</button>${rival.retired?" · Retired":""}</div>
         <h3>${svgEscape(rival.name)}</h3>
         <div class="rival-meta">Age ${rival.age} · Drafted ${rival.draftYear} · Overall <b>${overall}</b> (${svgEscape(g.flavor)})</div>
         ${contractLine}
@@ -3102,11 +3109,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         </div>
         ${badges ? `<div class="rival-badges">${badges}</div>` : ""}
         ${rivalryHtml}
-        ${depthChartHtml}
         <div class="rival-facts">
           <div class="rival-facts-label">Fun Facts</div>
           <ul>${facts.map(f=>`<li>${svgEscape(f)}</li>`).join("")}</ul>
         </div>
+        ${seasonsTableHtml}
         <button type="button" class="btn btn-ghost rival-close">Close</button>
       </div>`;
   }
@@ -3123,6 +3130,72 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     overlay.setAttribute("aria-hidden", "false");
     const closeBtn = overlay.querySelector(".rival-close");
     if(closeBtn) closeBtn.addEventListener("click", closeRivalProfile);
+    // The team-name eyebrow link lives inside THIS overlay, which is a sibling of #careerContent
+    // (not a descendant of it) -- the shared #careerContent delegated click listener never sees a
+    // click here, so it needs its own explicit wiring, same as the close button above.
+    const teamLink = overlay.querySelector("[data-team-id]");
+    if(teamLink) teamLink.addEventListener("click", ()=>{ closeRivalProfile(); openTeamProfile(teamLink.dataset.teamId); });
+  }
+  // Round 32 item 4: a generic page for ANY team in the league (not just the player's own, which
+  // keeps its own richer, dedicated Team tab -- buildTeamTabHTML, unchanged -- since career.defense/
+  // coaching/gmGrade/oline/weapons only ever exist for whichever team the player currently belongs
+  // to, never for an arbitrary other team). This is where the depth chart moved OFF a QB's own
+  // profile TO -- team-organizational info belongs on the team, not the person.
+  function buildTeamPageHTML(teamId){
+    const year = career.year;
+    const div = divisionOf(teamId, year);
+    const name = teamNameAt(teamId, year);
+    const isMine = teamId===career.teamId;
+    const overall = Math.round(isMine ? career.teamStrength : (career.leagueStrength[teamId] ?? 60));
+    const g = gradeFor(clamp(overall, 0, 98));
+    const qb = rivalForTeam(teamId);
+    const qbLine = qb
+      ? `<button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button> (${rivalEffTalent(qb)} ovr)`
+      : (isMine ? `${svgEscape(career.name)} (you)` : "—");
+    const chart = (career.leagueDepthCharts||{})[teamId];
+    const depthChartHtml = chart ? `<div class="rival-facts">
+        <div class="rival-facts-label">Depth Chart</div>
+        <ul>
+          <li>QB2 — ${svgEscape(chart.qb2.name)} (${rivalEffTalent(chart.qb2)} ovr, age ${chart.qb2.age}, ${svgEscape(chart.qb2.contract.tier)})</li>
+          <li>QB3 — ${svgEscape(chart.qb3.name)} (${rivalEffTalent(chart.qb3)} ovr, age ${chart.qb3.age}, ${svgEscape(chart.qb3.contract.tier)})</li>
+        </ul>
+      </div>` : "";
+    const viewFullTeamTabHtml = isMine
+      ? `<button type="button" class="btn btn-ghost" id="teamProfileGotoTab">View full Team tab →</button>` : "";
+    return `
+      <div class="rival-card">
+        <div class="rival-eyebrow">${confLabel(div.conf, year)} ${svgEscape(div.name)}</div>
+        <h3>${svgEscape(name)}${isMine?" (your team)":""}</h3>
+        <div class="rival-meta">Team Grade <b>${overall}</b> (${svgEscape(g.flavor)})</div>
+        <div class="rival-stats-grid">
+          <div><div class="rv-label">Starting QB</div><div class="rv-value">${qbLine}</div></div>
+        </div>
+        ${depthChartHtml}
+        ${viewFullTeamTabHtml}
+        <button type="button" class="btn btn-ghost rival-close">Close</button>
+      </div>`;
+  }
+  function openTeamProfile(teamId){
+    const overlay = document.getElementById("teamProfileOverlay");
+    if(!teamId || !overlay) return;
+    overlay.innerHTML = buildTeamPageHTML(teamId);
+    overlay.classList.add("open");
+    overlay.setAttribute("aria-hidden", "false");
+    const closeBtn = overlay.querySelector(".rival-close");
+    if(closeBtn) closeBtn.addEventListener("click", closeTeamProfile);
+    const gotoBtn = overlay.querySelector("#teamProfileGotoTab");
+    if(gotoBtn) gotoBtn.addEventListener("click", ()=>{ closeTeamProfile(); switchDashTab("team"); });
+    // Same reasoning as openRivalProfile's own team-link wiring: this overlay is a sibling of
+    // #careerContent, so the Starting QB link's [data-rival-id] needs explicit wiring here too.
+    const qbLink = overlay.querySelector("[data-rival-id]");
+    if(qbLink) qbLink.addEventListener("click", ()=>{ closeTeamProfile(); openRivalProfile(qbLink.dataset.rivalId); });
+  }
+  function closeTeamProfile(){
+    const overlay = document.getElementById("teamProfileOverlay");
+    if(!overlay) return;
+    overlay.classList.remove("open");
+    overlay.setAttribute("aria-hidden", "true");
+    overlay.innerHTML = "";
   }
   function closeRivalProfile(){
     const overlay = document.getElementById("rivalProfileOverlay");
@@ -6453,7 +6526,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       return `<ol class="seed-list">` + ls.seeded[conf].map(t=>{
         const name = teamNameAt(t.id, season.year);
         const mine = t.id===career.teamId;
-        return `<li class="${mine?"me":""}">${name} <span class="team-ovr">${teamOverall(t.id)} OVR</span><span class="tabular">${t.wins}-${t.losses}</span></li>`;
+        return `<li class="${mine?"me":""}"><button type="button" class="rival-link" data-team-id="${t.id}">${name}</button> <span class="team-ovr">${teamOverall(t.id)} OVR</span><span class="tabular">${t.wins}-${t.losses}</span></li>`;
       }).join("") + `</ol>`;
     }
     function divTables(conf){
@@ -6461,7 +6534,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const rows = d.teams.map(id=>ls.results[id]).sort((a,b)=>b.winPct-a.winPct).map(r=>{
           const name = teamNameAt(r.id, season.year);
           const mine = r.id===career.teamId;
-          return `<tr class="${mine?"me":""}"><td class="team-cell">${name}${mine?" (you)":""} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td>${r.wins}-${r.losses}</td></tr>`;
+          return `<tr class="${mine?"me":""}"><td class="team-cell"><button type="button" class="rival-link" data-team-id="${r.id}">${name}</button>${mine?" (you)":""} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td>${r.wins}-${r.losses}</td></tr>`;
         }).join("");
         return `<div class="standings-div"><div class="standings-div-name">${confLabel(conf, season.year)} ${d.name}</div><table class="standings-table"><tbody>${rows}</tbody></table></div>`;
       }).join("");
@@ -9183,6 +9256,10 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
   document.getElementById("careerContent").addEventListener("click", (e)=>{
     const link = e.target.closest("[data-rival-id]");
     if(link) openRivalProfile(link.dataset.rivalId);
+    // Round 32 item 4: "click into the team" -- a generic page for any team, reachable from a QB's
+    // own profile (the team-name eyebrow) or the Standings tab's team names.
+    const teamLink = e.target.closest("[data-team-id]");
+    if(teamLink) openTeamProfile(teamLink.dataset.teamId);
     // League tab's "Played This Season" / "Inactive / Free Agents" toggle -- pure show/hide, both
     // panels' HTML is already in the DOM (see buildLeagueTabHTML), so no re-render is needed here.
     const subtabBtn = e.target.closest("[data-league-subtab]");
