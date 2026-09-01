@@ -6386,6 +6386,23 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     });
     return matchups;
   }
+  // Round 32 item 2: converts a buildWeekMatchups() entry into the SAME {aId,bId,aScore,bScore,
+  // winnerId,realRound} shape the Playoff Tree's box-score modal already expects, so every game
+  // card in the app -- playoff or regular season -- opens through the exact one modal
+  // (openBracketBoxScore/buildBracketBoxScoreModalHTML), never a second, separate mechanism.
+  // career.currentSeasonSchedules never carries a real per-game stat line for anyone (only
+  // week/opponent/score, see buildScheduleResults) -- the player's own real comp/att/yards/td/int
+  // for this exact week lives on season.gameLog instead, looked up by week (not by opponent id,
+  // since a division rival can appear twice in one season).
+  function scheduleMatchToBracketMatch(m, week, season){
+    const winnerId = m.aWon ? m.aId : m.bId;
+    let realRound = null;
+    if(m.aId===career.teamId || m.bId===career.teamId){
+      const myWeekEntry = (season.gameLog||[]).find(g=>g.week===week);
+      if(myWeekEntry) realRound = { box: { comp: myWeekEntry.comp, att: myWeekEntry.att, yards: myWeekEntry.yards, td: myWeekEntry.td, int: myWeekEntry.int } };
+    }
+    return { aId: m.aId, bId: m.bId, aScore: m.aScore, bScore: m.bScore, winnerId, realRound };
+  }
   function weekMatchupTeamLineHTML(teamId, score, won, qb, year){
     const mine = teamId===career.teamId;
     const name = svgEscape(teamNameAt(teamId, year)) + (mine ? " (you)" : "");
@@ -6412,7 +6429,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const options = Array.from({length: weeksN}, (_,i)=>i+1)
       .map(w=>`<option value="${w}"${w===scheduleTabWeek?" selected":""}>Week ${w}</option>`).join("");
     const matchups = buildWeekMatchups(season, scheduleTabWeek);
-    const cards = matchups.map(m=>`<div class="week-matchup-card">
+    const cards = matchups.map(m=>`<div class="week-matchup-card clickable" data-schedule-week="${scheduleTabWeek}" data-schedule-a="${m.aId}" data-schedule-b="${m.bId}">
         ${weekMatchupTeamLineHTML(m.aId, m.aScore, m.aWon, m.aQb, season.year)}
         ${weekMatchupTeamLineHTML(m.bId, m.bScore, !m.aWon, m.bQb, season.year)}
       </div>`).join("");
@@ -9228,6 +9245,17 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
           realRound: myRealSB || null };
         if(match.aId!=null && match.bId!=null) openBracketBoxScore(match, season.year, "Super Bowl");
       }
+    }
+    // Round 32 item 2: every regular-season game card on the Schedule tab opens the exact same
+    // box-score modal a playoff matchup does -- re-derive the matchup (never store a duplicate
+    // copy of it on the DOM node) the same way the bracket click handlers above already do.
+    const scheduleNode = e.target.closest("[data-schedule-a]");
+    if(scheduleNode && scheduleTabSeason && !e.target.closest("[data-rival-id]")){
+      const season = scheduleTabSeason;
+      const week = Number(scheduleNode.dataset.scheduleWeek);
+      const aId = scheduleNode.dataset.scheduleA, bId = scheduleNode.dataset.scheduleB;
+      const m = buildWeekMatchups(season, week).find(x=>x.aId===aId && x.bId===bId);
+      if(m) openBracketBoxScore(scheduleMatchToBracketMatch(m, week, season), season.year, `Week ${week}`);
     }
   });
   // Manually advances whichever conference(s) have nothing real left gating them -- while the

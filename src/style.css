@@ -880,6 +880,8 @@
   .week-matchup-grid{ display:grid; grid-template-columns: 1fr; gap: 0.6rem; }
   @media (min-width: 640px){ .week-matchup-grid{ grid-template-columns: 1fr 1fr; } }
   .week-matchup-card{ border: 1px solid var(--line); border-radius: 6px; padding: 0.55rem 0.75rem; background: var(--surface); }
+  .week-matchup-card.clickable{ cursor:pointer; }
+  .week-matchup-card.clickable:hover{ border-color: var(--field); }
   .week-matchup-team{ display:flex; justify-content: space-between; align-items:center; padding: 0.2rem 0; font-size: 0.9rem; }
   .week-matchup-team.good{ color: var(--good); }
   .week-matchup-team.me .week-matchup-name{ text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
