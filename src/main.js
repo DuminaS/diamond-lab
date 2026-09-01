@@ -7033,6 +7033,75 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       th.innerHTML = label + sortIndicator(key, activeKey, dir);
     });
   }
+  // Round 32 item 5: the All-Time leaderboard population -- every QB who's actually played a real
+  // game in THIS league's simulated history: the player themselves plus career.leagueRivals
+  // (current AND retired -- retired ones are never removed from that array, just flagged, which is
+  // exactly the "every player that's played" the user asked for). Bench QBs (career.leagueDepthCharts)
+  // are deliberately excluded, matching the Round 6 invariant that bench stats never reach a
+  // league-wide pooling site. Filtered to totals.games>0 so a rookie successor who was just
+  // generated (0 games) doesn't clutter the list with a zero-stat row. Ranked by the exact same
+  // greatness score computeHofScore already uses for the player's own Hall of Fame verdict -- one
+  // real, already-tuned formula, not a second invented-from-scratch ranking metric. This needs no
+  // explicit "update every season" mechanism at all: career.leagueRivals/career.totals already
+  // mutate every season on their own, so simply recomputing this at render time is always current.
+  function buildAllTimeLeaderboardRows(){
+    const entries = [
+      { id:null, name:career.name, teamId:career.teamId, isMine:true, totals:career.totals, seasons:career.seasonLog, retired:false, age:career.age, exitReason:null },
+    ];
+    (career.leagueRivals||[]).forEach(r=>{
+      entries.push({ id:r.id, name:r.name, teamId:r.teamId, isMine:false, totals:r.totals, seasons:r.seasons, retired:!!r.retired, age:r.age, exitReason:null });
+    });
+    return entries.filter(e=>e.totals.games>0).map(e=>{
+      const verdict = computeHofScore(e.totals, e.seasons, e.exitReason);
+      const rating = passerRating(e.totals.comp, e.totals.att, e.totals.yards, e.totals.td, e.totals.int);
+      const hofPct = hofChancePct(e.totals, e.seasons, e.exitReason, e.age, e.retired);
+      return { ...e, score: verdict.score, hofTier: verdict.tier, rating, hofPct };
+    }).sort((a,b)=> b.score-a.score);
+  }
+  // Rank-based exclusivity tiers, deliberately a SEPARATE axis from hofTier (which judges accolades
+  // against real Hall of Fame bars, independent of population size) -- these are purely "how many
+  // people in THIS league's history have ever been better," which is what makes the GOAT slot,
+  // specifically, always exactly one QB, ever, no matter how large the league's history grows.
+  function allTimeRankTier(rank){
+    if(rank===1) return "GOAT";
+    if(rank<=5) return "Legend";
+    if(rank<=15) return "Icon";
+    if(rank<=30) return "All-Time Great";
+    return null;
+  }
+  function buildAllTimeLeaderboardHTML(){
+    const rows = buildAllTimeLeaderboardRows();
+    const bodyHtml = rows.map((r,i)=>{
+      const rank = i+1;
+      const tierName = allTimeRankTier(rank);
+      const tierBadge = tierName ? ` <span class="badge gold">${svgEscape(tierName)}</span>` : "";
+      const nameCell = r.isMine
+        ? `${svgEscape(r.name)} (you)`
+        : `<button type="button" class="rival-link" data-rival-id="${r.id}">${svgEscape(r.name)}</button>`;
+      return `<tr class="${r.isMine?"me":""}">
+          <td class="tabular">${rank}</td>
+          <td>${nameCell}${r.retired?` <span style="color:var(--ink-muted);">(retired)</span>`:""}${tierBadge}</td>
+          <td><button type="button" class="rival-link" data-team-id="${r.teamId}">${svgEscape(teamNameAt(r.teamId, career.year))}</button></td>
+          <td class="tabular">${r.totals.yards.toLocaleString()}</td>
+          <td class="tabular">${r.totals.td}</td>
+          <td class="tabular">${r.totals.int}</td>
+          <td class="tabular">${r.rating.toFixed(1)}</td>
+          <td class="tabular">${r.totals.wins}-${r.totals.losses}</td>
+          <td class="tabular">${r.totals.proBowls}</td>
+          <td class="tabular">${r.totals.allPros}</td>
+          <td class="tabular">${r.totals.mvps}</td>
+          <td class="tabular">${r.totals.rings||0}</td>
+          <td class="tabular">${r.hofPct}%</td>
+        </tr>`;
+    }).join("");
+    return `<div class="calc-refnote">Every QB who's actually played a real game in this league's history, ranked by a single greatness score — the exact same one behind your own Hall of Fame verdict. Updates automatically as the league plays out. Tiers get more exclusive going up: the GOAT is #1, alone. Hall of Famer % is an estimate for anyone still active — it's their résumé's HOF case if their career ended today, nudged up a little for a young player with real accolades already and real seasons still ahead of him.</div>
+      <div class="table-wrap">
+        <table class="league-table">
+          <thead><tr><th>#</th><th>QB</th><th>Team</th><th>Yds</th><th>TD</th><th>INT</th><th>Rating</th><th>Record</th><th>PB</th><th>AP</th><th>MVP</th><th>Rings</th><th>HOF%</th></tr></thead>
+          <tbody>${bodyHtml}</tbody>
+        </table>
+      </div>`;
+  }
   function buildLeagueTabHTML(season){
     const year = season.year;
     leagueTabSeason = season;
@@ -7089,6 +7158,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <div class="mode-toggle league-subtabs">
           <button type="button" class="league-subtab-btn active" data-league-subtab="active">Played This Season</button>
           <button type="button" class="league-subtab-btn" data-league-subtab="inactive">Inactive / Free Agents (${inactiveRows.length})</button>
+          <button type="button" class="league-subtab-btn" data-league-subtab="alltime">All-Time</button>
         </div>
         <div class="league-subtab-panel active" data-league-panel="active">
           <div class="calc-refnote">${year} passing leaderboard — every QB who actually played real games for their team this season, judged by the exact same Pro Bowl / All-Pro / MVP rules as you (see the Stat Calculator tab in Admin &amp; Testing for the formulas). You ranked <b>#${myRank}</b> of ${rows.length} in passer rating. League-wide this season: Pro Bowl ×${proBowlCount}, All-Pro ×${allProCount}, MVP ×${mvpCount}.</div>
@@ -7108,6 +7178,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
               <tbody>${inactiveRowsHtml}</tbody>
             </table>
           </div>` : ""}
+        </div>
+        <div class="league-subtab-panel" data-league-panel="alltime">
+          ${buildAllTimeLeaderboardHTML()}
         </div>
         <div class="section-label" style="margin-top:1.5rem;">Around the League</div>
         <div class="calc-refnote">Front-office news from other teams — this is why their grades move, not just dice.</div>
@@ -8343,9 +8416,17 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return passerRating(Math.round(att*l.comp), att, Math.round(att*l.ypa), Math.round(att*l.tdRate), Math.round(att*l.intRate));
   }
 
-  function hofVerdict(){
-    const t = career.totals;
-    const seasons = career.seasonLog.length;
+  // Round 32 item 5: factored out of hofVerdict() (which was hardcoded to career.totals/
+  // career.seasonLog/career.exitReason) so the SAME real, already-tuned scoring can rank the
+  // All-Time leaderboard's whole population (the player AND every rival, current or retired) --
+  // one formula, not a second invented-from-scratch ranking metric. `seasonLog` entries need a
+  // decade to weight the era baseline; a rival's own `.seasons` entries don't carry `.decade`
+  // (see the Round 12 note on this elsewhere) so this derives it via decadeForYear(s.year) when
+  // `.decade` itself is absent, unlike the original which assumed `.decade` was always there
+  // (always true for the player's own seasonLog, never true for a rival's).
+  function computeHofScore(totals, seasonLog, exitReason){
+    const t = totals;
+    const seasons = seasonLog.length;
     // Quality first: career rate (passer rating), then accolades, then a HARD-CAPPED nod to volume.
     // Sheer longevity piling up garbage-time yardage should never outrank real accolades and efficiency —
     // a 20-season .500 game manager is a "Longtime Starter", not a Hall of Famer, no matter the counting stats.
@@ -8354,7 +8435,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // across the whole career, not a flat modern number applied to every decade.
     const careerRating = passerRating(t.comp, t.att, t.yards, t.td, t.int);
     let baseWeighted = 0, baseAtt = 0;
-    career.seasonLog.forEach(s=>{ baseWeighted += leagueAvgRatingForDecade(s.decade)*s.att; baseAtt += s.att; });
+    seasonLog.forEach(s=>{ const decade = s.decade || decadeForYear(s.year); baseWeighted += leagueAvgRatingForDecade(decade)*s.att; baseAtt += s.att; });
     const eraBaseline = baseAtt>0 ? baseWeighted/baseAtt : 75;
     const qualityScore = (careerRating-eraBaseline-8)*4;
     const accoladeScore = t.rings*40 + t.mvps*36 + t.allPros*16 + t.proBowls*6;
@@ -8362,7 +8443,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const volumeScore = clamp(t.yards/1200 + t.td*0.1, 0, 35);
     const score = qualityScore + accoladeScore + longevityScore + volumeScore;
 
-    if(career.exitReason==="waived" && score<60) return {tier:"Out of the League", note:`Released after ${seasons} season${seasons===1?"":"s"} that never quite came together. The phone stopped ringing.`};
+    if(exitReason==="waived" && score<60) return {score, tier:"Out of the League", note:`Released after ${seasons} season${seasons===1?"":"s"} that never quite came together. The phone stopped ringing.`};
 
     // Top tiers also gate on a minimum sample size — real Hall of Fame cases are built on sustained
     // excellence, not one hot short stretch. Tiers are checked highest-first; a gated tier that fails
@@ -8390,12 +8471,34 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         // that would actually be argued about for years. First-Ballot is unaffected -- its 3-Pro-Bowl
         // floor already screens out the thin cases this is checking for.
         if(tier.tier==="Hall of Famer" && t.proBowls<=2 && t.allPros===0 && t.mvps===0 && t.rings===0){
-          return { tier: tier.tier, note:"A compiler's case more than a slam dunk — a long, steady résumé without a signature peak or a stacked trophy case. The kind of induction that's still getting argued about after the bust goes up." };
+          return { score, tier: tier.tier, note:"A compiler's case more than a slam dunk — a long, steady résumé without a signature peak or a stacked trophy case. The kind of induction that's still getting argued about after the bust goes up." };
         }
-        return tier;
+        return { score, ...tier };
       }
     }
-    return TIERS[TIERS.length-1];
+    return { score, ...TIERS[TIERS.length-1] };
+  }
+  function hofVerdict(){
+    return computeHofScore(career.totals, career.seasonLog, career.exitReason);
+  }
+  // A single tier's base HOF-induction likelihood if this career ended exactly as-is today.
+  const HOF_TIER_BASE_PCT = {
+    "First-Ballot Hall of Famer": 99, "Hall of Famer": 80, "Hall of Very Good": 45,
+    "Longtime Starter": 15, "Journeyman": 4, "Camp Arm": 1, "Out of the League": 1,
+  };
+  // "Likelihood of making the Hall of Fame" for a STILL-ACTIVE player is necessarily an estimate,
+  // not a verdict -- their résumé is still being written. Base rate comes from the exact same tier
+  // computeHofScore would already assign if their career stopped today; an active, young player
+  // with a real case already (score>40) gets a modest upward nudge for the seasons still ahead of
+  // him, capped so it can never turn a thin résumé into a false lock on its own.
+  function hofChancePct(totals, seasonLog, exitReason, age, retired){
+    const verdict = computeHofScore(totals, seasonLog, exitReason);
+    let pct = HOF_TIER_BASE_PCT[verdict.tier] ?? 5;
+    if(!retired && age!=null){
+      const youthBoost = clamp((30-age)*1.2, 0, 18) * (verdict.score>40 ? 1 : 0.25);
+      pct = clamp(pct + youthBoost, 1, 99);
+    }
+    return Math.round(pct);
   }
 
   /* ----- the Hall of Fame retrospective: how history remembers this player ----- */
