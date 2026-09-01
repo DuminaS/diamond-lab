@@ -3082,52 +3082,6 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     overlay.innerHTML = "";
   }
 
-  function resolveConferenceBracket(seeds, myTeamId, myOffFn, format, season){
-    const rounds = [];
-    function playMatch(teamA, teamB, roundLabel){
-      if(teamA.id===myTeamId || teamB.id===myTeamId){
-        const player = teamA.id===myTeamId ? teamA : teamB;
-        const opp = teamA.id===myTeamId ? teamB : teamA;
-        const oppStrength = career.leagueStrength[opp.id] ?? 60;
-        const oppRival = rivalForTeam(opp.id);
-        const oppOffense = opponentOffenseGrade(opp.id, QB_INFLUENCE_PLAYOFF);
-        const myOff = playoffOffenseGrade(myOffFn(), season);
-        const game = simulateGameScore(myOff, oppOffense, career.defense);
-        rounds.push({
-          round: roundLabel, opponent: teamNameAt(opp.id, career.year), mySeed: player.seed, oppSeed: opp.seed,
-          myScore: game.myTotal, oppScore: game.oppTotal, won: game.won, quarters: game.quarters,
-          box: season ? generateGameBoxScore(season, game.myTotal, game.myTds) : null,
-          oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength, _defOffense: oppOffense,
-          _oppQbId: oppRival ? oppRival.id : null, _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
-        });
-        return game.won ? player : opp;
-      }
-      const sA = career.leagueStrength[teamA.id] ?? 60, sB = career.leagueStrength[teamB.id] ?? 60;
-      const winnerId = simpleGameWinner(teamA.id, sA, teamB.id, sB);
-      return winnerId===teamA.id ? teamA : teamB;
-    }
-    const s = seeds.map((t,i)=>({ seed:i+1, id:t.id }));
-    const N = s.length;
-    if(N<2) return { rounds, champion: s[0] };
-    const wcGames = format ? format.wcGames : Math.floor((N-1)/2);
-    if(wcGames<=0){
-      const champ = playMatch(s[0], s[1] || s[0], "Conference Championship");
-      return { rounds, champion: champ };
-    }
-    const byes = N - 2*wcGames;
-    const firstRoundLabel = byes>0 ? "Wild Card" : "Divisional";
-    const survivors = [];
-    for(let i=0;i<wcGames;i++) survivors.push(playMatch(s[byes+i], s[N-1-i], firstRoundLabel));
-    let field = [...s.slice(0,byes), ...survivors].sort((a,b)=>a.seed-b.seed);
-    while(field.length>1){
-      const roundLabel = field.length>2 ? "Divisional" : "Conference Championship";
-      const next = [];
-      for(let i=0;i<Math.floor(field.length/2);i++) next.push(playMatch(field[i], field[field.length-1-i], roundLabel));
-      field = next.sort((a,b)=>a.seed-b.seed);
-    }
-    return { rounds, champion: field[0] };
-  }
-
   // Finishes resolving an ALREADY-IN-PROGRESS bracket field, WITH full round-by-round detail
   // recorded (Round 29) -- used once the player's own real playoff run ends mid-bracket (eliminated
   // before the conference championship), so whoever beat them for real is guaranteed to be the one
@@ -3174,10 +3128,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return f[0];
   }
   // A from-scratch, fully flat resolution of an entire conference bracket, ALWAYS recording every
-  // round's matchups (unlike resolveConferenceBracket, which only ever records a round when
-  // myTeamId is actually in it -- passing "__none__" there leaves `rounds` empty). Used for: the
-  // OTHER conference every season (nobody real ever plays in it), and the player's OWN conference
-  // every season as sibling-game context (see the Round 29 note on playoffTreeConfDisplay).
+  // round's matchups. Used for: the OTHER conference every season (nobody real ever plays in it),
+  // and the player's OWN conference every season as sibling-game context (see the Round 29 note on
+  // playoffTreeConfDisplay). This is the SINGLE source of truth for "who's the other conference's
+  // champion" -- buildSuperBowlRound reads the exact same cached result (see its Round 29 fix
+  // comment) rather than rolling a second, independent resolution that could disagree.
   function resolveFullBracketWithRounds(seeds, format){
     const s = seeds.map((t,i)=>({ seed:i+1, id:t.id }));
     const N = s.length;
@@ -3285,8 +3240,17 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   }
 
   function buildSuperBowlRound(playoffs, season){
-    const otherBracket = resolveConferenceBracket(playoffs._seeded[playoffs._otherConf], "__none__", ()=>0, playoffs._format);
-    const otherChampId = otherBracket.champion.id;
+    // Round 29 bug fix: this used to call resolveConferenceBracket fresh, right here, with its own
+    // independent Math.random() draws -- a SEPARATE resolution of the other conference from the
+    // eager season.leagueStandings._otherConfBracketCache the Playoff Tree tab actually displays.
+    // The two could (and, once the Playoff Tree started showing the other conference's bracket in
+    // real detail, visibly did) disagree about who the AFC/NFC champion even was -- a real,
+    // reported bug: the Season tab's real Super Bowl round said one opponent, while the Playoff
+    // Tree's own bracket showed that same team eliminated rounds earlier, with a THIRD, different
+    // team as its "real" champion. There is only ONE other-conference resolution now -- this cache,
+    // resolved once per season in resolvePlayoffs -- and every consumer (this function, the Playoff
+    // Tree tab, finalizeLeaguePlayoffBracket) reads the exact same champion off of it.
+    const otherChampId = season.leagueStandings._otherConfBracketCache.champion.id;
     const oppStrength = career.leagueStrength[otherChampId] ?? 60;
     const oppRival = rivalForTeam(otherChampId);
     const oppOffense = opponentOffenseGrade(otherChampId, QB_INFLUENCE_PLAYOFF);
@@ -3396,7 +3360,6 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const playoffs = {
       made:true, seed, confRank, confSize:confTeamIds.length,
       rounds: [], wonSuperBowl:false, done:false,
-      _seeded: seeded, _otherConf: otherConf, _format: format,
       _bracketState: startConferenceBracket(mySeeds, format),
       _effOverall: effOverall,
     };
