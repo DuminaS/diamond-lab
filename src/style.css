@@ -899,64 +899,62 @@
   @keyframes feedBlink{ 50%{ opacity: 0; } }
   @media (prefers-reduced-motion: reduce){ .feed-cursor{ animation: none; } }
 
-  /* ---------- V7: playoff bracket ---------- */
-  .bracket-wrap{ margin-top: 0.5rem; overflow-x: auto; padding-bottom: 0.5rem; max-width: 100%; }
-  /* Scale the SVG down to fit its container before ever falling back to a scrollbar -- the
-     viewBox preserves the internal layout/aspect ratio, so this shrinks cleanly instead of
-     clipping. Combined with the compact team-code box width above, most brackets now fit without
-     any scaling at all; this is the safety net for anyone still narrower than that. */
-  .bracket-wrap svg{ max-width: 100%; height: auto; }
-  .bracket-wrap svg{ display:block; }
-  /* The combined Playoff Tree bracket (both conferences + Super Bowl in one SVG) is genuinely wide
-     -- render it at a real, legible minimum size and let the wrapper scroll horizontally instead of
-     shrinking text down to illegibility on a narrow screen. */
-  .full-bracket-wrap{ max-width: 100%; }
-  .full-bracket-wrap svg{ max-width: none; min-width: 640px; width: auto; height: auto; margin: 0 auto; }
-  .bracket-conf-labels{ display:flex; justify-content:space-between; font-family: var(--mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-muted); margin-bottom: 0.4rem; }
-  .bracket-team-name{ font-family: var(--mono); font-size: 11px; fill: var(--ink); }
-  .bracket-team-name.me{ fill: var(--field); font-weight: 700; }
-  .bracket-team-name.good{ fill: var(--good); font-weight: 700; }
-  .bracket-team-name.eliminated{ opacity: 0.45; }
-  .bracket-score{ font-family: var(--mono); font-size: 11px; font-weight: 700; fill: currentColor; }
-  .bracket-bye{ fill: var(--ink-muted); font-style: italic; }
-  .bracket-round-label{ font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; fill: var(--ink-muted); }
-  /* ---------- Playoff Tree: unified matchup-node bracket (replaces the old mixed single-path +
-     tree renderers -- one visual system now, for every conference, every era). ---------- */
-  .playoff-node-rect{ fill: var(--surface); stroke: var(--line-strong); stroke-width: 1; }
-  .playoff-node.mine .playoff-node-rect{ stroke: #d4af37; stroke-width: 2; filter: drop-shadow(0 0 4px rgba(212,175,55,0.5)); }
-  .playoff-node-divider{ stroke: var(--line-strong); stroke-width: 1; opacity: 0.5; }
-  .playoff-node.clickable{ cursor: pointer; }
-  .playoff-node.clickable:hover .playoff-node-rect{ stroke: var(--field); }
-  .bracket-connector{ stroke: #2a3b4c; stroke-width: 1.5; }
-  .bracket-connector.won{ stroke: #d4af37; stroke-width: 2; }
+  /* ---------- Playoff Tree: rigid CSS-Grid bracket (Round 29) ----------
+     AFC always flows left-to-right, NFC always flows right-to-left, Super Bowl is the exact
+     center column -- real HTML cards laid out with CSS Grid + flexbox instead of a hand-computed
+     SVG (see renderPlayoffBracketGrid). No connector lines are drawn at all: convergence reads
+     purely from column order + each column's cards being evenly distributed across its own full
+     height (`justify-content: space-around`), which can never clip and needs no pixel math. */
+  .bracket-conf-labels{ display:flex; justify-content:space-between; font-family: var(--mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-muted); margin-bottom: 0.6rem; }
   .playoff-tree-actions{ margin-bottom: 1rem; }
   .playoff-tree-inner{ font-family: inherit; }
+  /* Genuinely wide once every round is on-screen at once -- scroll horizontally at a real, legible
+     size rather than shrinking text to fit a narrow card (same call as the rest of this tab). */
+  .bracket-grid-wrap{ overflow-x: auto; padding-bottom: 0.5rem; margin-top: 0.5rem; }
+  .bracket-grid{ display: grid; gap: 0.9rem; align-items: stretch; }
+  .bracket-col{ display: flex; flex-direction: column; min-width: 0; }
+  .bracket-col-label{ text-align:center; font-family: var(--mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); margin-bottom: 0.6rem; }
+  .bracket-col-sb .bracket-col-label{ color: var(--field); font-weight: 700; }
+  .bracket-col-cards{ flex: 1; display: flex; flex-direction: column; justify-content: space-around; gap: 0.7rem; }
+  .bracket-col-sb .bracket-col-cards{ justify-content: center; }
+
+  .pcard{ background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; padding: 0.55rem 0.7rem; display:flex; flex-direction:column; gap:0.3rem; }
+  .pcard.clickable{ cursor:pointer; }
+  .pcard.clickable:hover{ border-color: var(--field); }
+  .pcard.mine{ border-color:#d4af37; border-width:2px; box-shadow: 0 0 8px rgba(212,175,55,0.35); }
+  .pcard-row{ display:flex; align-items:center; gap:0.4rem; font-family: var(--mono); font-size: 0.78rem; }
+  .pcard-row + .pcard-row{ border-top: 1px solid var(--line); padding-top: 0.3rem; }
+  .pcard-seed{ color: var(--ink-muted); font-size: 0.68rem; min-width: 1.4em; }
+  .pcard-name{ flex:1; font-weight: 700; color: var(--ink); letter-spacing: 0.02em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pcard-score{ font-weight: 700; }
+  .pcard-row.won .pcard-name, .pcard-row.won .pcard-score{ color: var(--good); }
+  .pcard-row.lost .pcard-name, .pcard-row.lost .pcard-score{ color: var(--ink-muted); opacity: 0.55; text-decoration: line-through; }
+  .pcard-row.mine .pcard-name{ color: #d4af37; }
+  .pcard-row.bye .pcard-name{ color: var(--ink-muted); font-style: italic; }
+  .pcard-badge{ align-self:flex-start; margin-top:0.15rem; font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.05em; text-transform: uppercase; color: #caa23a; background: rgba(212,175,55,0.12); border: 1px solid rgba(212,175,55,0.4); border-radius: 4px; padding: 0.1rem 0.4rem; }
+  .pcard-pending{ opacity: 0.75; }
+  .pcard-pending .pcard-name{ color: var(--ink-muted); }
   /* Era-specific bracket recoloring -- reuses the SAME .era-XXXXs wrapper classes already
-     established for event-card chrome (eraWrap/eraChrome), just adding SVG fill/stroke overrides
-     since those can't be expressed via the background/border rules the event cards use. */
-  .era-1960s .bracket-wrap svg{ font-family: Georgia, 'Times New Roman', serif; }
-  .era-1960s .playoff-node-rect{ fill: #F5F5DC; stroke: #111; stroke-width: 2; rx: 0; }
-  .era-1960s .bracket-team-name{ fill: #111; }
-  .era-1960s .bracket-round-label{ fill: #3a3a3a; }
-  .era-1960s .bracket-connector{ stroke: #111; stroke-dasharray: 4; }
-  .era-1970s .playoff-node-rect{ fill: #0a1a5c; stroke: #FFEB3B; }
-  .era-1970s .bracket-team-name{ fill: #fff; font-weight: 700; }
-  .era-1970s .bracket-round-label{ fill: #FFEB3B; }
-  .era-1970s .bracket-connector{ stroke: #FFEB3B; }
-  .era-1980s .bracket-wrap svg{ font-family: 'IBM Plex Mono', 'Courier New', monospace; }
-  .era-1980s .playoff-node-rect{ fill: #000; stroke: #39FF14; rx: 0; }
-  .era-1980s .bracket-team-name{ fill: #39FF14; text-transform: uppercase; }
-  .era-1980s .bracket-round-label{ fill: #39FF14; }
-  .era-1980s .bracket-connector{ stroke: #39FF14; filter: drop-shadow(0 0 2px #39FF14); }
-  .era-1990s .playoff-node-rect{ fill: #2b303c; stroke: #6b7280; stroke-width: 2; }
-  .era-1990s .bracket-team-name{ fill: #e5e7eb; font-weight: 700; }
-  .era-2000s .playoff-node-rect{ fill: #1a1a1a; stroke: #444; rx: 12; }
-  .era-2000s .bracket-round-label{ fill: #999; }
-  .era-2010s .playoff-node-rect{ fill: #fff; stroke: #d8dedb; }
-  .era-2010s .bracket-team-name{ fill: #141a18; }
-  .era-2010s .bracket-score{ fill: #141a18; }
-  .era-2020s .playoff-node-rect{ fill: #0c1014; stroke: #2a3b4c; }
-  .era-2020s .playoff-node.mine .bracket-connector.won, .era-2020s .bracket-connector.won{ stroke: #d4af37; filter: drop-shadow(0 0 3px rgba(212,175,55,0.6)); }
+     established for event-card chrome (eraWrap/eraChrome). */
+  .era-1960s .bracket-col{ font-family: Georgia, 'Times New Roman', serif; }
+  .era-1960s .pcard{ background:#F5F5DC; border:2px solid #111; border-radius:0; }
+  .era-1960s .pcard-name{ color:#111; }
+  .era-1960s .bracket-col-label{ color:#3a3a3a; }
+  .era-1970s .pcard{ background:#0a1a5c; border-color:#FFEB3B; }
+  .era-1970s .pcard-name{ color:#fff; font-weight:700; }
+  .era-1970s .bracket-col-label{ color:#FFEB3B; }
+  .era-1980s .bracket-col{ font-family: 'IBM Plex Mono', 'Courier New', monospace; }
+  .era-1980s .pcard{ background:#000; border-color:#39FF14; border-radius:0; }
+  .era-1980s .pcard-name{ color:#39FF14; text-transform:uppercase; }
+  .era-1980s .bracket-col-label{ color:#39FF14; }
+  .era-1990s .pcard{ background:#2b303c; border-color:#6b7280; border-width:2px; }
+  .era-1990s .pcard-name{ color:#e5e7eb; }
+  .era-2000s .pcard{ background:#1a1a1a; border-color:#444; border-radius:12px; }
+  .era-2000s .bracket-col-label{ color:#999; }
+  .era-2010s .pcard{ background:#fff; border-color:#d8dedb; }
+  .era-2010s .pcard-name, .era-2010s .pcard-score{ color:#141a18; }
+  .era-2020s .pcard{ background:#0c1014; border-color:#2a3b4c; }
+  .era-2020s .pcard.mine{ border-color:#d4af37; box-shadow:0 0 10px rgba(212,175,55,0.5); }
 
   /* ---------- Experimental: era-themed event cards ----------
      Re-skins the outer chrome of an event card based on decadeForYear(career.year). Inner markup
