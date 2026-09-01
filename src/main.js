@@ -3238,6 +3238,65 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     while(fieldLen>1){ labels.push(fieldLen>2 ? "Divisional" : "Conference Championship"); fieldLen = Math.floor(fieldLen/2); }
     return labels;
   }
+  // Companion to canonicalRoundLabels -- how many matchup CARDS each round will end up showing,
+  // known purely from the format (N/wcGames/byes), independent of how far resolution has actually
+  // progressed. Used to size not-yet-reached placeholder columns with the right number of slots
+  // instead of one generic "TBD" card regardless of round.
+  function expectedMatchupCounts(N, wcGames, byes){
+    if(N<2) return [];
+    if(wcGames<=0) return [1];
+    const counts = [wcGames];
+    let fieldLen = byes+wcGames;
+    while(fieldLen>1){ counts.push(Math.floor(fieldLen/2)); fieldLen = Math.floor(fieldLen/2); }
+    return counts;
+  }
+  // Round 32 follow-up ("I'd like the entire tree to already be seen, filled in as we simulate"):
+  // derives the NEXT round's real matchup pairings -- seeds and team ids, no scores -- straight from
+  // the bracket state, WITHOUT stepping/simulating it. This is possible because who plays whom is
+  // fully determined by seeding the instant the round that feeds it is confirmed: round 1's pairs
+  // come straight from the seed list (s/wcGames/byes), and every later round's pairs come from
+  // state.field (already set by confirmRoundAdvancement the moment the PRIOR round confirmed) --
+  // reseeded highest-surviving-seed vs lowest-surviving-seed, the exact same pairing rule
+  // stepConferenceBracket itself uses when it actually simulates that round. Returns null once the
+  // conference is already fully resolved (nothing left to preview).
+  function previewNextRoundMatchups(state){
+    if(state.field===null){
+      const { s, N, wcGames, byes } = state;
+      if(N<2) return null;
+      if(wcGames<=0){
+        const a=s[0], b=s[1]||null;
+        return { label:"Conference Championship", matchups:[{ aSeed:a.seed, aId:a.id, bSeed:b?b.seed:null, bId:b?b.id:null }] };
+      }
+      const label = byes>0 ? "Wild Card" : "Divisional";
+      const matchups = [];
+      for(let i=0;i<wcGames;i++){ const a=s[byes+i], b=s[N-1-i]; matchups.push({ aSeed:a.seed, aId:a.id, bSeed:b.seed, bId:b.id }); }
+      return { label, matchups };
+    }
+    const field = state.field;
+    if(field.length<=1) return null;
+    const label = field.length>2 ? "Divisional" : "Conference Championship";
+    const matchups = [];
+    for(let i=0;i<Math.floor(field.length/2);i++){ const a=field[i], b=field[field.length-1-i]; matchups.push({ aSeed:a.seed, aId:a.id, bSeed:b.seed, bId:b.id }); }
+    return { label, matchups };
+  }
+  // The one case a round FURTHER than "next" can still be partially previewed: a bye team's own
+  // identity is fixed by seeding alone (top seed(s) always skip Wild Card weekend) and never
+  // depends on any result, so it can be shown sitting in its Divisional slot from the very start,
+  // even before Wild Card has been simulated at all -- its actual opponent (whoever wins Wild Card)
+  // genuinely can't be known yet, so that side renders as "TBD" (aId/bId "TBD" is a plain sentinel
+  // string here, never a real team code, so it always renders as literal "TBD" text and never
+  // triggers the separate isBye/bye-badge styling, which is reserved for an actual bye slot).
+  // Deliberately only implemented for round index 1 (Divisional immediately following Wild Card) --
+  // this game's real historical formats never have byes feeding into anything deeper than that.
+  function previewByeAheadMatchups(state){
+    const { s, byes, wcGames } = state;
+    if(!(byes>0)) return null;
+    const total = Math.floor((byes+wcGames)/2);
+    const matchups = [];
+    for(let i=0;i<byes;i++){ matchups.push({ aSeed:s[i].seed, aId:s[i].id, bSeed:null, bId:"TBD" }); }
+    for(let i=byes;i<total;i++){ matchups.push({ aSeed:null, aId:"TBD", bSeed:null, bId:"TBD" }); }
+    return matchups;
+  }
   // Manually advances ONE conference's bracket state by exactly one round and records it -- used
   // for: the other conference (always flat, myTeamId never present in its field), and the player's
   // own conference ONLY once their real involvement that season is already over (eliminated, won
@@ -6516,25 +6575,50 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return `<div id="scheduleTabRoot">${renderScheduleTabInner()}</div>`;
   }
 
+  // Round 32 follow-up: click-to-team-page kept, but styled to look like plain text again (not an
+  // underlined hyperlink) -- a <button> still, for the click handler, just visually inert via
+  // .team-name-plain. Also adds three single-letter flags (C/D/P) and a made-the-playoffs vs.
+  // missed-entirely color distinction, per direct user feedback on the previous version's look.
+  function teamNameLinkHtml(id, year, extraLabel){
+    return `<button type="button" class="team-name-plain" data-team-id="${id}">${svgEscape(teamNameAt(id, year))}</button>${extraLabel||""}`;
+  }
   function buildStandingsTabHTML(season){
     const ls = season.leagueStandings;
     if(!ls) return `<p style="color:var(--ink-muted);">Standings aren't available for this season.</p>`;
     // Same values driving buildScheduleResults/simpleWinProb -- surfaced here so a lopsided-looking
     // record has a visible cause instead of reading as arbitrary.
     const teamOverall = id => Math.round(id===career.teamId ? career.teamStrength : (career.leagueStrength[id] ?? 60));
+    const playoffIds = new Set([...(ls.seeded.AFC||[]), ...(ls.seeded.NFC||[])].map(t=>t.id));
+    const divWinnerIds = new Set();
+    (ls.divisions || divisionsForYear(season.year)).forEach(d=>{
+      const ranked = d.teams.map(id=>ls.results[id]).sort((a,b)=>b.winPct-a.winPct);
+      if(ranked[0]) divWinnerIds.add(ranked[0].id);
+    });
+    // Conference champion only exists once the bracket for that conference is actually confirmed --
+    // this tab is refreshed in place (see confirmPlayoffRound/simulateNextPlayoffTreeRound/
+    // finalizeRound) at the same points the Playoff Tree already is, so the "C" flag appears live
+    // the moment that conference's real champion becomes known, not just at initial render.
+    const bd = ls.bracket;
+    const confChampIds = new Set([bd && bd.myChampionId, bd && bd.otherChampionId].filter(Boolean));
+    function flagsFor(id){
+      let s = "";
+      if(confChampIds.has(id)) s += `<span class="team-flag flag-conf" title="Conference Champion">C</span>`;
+      if(divWinnerIds.has(id)) s += `<span class="team-flag flag-div" title="Division Winner">D</span>`;
+      if(playoffIds.has(id)) s += `<span class="team-flag flag-playoff" title="Made the Playoffs">P</span>`;
+      return s;
+    }
+    function statusClass(id){ return playoffIds.has(id) ? "team-in-playoffs" : "team-eliminated"; }
     function seedList(conf){
       return `<ol class="seed-list">` + ls.seeded[conf].map(t=>{
-        const name = teamNameAt(t.id, season.year);
         const mine = t.id===career.teamId;
-        return `<li class="${mine?"me":""}"><button type="button" class="rival-link" data-team-id="${t.id}">${name}</button> <span class="team-ovr">${teamOverall(t.id)} OVR</span><span class="tabular">${t.wins}-${t.losses}</span></li>`;
+        return `<li class="${mine?"me":""} ${statusClass(t.id)}">${teamNameLinkHtml(t.id, season.year)}${flagsFor(t.id)} <span class="team-ovr">${teamOverall(t.id)} OVR</span><span class="tabular">${t.wins}-${t.losses}</span></li>`;
       }).join("") + `</ol>`;
     }
     function divTables(conf){
       return (ls.divisions || divisionsForYear(season.year)).filter(d=>d.conf===conf).map(d=>{
         const rows = d.teams.map(id=>ls.results[id]).sort((a,b)=>b.winPct-a.winPct).map(r=>{
-          const name = teamNameAt(r.id, season.year);
           const mine = r.id===career.teamId;
-          return `<tr class="${mine?"me":""}"><td class="team-cell"><button type="button" class="rival-link" data-team-id="${r.id}">${name}</button>${mine?" (you)":""} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td>${r.wins}-${r.losses}</td></tr>`;
+          return `<tr class="${mine?"me":""} ${statusClass(r.id)}"><td class="team-cell">${teamNameLinkHtml(r.id, season.year)}${mine?" (you)":""}${flagsFor(r.id)} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td>${r.wins}-${r.losses}</td></tr>`;
         }).join("");
         return `<div class="standings-div"><div class="standings-div-name">${confLabel(conf, season.year)} ${d.name}</div><table class="standings-table"><tbody>${rows}</tbody></table></div>`;
       }).join("");
@@ -6542,7 +6626,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return `<div class="standings-columns">
         <div><h4>${confLabel("AFC", season.year)} Playoff Seeds</h4>${seedList("AFC")}${divTables("AFC")}</div>
         <div><h4>${confLabel("NFC", season.year)} Playoff Seeds</h4>${seedList("NFC")}${divTables("NFC")}</div>
-      </div>`;
+      </div>
+      <div class="calc-refnote" style="margin-top:0.6rem;"><span class="team-flag flag-conf">C</span> Conference Champion &nbsp;·&nbsp; <span class="team-flag flag-div">D</span> Division Winner &nbsp;·&nbsp; <span class="team-flag flag-playoff">P</span> Made the Playoffs</div>`;
   }
 
   // Maps ONE of the player's own real playoff rounds (season.playoffs.rounds[i]) into the SAME
@@ -6568,9 +6653,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const rounds = isMine ? bd.myRounds : bd.otherRounds;
     const championId = isMine ? bd.myChampionId : bd.otherChampionId;
     const labels = canonicalRoundLabels(state.N, state.wcGames, state.byes);
+    const counts = expectedMatchupCounts(state.N, state.wcGames, state.byes);
     const revealedCount = rounds.length;
     const championKnown = championId!=null;
-    return { rounds, labels, championKnown, championId, revealedCount, totalRounds: labels.length };
+    return { rounds, labels, counts, state, championKnown, championId, revealedCount, totalRounds: labels.length };
   }
   // Unified bracket-tree renderer for BOTH the player's real conference and any flat-resolved one
   // -- one column per round, connector bezier curves from a winning seed's box to its slot in the
@@ -6644,12 +6730,26 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // model a round's sibling games are never rolled-but-hidden from the DISPLAY side; they simply
   // haven't happened yet until the round they're gated on is confirmed).
   function bracketColumnHtml(display, roundIdx, conf, myTeamId){
-    const revealed = roundIdx<display.revealedCount;
-    const round = revealed ? display.rounds[roundIdx] : null;
-    const state = revealed ? "revealed" : "pending-unknown";
-    const cardsHtml = revealed
-      ? round.matchups.map((m,matchIdx)=>bracketCardHtml(m, state, conf, roundIdx, matchIdx, myTeamId)).join("")
-      : bracketCardHtml(null, state, conf, roundIdx, 0, myTeamId);
+    let matchups = null, cardState = "pending-unknown";
+    if(roundIdx<display.revealedCount){
+      matchups = display.rounds[roundIdx].matchups;
+      cardState = "revealed";
+    } else if(roundIdx===display.revealedCount){
+      // The very next round to happen -- always fully previewable (see previewNextRoundMatchups),
+      // real identities on both sides, score still "-" until it's actually simulated.
+      const preview = previewNextRoundMatchups(display.state);
+      matchups = preview ? preview.matchups : null;
+      cardState = "pending-known";
+    } else if(roundIdx===1 && display.state.field===null){
+      // Nothing has been stepped at all yet, but a bye team's OWN slot in Divisional is knowable
+      // from seeding alone -- show it now, opponent "TBD" (see previewByeAheadMatchups).
+      const byeMatchups = previewByeAheadMatchups(display.state);
+      if(byeMatchups){ matchups = byeMatchups; cardState = "pending-known"; }
+    }
+    const expectedCount = display.counts[roundIdx] || 1;
+    const cardsHtml = matchups
+      ? matchups.map((m,matchIdx)=>bracketCardHtml(m, cardState, conf, roundIdx, matchIdx, myTeamId)).join("")
+      : Array.from({length: expectedCount}, (_,matchIdx)=>bracketCardHtml(null, "pending-unknown", conf, roundIdx, matchIdx, myTeamId)).join("");
     const label = display.labels[roundIdx];
     return `<div class="bracket-col"><div class="bracket-col-label">${label?svgEscape(shortRoundLabel(label)):""}</div><div class="bracket-col-cards">${cardsHtml}</div></div>`;
   }
@@ -6751,6 +6851,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     overlay.setAttribute("aria-hidden", "false");
     const closeBtn = overlay.querySelector(".modal-close");
     if(closeBtn) closeBtn.addEventListener("click", closeBracketBoxScore);
+    // This overlay is a DOM SIBLING of #careerContent, not a descendant of it -- the shared
+    // #careerContent delegated click listener never sees a click on the QB-name [data-rival-id]
+    // links qbLineHTML renders inside this modal (the exact same class of bug already fixed for
+    // #rivalProfileOverlay/#teamProfileOverlay's own internal links), so they need the same
+    // explicit wiring here.
+    overlay.querySelectorAll("[data-rival-id]").forEach(link=>{
+      link.addEventListener("click", ()=>{ closeBracketBoxScore(); openRivalProfile(link.dataset.rivalId); });
+    });
     if(!overlay._backdropWired){
       overlay._backdropWired = true;
       overlay.addEventListener("click", (e)=>{ if(e.target===overlay) closeBracketBoxScore(); });
@@ -7766,11 +7874,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     }
     const reqTradeBtn = document.getElementById("reqTradeBtn");
     if(reqTradeBtn) reqTradeBtn.addEventListener("click", requestTrade);
-    // the playoff reveal is now player-paced (sim quarter/half/end-of-game buttons) rather than
-    // automatic, so advancing to next season is held until every round the player took part in
-    // has actually been simmed out -- built AFTER the action buttons above exist, so it can
-    // actually disable them.
-    if(season.playoffs.made && season.playoffs.rounds.length){
+    // The playoff reveal is now player-paced (sim quarter/half/end-of-game buttons) rather than
+    // automatic, so advancing to next season is held until the ENTIRE league-wide bracket record
+    // is final (season.leagueStandings.playoffBracket) -- not just the player's own real
+    // involvement. Before this check existed, a player eliminated mid-bracket (or who missed the
+    // playoffs entirely) could hit Continue the instant their own reveal ended, well before the
+    // other conference -- or the rest of their own, now-flat conference -- had ever been manually
+    // simulated via the Playoff Tree's "Simulate Next Round," which meant that data (and any ring
+    // it would have awarded) simply never got generated at all once the season moved on. Built
+    // AFTER the action buttons above exist, so it can actually disable them.
+    if(season.leagueStandings && season.leagueStandings.bracket && !season.leagueStandings.playoffBracket){
       actions.classList.add("pending-reveal");
       actions.querySelectorAll("button").forEach(b=> b.disabled = true);
     }
@@ -8159,7 +8272,6 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       else {
         // whole run is done -- see the Playoff Tree tab for the full bracket view (Round 29
         // removed the separate summary graphic that used to be drawn here).
-        if(actions){ actions.classList.remove("pending-reveal"); actions.querySelectorAll("button").forEach(b=> b.disabled=false); }
         // The run has truly ended (won it all or got eliminated) -- only now do the Super Bowl
         // Champion award, the ring, and the reputation/GM/fan/popularity bumps that come with a
         // title actually land, since only now is any of that a real, played-out fact.
@@ -8170,6 +8282,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         tryFinalizeLeaguePlayoffBracket(season);
         const playoffTreePanel = document.getElementById("tabpanel-playofftree");
         if(playoffTreePanel) playoffTreePanel.innerHTML = buildPlayoffTreeTabHTML(season);
+        // The Standings tab's Conference Champion ("C") flag depends on the same just-updated
+        // bracket, so it needs the same in-place refresh, at the same moment, or it stays stuck at
+        // whatever it looked like when this season's card first rendered.
+        const standingsPanel = document.getElementById("tabpanel-standings");
+        if(standingsPanel) standingsPanel.innerHTML = buildStandingsTabHTML(season);
+        // Continue/Play On only unlocks once the ENTIRE bracket (not just my own real path) is
+        // final -- if the other conference (or the rest of my own, now-flat conference) still
+        // needs manual "Simulate Next Round" clicks, actions stay disabled until that happens (see
+        // simulateNextPlayoffTreeRound, which runs this exact same check after every click).
+        if(actions && season.leagueStandings.playoffBracket){
+          actions.classList.remove("pending-reveal");
+          actions.querySelectorAll("button").forEach(b=> b.disabled=false);
+        }
       }
     }
 
@@ -9451,6 +9576,19 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
     tryFinalizeLeaguePlayoffBracket(season);
     const panel = document.getElementById("tabpanel-playofftree");
     if(panel) panel.innerHTML = buildPlayoffTreeTabHTML(season);
+    const standingsPanel = document.getElementById("tabpanel-standings");
+    if(standingsPanel) standingsPanel.innerHTML = buildStandingsTabHTML(season);
+    // If this click was the one that finally finished the whole bracket (and the player's own
+    // involvement was already over), Continue/Play On unlocks right here -- see the matching check
+    // in finalizeRound, which this mirrors for the case where finishing happens via a manual click
+    // rather than the player's own reveal ending.
+    if(myDone && season.leagueStandings.playoffBracket){
+      const actions = document.getElementById("seasonActions");
+      if(actions && actions.classList.contains("pending-reveal")){
+        actions.classList.remove("pending-reveal");
+        actions.querySelectorAll("button").forEach(b=> b.disabled=false);
+      }
+    }
   }
   // Spacebar shortcut for "Simulate Next Round" -- scoped to only fire while the Season tab (the
   // Playoff Tree now lives inside it, not its own dash-tab) is the currently active panel.

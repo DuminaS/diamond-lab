@@ -724,6 +724,18 @@
   .seed-list li span{ float: right; }
   .seed-list li span.team-ovr{ float: none; }
   .team-ovr{ font-family: var(--mono); font-size: 0.72rem; color: var(--ink-muted); }
+  /* Round 32 follow-up: clickable team names on the Standings tab, styled to look like plain text
+     again (not an underlined hyperlink) -- the click-through-to-team-page behavior is unchanged,
+     only the visual affordance was reverted per direct feedback. */
+  .team-name-plain{ background:none; border:none; padding:0; margin:0; font:inherit; color:inherit; text-decoration:none; cursor:pointer; }
+  .team-name-plain:hover{ text-decoration: underline; text-decoration-color: var(--line-strong); }
+  .team-flag{ display:inline-block; font-family: var(--mono); font-size: 0.62rem; font-weight:700; width:1.1em; height:1.1em; line-height:1.1em; text-align:center; border-radius:3px; margin-left:0.2rem; }
+  .team-flag.flag-conf{ background: var(--gold); color:#1a1a1a; }
+  .team-flag.flag-div{ background: var(--warn); color:#1a1a1a; }
+  .team-flag.flag-playoff{ background: var(--good); color:#0c1014; }
+  .seed-list li.team-eliminated, tr.team-eliminated{ opacity: 0.55; }
+  .seed-list li.team-in-playoffs{ font-weight: 600; }
+  tr.team-in-playoffs td{ font-weight: 600; }
   .standings-div{ margin-bottom: 0.9rem; }
   .standings-div-name{ font-family: var(--mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); margin-bottom: 0.25rem; }
   table.standings-table{ width:100%; border-collapse: collapse; font-size: 0.82rem; }
