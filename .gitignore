@@ -2,3 +2,9 @@
 node_modules/
 *.log
 dist/
+
+# Wave 0 (MASTER_REMEDIATION_SPEC.md): Playwright's own output, never committed.
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
