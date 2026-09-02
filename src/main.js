@@ -1979,6 +1979,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // Signed number for legible "Effect:" lines on event cards -- always shows the sign so a delta
   // of 0 (or a positive number without a leading "+") never reads as ambiguous.
   function fmtDelta(n){ return (n>0?"+":"") + n; }
+  // Ties QOL: a real record display, "-T" only shown when ties>0 -- keeps every pre-tie-era record
+  // (and the vast majority of post-1974 seasons, where ties stay rare) reading exactly as before,
+  // rather than cluttering every record everywhere with an always-present "-0".
+  function recordLine(w, l, t){ return (t>0) ? `${w}-${l}-${t}` : `${w}-${l}`; }
 
   /* ----- era style: the same build plays differently depending on when it lands -----
      Grounded in real scheme/rule history, not a smooth gradient:
@@ -2238,6 +2242,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       leagueRivals: [],
       leagueDepthCharts: {},
       teamSeasonHistory: {},
+      leagueTeamGrades: {},
       freeAgentPool: [],
       rivalries: {},
       isBackup: false,
@@ -2409,7 +2414,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // skill range (Round 4's QB_INFLUENCE calibration) -- so the defense grade was overpowering the
   // player's own performance. At 20% weight the same swing is ~14 points: a real, felt effect that
   // stays clearly secondary to the QB's own play.
-  function simulateGameScore(offOverall, defOverall, myDefense){
+  // `tieProb` is OPTIONAL -- every pre-existing caller (every playoff round, the Super Bowl) omits
+  // it and is completely unaffected; a real NFL playoff game is never allowed to end level, it just
+  // keeps playing until someone wins, which this function already does unconditionally when
+  // tieProb is falsy. Only the player's own REGULAR SEASON game (simulateRegularSeasonGames) passes
+  // a real, era-based probability (tieProbability) -- see the note there.
+  function simulateGameScore(offOverall, defOverall, myDefense, tieProb){
     const oppFacingGrade = myDefense!=null ? (offOverall*0.8 + myDefense*0.2) : offOverall;
     const quarters = [];
     let myTotal=0, oppTotal=0, myTds=0, myFgs=0, oppTds=0, oppFgs=0;
@@ -2421,13 +2431,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       quarters.push({ q, myQ: myQ.pts, oppQ: oppQ.pts, myTotal, oppTotal });
     }
     if(myTotal===oppTotal){
+      if(tieProb && Math.random()<tieProb){
+        return { quarters, myTotal, oppTotal, won:null, tie:true, myTds, myFgs, oppTds, oppFgs };
+      }
       const otTd = Math.random()<0.7;
       const otPts = otTd?6:3;
       if(Math.random() < 0.5 + (offOverall-defOverall)*0.01){ myTotal += otPts; if(otTd) myTds++; else myFgs++; }
       else { oppTotal += otPts; if(otTd) oppTds++; else oppFgs++; }
       quarters.push({ q:"OT", myQ: myTotal-quarters[3].myTotal, oppQ: oppTotal-quarters[3].oppTotal, myTotal, oppTotal });
     }
-    return { quarters, myTotal, oppTotal, won: myTotal>oppTotal, myTds, myFgs, oppTds, oppFgs };
+    return { quarters, myTotal, oppTotal, won: myTotal>oppTotal, tie:false, myTds, myFgs, oppTds, oppFgs };
   }
   function generateGameBoxScore(season, myPts, myTds){
     const league = LEAGUE[season.decade];
@@ -2499,10 +2512,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const incumbentIdxSet = new Set(missedIdxs.slice(0, incumbentCount));
     const missedIdxSet = new Set(missedIdxs);
     const genericWinProb = clamp(0.5 + (career.teamStrength-65)*0.01, 0.12, 0.88);
+    // Ties QOL: two DIFFERENT probabilities for two different resolution mechanisms. The
+    // missed-game/generic-backup branch below rolls a plain win/loss coinflip with no score
+    // simulated first, exactly like simpleGameWinner -- it needs the UNCONDITIONAL tieProbability
+    // (this game is a tie, period). The real per-quarter branch (simulateGameScore) only checks for
+    // a tie once already level after regulation -- it needs the CONDITIONAL tieStayProbability, or
+    // the player's own real games would tie far less often than everyone else's at the "same" rate
+    // (see tieStayProbability's own comment for the empirical sweep behind this).
+    const tieProbFlat = tieProbability(career.year);
+    const tieProbConditional = tieStayProbability(career.year);
 
     const myOff = regularSeasonOffenseGrade(effOverall, age, decade);
     const games = [];
-    let tComp=0,tAtt=0,tYards=0,tTd=0,tInt=0,tSacks=0,tRushAtt=0,tRushYards=0,tRushTd=0,wins=0,started=0;
+    let tComp=0,tAtt=0,tYards=0,tTd=0,tInt=0,tSacks=0,tRushAtt=0,tRushYards=0,tRushTd=0,wins=0,ties=0,started=0;
     let backupWins=0, backupLosses=0, incumbentWins=0, incumbentLosses=0;
     mySlots.forEach((slot, idx)=>{
       const oppId = slot.opponentId;
@@ -2514,23 +2536,27 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         // stat line gets attached. Still a real, scored entry on the shared schedule so the team's
         // weekly board never shows a hole where a game should be.
         const isIncumbent = incumbentIdxSet.has(idx);
-        const won = Math.random() < (isIncumbent ? incumbentWinRate : genericWinProb);
-        if(isIncumbent){ if(won) incumbentWins++; else incumbentLosses++; }
+        const isTie = Math.random()<tieProbFlat;
+        const won = !isTie && Math.random() < (isIncumbent ? incumbentWinRate : genericWinProb);
+        if(isTie){ ties++; }
+        else if(isIncumbent){ if(won) incumbentWins++; else incumbentLosses++; }
         else { if(won) backupWins++; else backupLosses++; }
-        const { winnerScore, loserScore } = approxGameScore(won?career.teamStrength:oppGrade, won?oppGrade:career.teamStrength);
+        let winnerScore, loserScore;
+        if(isTie){ const s = approxGameScore(Math.max(career.teamStrength,oppGrade), Math.min(career.teamStrength,oppGrade)); winnerScore = loserScore = Math.round((s.winnerScore+s.loserScore)/2); }
+        else ({ winnerScore, loserScore } = approxGameScore(won?career.teamStrength:oppGrade, won?oppGrade:career.teamStrength));
         games.push({ week: slot.week, opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
           opponentGrade: Math.round(oppGrade), opponentQbId: oppRival?oppRival.id:null,
           opponentQbName: oppRival?oppRival.name:null, opponentQbOverall: oppRival?rivalEffTalent(oppRival):null,
-          won, myScore: won?winnerScore:loserScore, oppScore: won?loserScore:winnerScore,
+          won: isTie?null:won, tie: isTie, myScore: isTie?winnerScore:(won?winnerScore:loserScore), oppScore: isTie?loserScore:(won?loserScore:winnerScore),
           comp:0, att:0, yards:0, td:0, int:0, sacks:0, rushAtt:0, rushYards:0, rushTd:0, startedByBackup:true });
         return;
       }
       started++;
       const oppOffense = opponentOffenseGrade(oppId, QB_INFLUENCE_REGULAR);
-      const scoreSim = simulateGameScore(myOff, oppOffense, career.defense);
+      const scoreSim = simulateGameScore(myOff, oppOffense, career.defense, tieProbConditional);
       const won = scoreSim.won;
-      if(won) wins++;
-      bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
+      if(scoreSim.tie) ties++; else if(won) wins++;
+      bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won: scoreSim.tie?false:won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
 
       // per-game noise ranges are all built to average to exactly 1.0x the season rate over a
       // full season, so summed game logs land on the same season totals the old single-formula
@@ -2557,12 +2583,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         opponentQbId: oppRival ? oppRival.id : null,
         opponentQbName: oppRival ? oppRival.name : null,
         opponentQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
-        won, myScore: scoreSim.myTotal, oppScore: scoreSim.oppTotal,
+        won, tie: !!scoreSim.tie, myScore: scoreSim.myTotal, oppScore: scoreSim.oppTotal,
         comp: gComp, att: gAtt, yards: gYards, td: gTd, int: gInt, sacks: gSacks,
         rushAtt: gRushAtt, rushYards: gRushYards, rushTd: gRushTd });
     });
     return { games, comp:tComp, att:tAtt, yards:tYards, td:tTd, int:tInt, sacks:tSacks,
-      rushAtt:tRushAtt, rushYards:tRushYards, rushTd:tRushTd, wins, losses: started-wins,
+      rushAtt:tRushAtt, rushYards:tRushYards, rushTd:tRushTd, wins, losses: started-wins-ties, ties,
       backupWins, backupLosses, incumbentWins, incumbentLosses };
   }
 
@@ -2579,7 +2605,43 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // 7-8 of 31 teams at 12+ wins in a single season (matching a reported screenshot of an absurdly
   // bimodal standings page) -- 0.006/[0.10,0.90] cuts that to ~4 while still leaving real spread.
   function simpleWinProb(aStrength, bStrength){ return clamp(0.5 + (aStrength-bStrength)*0.006, 0.10, 0.90); }
-  function simpleGameWinner(idA, sA, idB, sB){ return Math.random() < simpleWinProb(sA, sB) ? idA : idB; }
+  // Ties QOL: `tieProb` is OPTIONAL and defaults to falsy, so every pre-existing call site (every
+  // flat PLAYOFF resolution -- playoffs never end in a tie in real NFL rules, and none of those
+  // call sites pass this) is completely unaffected. Only buildScheduleResults' regular-season flat
+  // resolution passes a real, era-based probability (see tieProbability below). Returns `null` as
+  // the tie sentinel -- every caller that can receive a tieProb must handle a null return.
+  function simpleGameWinner(idA, sA, idB, sB, tieProb){
+    if(tieProb && Math.random()<tieProb) return null;
+    return Math.random() < simpleWinProb(sA, sB) ? idA : idB;
+  }
+  // Real NFL overtime history, regular season only: no overtime existed at all before 1974 (a level
+  // game after 60 minutes simply ended in a tie -- common enough that real ties in that era ran a
+  // couple percent of all games); 1974-2011 was a single sudden-death period, which made a tie rare
+  // but still possible if nobody scored in it; 2012 on shortened that period and guaranteed each
+  // team a possession unless the first score was a touchdown, very slightly raising the tie rate
+  // versus the preceding rule (more clock ticks off without a possession-ending score before the
+  // period can end level). Playoffs are NEVER subject to this -- see the note on simpleGameWinner
+  // above and simulateGameScore's own tieProb param below; a playoff game just keeps calling this
+  // function with no tieProb until it flat-out doesn't.
+  function tieProbability(year){
+    if(year<1974) return 0.02;
+    if(year<2012) return 0.003;
+    return 0.005;
+  }
+  // simulateGameScore's tie check is CONDITIONAL -- it only ever fires when the game is already
+  // level after regulation, unlike simpleGameWinner's tieProb above, which is an UNCONDITIONAL
+  // "this game is a tie" roll applied to every flat-resolved game regardless of score. Naively
+  // reusing the same unconditional probability at a conditional check point would silently produce
+  // a much LOWER real-world tie rate for the player's own games than for every other (flat-resolved)
+  // team's games at the "same" tieProb -- a real inconsistency caught by a quick empirical sweep
+  // (scoreForQuarter's own scoring math puts two evenly-matched teams level after regulation
+  // ~6% of the time; see the Round 33 PROGRESS.md entry for the sweep). This divides the target
+  // UNCONDITIONAL rate by that measured ~6% to get the conditional "stays tied" probability that
+  // actually produces a matching overall tie rate for the player, whichever era they're in.
+  const LEVEL_AFTER_REGULATION_RATE = 0.06;
+  function tieStayProbability(year){
+    return clamp(tieProbability(year) / LEVEL_AFTER_REGULATION_RATE, 0, 1);
+  }
   // A plausible final score for a game where only two raw team-strength numbers exist (not the full
   // offense/defense split simulateGameScore uses for the player's own games) -- good enough to fill
   // a real per-team schedule row, swept via approx_score_sweep.mjs for realistic NFL-ish ranges.
@@ -2633,9 +2695,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // simulatePlayerSeasonStats already incremented once using its own (now-superseded) estimate.
   function reconcileWinLossFromGames(entity, season, games){
     if(!games) return;
-    const wins = games.filter(g=>g.won).length, losses = games.length-wins;
+    const wins = games.filter(g=>g.won===true).length, ties = games.filter(g=>g.tie).length, losses = games.length-wins-ties;
     entity.totals.wins += (wins-season.wins); entity.totals.losses += (losses-season.losses);
-    season.wins = wins; season.losses = losses; season.winPct = games.length>0 ? wins/games.length : 0;
+    entity.totals.ties = (entity.totals.ties||0) + (ties-(season.ties||0));
+    season.wins = wins; season.losses = losses; season.ties = ties;
+    // Ties QOL: real NFL winPct formula -- a tie counts as half a win, half a loss.
+    season.winPct = games.length>0 ? (wins+0.5*ties)/games.length : 0;
   }
 
   // Builds a real, collision-free week-by-week schedule: every team plays at most one real game
@@ -2779,8 +2844,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // matchups the same week) structurally impossible rather than just less likely.
   function buildScheduleResults(season, schedule){
     const allIds = schedule.allIds;
-    const wins = {}, losses = {};
-    allIds.forEach(id=>{ wins[id]=0; losses[id]=0; });
+    const wins = {}, losses = {}, ties = {};
+    allIds.forEach(id=>{ wins[id]=0; losses[id]=0; ties[id]=0; });
     // Real per-team, per-game log (opponent/week/score) -- current season only, never persisted
     // into career.seasonLog (see career.currentSeasonSchedules below). `week` is a real, shared
     // week index (see scheduleGamesIntoWeeks) -- both teams in a game get the SAME week number and
@@ -2790,6 +2855,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const strengthOf = id => id===career.teamId ? career.teamStrength : (career.leagueStrength[id] ?? 60);
     const myResultByWeek = {};
     (season.gameLog||[]).forEach(g=>{ myResultByWeek[g.week] = g; });
+    const tieProb = tieProbability(season.year);
     schedule.weeks.forEach((weekPairs, weekIdx)=>{
       const week = weekIdx+1;
       weekPairs.forEach(([a,b])=>{
@@ -2798,17 +2864,27 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const myGame = myId!=null ? myResultByWeek[week] : null;
         if(myGame){
           const oppId = myId===a ? b : a;
-          w = myGame.won ? myId : oppId;
-          winnerScore = myGame.won ? myGame.myScore : myGame.oppScore;
-          loserScore = myGame.won ? myGame.oppScore : myGame.myScore;
+          if(myGame.tie){
+            w = null; winnerScore = loserScore = myGame.myScore;
+          } else {
+            w = myGame.won ? myId : oppId;
+            winnerScore = myGame.won ? myGame.myScore : myGame.oppScore;
+            loserScore = myGame.won ? myGame.oppScore : myGame.myScore;
+          }
         } else {
-          w = simpleGameWinner(a, strengthOf(a), b, strengthOf(b));
-          const loser = w===a ? b : a;
-          ({ winnerScore, loserScore } = approxGameScore(strengthOf(w), strengthOf(loser)));
+          w = simpleGameWinner(a, strengthOf(a), b, strengthOf(b), tieProb);
+          if(w===null){
+            const s = approxGameScore(strengthOf(a), strengthOf(b));
+            winnerScore = loserScore = Math.round((s.winnerScore+s.loserScore)/2);
+          } else {
+            const loser = w===a ? b : a;
+            ({ winnerScore, loserScore } = approxGameScore(strengthOf(w), strengthOf(loser)));
+          }
         }
-        if(w===a){ wins[a]++; losses[b]++; } else { wins[b]++; losses[a]++; }
-        gameLogs[a].push({ week, opponentId: b, won: w===a, myScore: w===a?winnerScore:loserScore, oppScore: w===a?loserScore:winnerScore });
-        gameLogs[b].push({ week, opponentId: a, won: w===b, myScore: w===b?winnerScore:loserScore, oppScore: w===b?loserScore:winnerScore });
+        if(w===null){ ties[a]++; ties[b]++; }
+        else if(w===a){ wins[a]++; losses[b]++; } else { wins[b]++; losses[a]++; }
+        gameLogs[a].push({ week, opponentId: b, won: w===null?null:w===a, tie: w===null, myScore: w===a||w===null?winnerScore:loserScore, oppScore: w===a||w===null?loserScore:winnerScore });
+        gameLogs[b].push({ week, opponentId: a, won: w===null?null:w===b, tie: w===null, myScore: w===b||w===null?winnerScore:loserScore, oppScore: w===b||w===null?loserScore:winnerScore });
       });
     });
     // Defensive safety net only, not the source of truth anymore -- with the player's own games
@@ -2816,9 +2892,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // already exactly equal season.teamWins/teamLosses. Left in case season.gameLog ever falls
     // short of covering every scheduled week (see the odd-team-count shortfall note on
     // scheduleGamesIntoWeeks) so the standings table can never silently disagree with the season object.
-    wins[career.teamId] = season.teamWins; losses[career.teamId] = season.teamLosses;
+    wins[career.teamId] = season.teamWins; losses[career.teamId] = season.teamLosses; ties[career.teamId] = season.teamTies||0;
     const results = {};
-    allIds.forEach(id=>{ const w=wins[id], l=losses[id], t=w+l; results[id] = { id, wins:w, losses:l, winPct: t>0?w/t:0 }; });
+    // Ties QOL: winPct follows the real NFL formula -- a tie counts as half a win, half a loss.
+    allIds.forEach(id=>{ const w=wins[id], l=losses[id], t=ties[id], g=w+l+t; results[id] = { id, wins:w, losses:l, ties:t, winPct: g>0?(w+0.5*t)/g:0 }; });
     return { results, gameLogs };
   }
 
@@ -3067,8 +3144,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const rating = passerRating(t.comp, t.att, t.yards, t.td, t.int);
     const overall = rivalEffTalent(rival);
     const g = gradeFor(clamp(overall, 0, 98));
-    const totalGames = t.wins+t.losses;
-    const winPct = totalGames>0 ? (t.wins/totalGames*100).toFixed(1) : "0.0";
+    const totalGames = t.wins+t.losses+(t.ties||0);
+    const winPct = totalGames>0 ? ((t.wins+0.5*(t.ties||0))/totalGames*100).toFixed(1) : "0.0";
     const badges = [
       t.mvps ? `<span class="badge gold">${t.mvps}x MVP</span>` : "",
       t.allPros ? `<span class="badge good">${t.allPros}x All-Pro</span>` : "",
@@ -3086,7 +3163,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const seasonsRows = (rival.seasons||[]).slice().reverse().map(s=>`
         <tr><td>${s.year}</td><td>${s.age}</td><td class="tabular">${s.comp}/${s.att}</td>
         <td class="tabular">${s.yards.toLocaleString()}</td><td class="tabular">${s.td}</td><td class="tabular">${s.int}</td>
-        <td class="tabular">${s.rating.toFixed(1)}</td><td class="tabular">${s.wins}-${s.losses}</td>
+        <td class="tabular">${s.rating.toFixed(1)}</td><td class="tabular">${recordLine(s.wins, s.losses, s.ties||0)}</td>
         <td>${(s.awards||[]).join(", ")||"—"}</td></tr>`).join("");
     const seasonsTableHtml = seasonsRows ? `<div class="table-wrap" style="margin-top:0.8rem;">
         <table class="career-table">
@@ -3105,7 +3182,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <div><div class="rv-label">Touchdowns</div><div class="rv-value tabular">${t.td}</div></div>
           <div><div class="rv-label">Interceptions</div><div class="rv-value tabular">${t.int}</div></div>
           <div><div class="rv-label">Rating</div><div class="rv-value tabular">${rating.toFixed(1)}</div></div>
-          <div><div class="rv-label">Record</div><div class="rv-value tabular">${t.wins}-${t.losses}${totalGames?` (${winPct}%)`:""}</div></div>
+          <div><div class="rv-label">Record</div><div class="rv-value tabular">${recordLine(t.wins, t.losses, t.ties||0)}${totalGames?` (${winPct}%)`:""}</div></div>
           <div><div class="rv-label">Games</div><div class="rv-value tabular">${t.games}</div></div>
         </div>
         ${badges ? `<div class="rival-badges">${badges}</div>` : ""}
@@ -3159,6 +3236,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // team (faRoleLabel is that offer's own already-computed role string -- reused directly rather
     // than re-deriving a second, potentially-contradictory depth-chart-position estimate).
     const faRoleHtml = faRoleLabel ? `<div class="calc-refnote" style="margin-top:0.4rem;">If you sign here: <b>${svgEscape(faRoleLabel)}</b></div>` : "";
+    // Round 33 QOL: the full five-grade breakdown, real for the player's own team, from
+    // leagueTeamGrades (ensureLeagueTeamGrades) for anyone else -- see buildGradeCardsHtml.
+    const teamGrades = isMine
+      ? { oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade }
+      : (career.leagueTeamGrades && career.leagueTeamGrades[teamId]);
+    const gradeCardsHtml = teamGrades ? `<div class="team-grade-grid" style="margin-top:0.8rem;">${buildGradeCardsHtml(teamGrades)}</div>` : "";
     const chart = (career.leagueDepthCharts||{})[teamId];
     const depthChartHtml = chart ? `<div class="rival-facts">
         <div class="rival-facts-label">Depth Chart</div>
@@ -3174,7 +3257,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const histRows = hist.slice().reverse().map(h=>{
       const titles = [h.wonConference?"Conf. Champs":"", h.wonDivision?"Div. Champs":""].filter(Boolean).join(", ");
       return `<tr><td>${h.year}</td><td>${h.qbName?svgEscape(h.qbName):"—"}</td><td class="tabular">${h.qbRings}</td>
-          <td class="tabular">${h.wins}-${h.losses}</td><td>${titles||"—"}</td><td>${h.scheme?svgEscape(h.scheme):"—"}</td></tr>`;
+          <td class="tabular">${recordLine(h.wins, h.losses, h.ties||0)}</td><td>${titles||"—"}</td><td>${h.scheme?svgEscape(h.scheme):"—"}</td></tr>`;
     }).join("");
     const histHtml = histRows ? `<div class="section-label" style="margin-top:1rem;">Past Seasons</div>
         <div class="table-wrap"><table class="career-table">
@@ -3193,6 +3276,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <div><div class="rv-label">Starting QB</div><div class="rv-value">${qbLine}</div></div>
         </div>
         ${faRoleHtml}
+        ${gradeCardsHtml}
         ${depthChartHtml}
         ${histHtml}
         ${viewFullTeamTabHtml}
@@ -3423,7 +3507,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const scheme = SCHEMES.find(s=>s.id===schemeId);
       if(!career.teamSeasonHistory[teamId]) career.teamSeasonHistory[teamId] = [];
       career.teamSeasonHistory[teamId].push({
-        year, wins: r.wins, losses: r.losses, qbName, qbRings,
+        year, wins: r.wins, losses: r.losses, ties: r.ties||0, qbName, qbRings,
         wonDivision: divWinnerIds.has(teamId), wonConference: false,
         scheme: scheme ? scheme.name : null,
       });
@@ -3434,6 +3518,59 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(!hist) return;
     const entry = hist.find(h=>h.year===year);
     if(entry) entry.wonConference = true;
+  }
+  // Full overall-grade breakdown for every OTHER team in the league -- the player's own team keeps
+  // using the real, mechanically-wired career.oline/weapons/defense/coaching/gmGrade (those affect
+  // actual gameplay: sack rate, dev speed, FA offers, etc.); every other team gets its own
+  // persistent, independently-noisy set of the same five sub-grades purely for DISPLAY (the Team
+  // page's breakdown) -- there is no mechanical hook for them, since no game system ever needs to
+  // know another team's oline grade to resolve anything. Rolled once per team the first time it's
+  // seen, then drifts gently toward that team's current overall each season after -- a snap re-roll
+  // every year would make a team's sub-grades flicker randomly, which the player's own experience
+  // (smooth, event-driven drift) never does; this stays visually consistent with that.
+  function ensureLeagueTeamGrades(year){
+    if(!career.leagueTeamGrades) career.leagueTeamGrades = {};
+    const keys = ["oline","weapons","defense","coaching","gmGrade"];
+    divisionsForYear(year).flatMap(d=>d.teams).forEach(teamId=>{
+      if(teamId===career.teamId) return;
+      const strength = career.leagueStrength[teamId] ?? 60;
+      let g = career.leagueTeamGrades[teamId];
+      if(!g){
+        g = {}; keys.forEach(k=> g[k] = rollSupportingCastGrade(strength));
+        career.leagueTeamGrades[teamId] = g;
+      } else {
+        keys.forEach(k=>{
+          const pull = (strength - g[k]) * 0.12;
+          g[k] = clamp(Math.round(g[k] + pull + randInt(-4,4)), 20, 99);
+        });
+      }
+    });
+  }
+  // The five sub-grade cards shared by the player's own Team tab and any other team's page --
+  // `grades` is always {oline,weapons,defense,coaching,gmGrade}, real for the player's own team,
+  // from leagueTeamGrades for anyone else. One shared renderer so the two surfaces can never drift
+  // apart in look or wording.
+  function buildGradeCardsHtml(grades){
+    const defs = [
+      { key:"oline", label:"Offensive Line",
+        impact:"Sack rate and injury risk — a shaky line means more hits taken; an elite one buys extra time in the pocket." },
+      { key:"weapons", label:"Weapons",
+        impact:"Completion % and yards per attempt — better targets make every throw a little easier to complete, and a little more likely to go the distance." },
+      { key:"defense", label:"Defense",
+        impact:"How many points opponents score, independent of the offense — a great defense can carry a team to wins the stat line alone wouldn't explain." },
+      { key:"coaching", label:"Coaching",
+        impact:"Attribute development speed, every single season — a strong staff genuinely develops talent faster; a bad one is a permanent drag on growth." },
+      { key:"gmGrade", label:"Front Office",
+        impact:"Contract offer size and how patient the organization is through a rough stretch — a sharp front office pays fair value and doesn't panic; an incompetent one is erratic either way." },
+    ];
+    return defs.map(g=>{
+      const value = grades[g.key] ?? 60;
+      return `<div class="team-grade-card">
+        <div class="tg-label">${g.label}</div>
+        <div class="tg-value tabular">${castLetterGrade(value)} <span class="tg-num">(${value})</span></div>
+        <div class="tg-impact">${g.impact}</div>
+      </div>`;
+    }).join("");
   }
 
   /* ----- Live, stepwise postseason resolution -----
@@ -3651,6 +3788,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // conference-champion fact gets patched into this SAME entry later, by
     // markConferenceChampionInHistory, once that conference's bracket actually confirms.
     recordTeamSeasonHistory(season);
+    // Round 33 QOL: give every other team its own five-grade breakdown for the Team page, same
+    // timing as the history snapshot above (right when this season's standings are known).
+    ensureLeagueTeamGrades(year);
     const mySeeds = seeded[myConf];
     const mySeedIdx = mySeeds.findIndex(t=>t.id===career.teamId);
 
@@ -3904,7 +4044,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       name: randomFullName(), teamId, talent, age,
       retireAge: clamp(age + randInt(3,12), 30, 45),
       draftYear: year - (age-22),
-      seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0, rings:0 },
+      seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
       retired: false, contract, entrenchedYears: rollEntrenchedYears(talent),
     };
   }
@@ -3928,7 +4068,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       name: randomFullName(), teamId, talent, age,
       retireAge: clamp(age + randInt(3,10), 30, 45),
       draftYear: year-(age-22),
-      seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0, rings:0 },
+      seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
       retired: false, contract: rollRivalContract(decade, talent), entrenchedYears: rollEntrenchedYears(talent),
     };
   }
@@ -3958,7 +4098,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       retireAge: clamp(age + randInt(3, 12), 30, 45),
       draftYear: year - (age-22),
       seasons: [],
-      totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0, rings:0 },
+      totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
       retired: false,
       contract: rollRivalContract(decade, talent),
       entrenchedYears: rollEntrenchedYears(talent),
@@ -4124,7 +4264,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         career.leagueRivals.push({
           id: "riv_"+r.teamId+"_"+year, name: randomFullName(), teamId: r.teamId,
           talent: newTalent, age: 22, retireAge: randInt(30,40),
-          draftYear: year, seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0, rings:0 },
+          draftYear: year, seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
           retired: false, succeededId: r.id, contract: rollRookieDepthContract(decade, randInt(1,4)), entrenchedYears: rollEntrenchedYears(newTalent),
         });
         return;
@@ -4469,7 +4609,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const newTalent = clamp(teamGrade + randInt(-10,20), 20, 99);
         signed = { id: "riv_"+teamId+"_"+year+"_fa", name: randomFullName(), teamId,
           talent: newTalent, age: randInt(26,34), retireAge: clamp(30+randInt(0,10), 30, 45),
-          draftYear: year-randInt(3,10), seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, proBowls:0, allPros:0, mvps:0, rings:0 },
+          draftYear: year-randInt(3,10), seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
           retired:false, contract: rollRivalContract(decade, newTalent), entrenchedYears: rollEntrenchedYears(newTalent) };
         career.leagueRivals.push(signed);
       }
@@ -4679,12 +4819,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       effOverall, comp, ypa, tdRate, intRate, attPerGame, perfMult, effRush, sackRate,
       age: career.age, decade,
     });
-    const gameLog = regSeason.games, wins = regSeason.wins, losses = regSeason.losses;
+    const gameLog = regSeason.games, wins = regSeason.wins, losses = regSeason.losses, ties = regSeason.ties||0;
     const attempts = regSeason.att, completions = regSeason.comp, yards = regSeason.yards,
       td = regSeason.td, interceptions = regSeason.int, sacks = regSeason.sacks,
       rushAtt = regSeason.rushAtt, rushYards = regSeason.rushYards, rushTd = regSeason.rushTd;
     const rating = passerRating(completions, attempts, yards, td, interceptions);
-    const winPct = gamesPlayed>0 ? wins/gamesPlayed : 0;
+    // Ties QOL: real NFL winPct formula -- a tie counts as half a win, half a loss.
+    const winPct = gamesPlayed>0 ? (wins+0.5*ties)/gamesPlayed : 0;
     const backupWins = regSeason.backupWins, backupLosses = regSeason.backupLosses;
     const incumbentWins = regSeason.incumbentWins, incumbentLosses = regSeason.incumbentLosses;
 
@@ -4708,9 +4849,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const season = {
       year: career.year, age: career.age, teamId: career.teamId, teamName: teamNameAt(career.teamId, career.year),
       decade, games: gamesPlayed, comp: completions, att: attempts, pct: attempts>0?completions/attempts:0,
-      yards, td, int: interceptions, sacks, rating, wins, losses,
+      yards, td, int: interceptions, sacks, rating, wins, losses, ties,
       rushAtt, rushYards, rushTd, gameLog,
-      teamGames: league.games, teamWins: wins+backupWins+incumbentWins, teamLosses: losses+backupLosses+incumbentLosses, missedGames,
+      teamGames: league.games, teamWins: wins+backupWins+incumbentWins, teamLosses: losses+backupLosses+incumbentLosses, teamTies: ties, missedGames,
       missedGamesInjury, missedGamesSuspension, missedGamesBackup,
       incumbentName: backupIncumbentName,
       incumbentSeasonSnapshot: backupIncumbentSeasonSnapshot,
@@ -6587,7 +6728,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const oppLog = career.currentSeasonSchedules && career.currentSeasonSchedules[g.opponentId];
       const oppEntry = oppLog && oppLog.find(x=>x.week===week);
       const mine = id===season.teamId, oppMine = g.opponentId===season.teamId;
-      matchups.push({ aId: id, aScore: g.myScore, aWon: g.won, aQb: mine?null:resolveScheduleQb(g.qbId),
+      // Ties QOL: g.won is null for a tie -- aWon/bWon are both explicitly false in that case (not
+      // "!aWon", which would incorrectly read a tie's null as "the other side won").
+      matchups.push({ aId: id, aScore: g.myScore, aWon: g.won===true, bWon: g.won===false, tie: !!g.tie, aQb: mine?null:resolveScheduleQb(g.qbId),
         bId: g.opponentId, bScore: g.oppScore, bQb: oppMine?null:resolveScheduleQb(oppEntry && oppEntry.qbId) });
     });
     return matchups;
@@ -6601,7 +6744,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // for this exact week lives on season.gameLog instead, looked up by week (not by opponent id,
   // since a division rival can appear twice in one season).
   function scheduleMatchToBracketMatch(m, week, season){
-    const winnerId = m.aWon ? m.aId : m.bId;
+    const winnerId = m.aWon ? m.aId : (m.bWon ? m.bId : null);
     let realRound = null;
     if(m.aId===career.teamId || m.bId===career.teamId){
       const myWeekEntry = (season.gameLog||[]).find(g=>g.week===week);
@@ -6637,7 +6780,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const matchups = buildWeekMatchups(season, scheduleTabWeek);
     const cards = matchups.map(m=>`<div class="week-matchup-card clickable" data-schedule-week="${scheduleTabWeek}" data-schedule-a="${m.aId}" data-schedule-b="${m.bId}">
         ${weekMatchupTeamLineHTML(m.aId, m.aScore, m.aWon, m.aQb, season.year)}
-        ${weekMatchupTeamLineHTML(m.bId, m.bScore, !m.aWon, m.bQb, season.year)}
+        ${weekMatchupTeamLineHTML(m.bId, m.bScore, m.bWon, m.bQb, season.year)}
       </div>`).join("");
     const body = matchups.length ? `<div class="week-matchup-grid">${cards}</div>`
       : `<div class="calc-refnote">No games recorded for this week.</div>`;
@@ -6685,14 +6828,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     function seedList(conf){
       return `<ol class="seed-list">` + ls.seeded[conf].map(t=>{
         const mine = t.id===career.teamId;
-        return `<li class="${mine?"me":""} ${statusClass(t.id)}">${teamNameLinkHtml(t.id, season.year)}${flagsFor(t.id)} <span class="team-ovr">${teamOverall(t.id)} OVR</span><span class="tabular">${t.wins}-${t.losses}</span></li>`;
+        return `<li class="${mine?"me":""} ${statusClass(t.id)}">${teamNameLinkHtml(t.id, season.year)}${flagsFor(t.id)} <span class="team-ovr">${teamOverall(t.id)} OVR</span><span class="tabular">${recordLine(t.wins, t.losses, t.ties||0)}</span></li>`;
       }).join("") + `</ol>`;
     }
     function divTables(conf){
       return (ls.divisions || divisionsForYear(season.year)).filter(d=>d.conf===conf).map(d=>{
         const rows = d.teams.map(id=>ls.results[id]).sort((a,b)=>b.winPct-a.winPct).map(r=>{
           const mine = r.id===career.teamId;
-          return `<tr class="${mine?"me":""} ${statusClass(r.id)}"><td class="team-cell">${teamNameLinkHtml(r.id, season.year)}${mine?" (you)":""}${flagsFor(r.id)} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td>${r.wins}-${r.losses}</td></tr>`;
+          return `<tr class="${mine?"me":""} ${statusClass(r.id)}"><td class="team-cell">${teamNameLinkHtml(r.id, season.year)}${mine?" (you)":""}${flagsFor(r.id)} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td>${recordLine(r.wins, r.losses, r.ties||0)}</td></tr>`;
         }).join("");
         return `<div class="standings-div"><div class="standings-div-name">${confLabel(conf, season.year)} ${d.name}</div><table class="standings-table"><tbody>${rows}</tbody></table></div>`;
       }).join("");
@@ -6904,7 +7047,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       return `<div class="bracket-qb-line">${qb ? `<button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button>` : "—"}${line ? ` — ${line.comp}/${line.att}, ${line.yards} yds, ${line.td} TD, ${line.int} INT, ${line.rating.toFixed(1)} rtg` : ""}</div>`;
     }
     const margin = Math.abs(match.aScore-match.bScore);
-    const recap = margin<=3 ? "A nail-biter decided in the final minutes." : margin>=21 ? "Never really in doubt after the first half." : "A hard-fought, back-and-forth game.";
+    const recap = match.winnerId==null ? "Nobody blinked — this one ended in a tie."
+      : margin<=3 ? "A nail-biter decided in the final minutes." : margin>=21 ? "Never really in doubt after the first half." : "A hard-fought, back-and-forth game.";
     return `<div class="modal-box">
         <div class="modal-head"><h3>${svgEscape(roundDisplayLabel(roundLabel, year))}</h3><button type="button" class="modal-close">Close</button></div>
         <div class="table-wrap"><table class="standings-table"><thead><tr><th></th><th class="tabular">Q1</th><th class="tabular">Q2</th><th class="tabular">Q3</th><th class="tabular">Q4</th><th class="tabular">F</th></tr></thead>
@@ -7268,7 +7412,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           <td class="tabular">${r.totals.td}</td>
           <td class="tabular">${r.totals.int}</td>
           <td class="tabular">${r.rating.toFixed(1)}</td>
-          <td class="tabular">${r.totals.wins}-${r.totals.losses}</td>
+          <td class="tabular">${recordLine(r.totals.wins, r.totals.losses, r.totals.ties||0)}</td>
           <td class="tabular">${r.totals.proBowls}</td>
           <td class="tabular">${r.totals.allPros}</td>
           <td class="tabular">${r.totals.mvps}</td>
@@ -7403,7 +7547,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const log = career.seasonLog;
     const rows = log.slice().reverse().map(s=>`
         <tr><td>${s.year}</td><td class="team-cell">${s.teamName}</td><td>${s.rating}</td><td>${s.yards.toLocaleString()}</td>
-        <td>${s.td}</td><td>${s.wins}-${s.losses}</td><td>${s.awards.join(", ")||"—"}</td></tr>`).join("");
+        <td>${s.td}</td><td>${recordLine(s.wins, s.losses, s.ties||0)}</td><td>${s.awards.join(", ")||"—"}</td></tr>`).join("");
     return `
       <div class="sparkline-wrap">
         <div id="trendsSparklineHolder"></div>
@@ -7460,23 +7604,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
      (QB1/2/3), reusing the same rivalEffTalent/contract fields the rival profile card already
      shows. */
   function buildTeamTabHTML(){
-    const grades = [
-      { label:"Offensive Line", value: career.oline,
-        impact:"Sack rate and injury risk — a shaky line means more hits taken; an elite one buys extra time in the pocket." },
-      { label:"Weapons", value: career.weapons,
-        impact:"Completion % and yards per attempt — better targets make every throw a little easier to complete, and a little more likely to go the distance." },
-      { label:"Defense", value: career.defense,
-        impact:"How many points opponents score, independent of your own offense — a great defense can carry the team to wins your own stat line alone wouldn't explain." },
-      { label:"Coaching", value: career.coaching,
-        impact:"Attribute development speed, every single season — a strong staff genuinely develops talent faster; a bad one is a permanent drag on growth." },
-      { label:"Front Office", value: career.gmGrade,
-        impact:"Contract offer size and how patient the organization is through a rough stretch — a sharp front office pays fair value and doesn't panic; an incompetent one is erratic either way." },
-    ];
-    const gradeCards = grades.map(g=>`<div class="team-grade-card">
-        <div class="tg-label">${g.label}</div>
-        <div class="tg-value tabular">${castLetterGrade(g.value)} <span class="tg-num">(${g.value})</span></div>
-        <div class="tg-impact">${g.impact}</div>
-      </div>`).join("");
+    const gradeCards = buildGradeCardsHtml({ oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade });
 
     const chart = (career.leagueDepthCharts||{})[career.teamId];
     const incumbent = career.isBackup ? rivalForTeam(career.teamId) : null;
@@ -7794,11 +7922,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
     const p = season.playoffs;
     const standingsLine = p.made
-      ? `<span class="badge good">Made the playoffs</span> — <b>#${p.seed} seed</b>, ${season.teamWins}-${season.teamLosses}, #${p.confRank} of ${p.confSize} in the conference.`
-      : `Missed the playoffs — ${season.teamWins}-${season.teamLosses}, #${p.confRank} of ${p.confSize} in the conference.`;
+      ? `<span class="badge good">Made the playoffs</span> — <b>#${p.seed} seed</b>, ${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}, #${p.confRank} of ${p.confSize} in the conference.`
+      : `Missed the playoffs — ${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}, #${p.confRank} of ${p.confSize} in the conference.`;
     const recordDiffers = (season.wins!==season.teamWins) || (season.losses!==season.teamLosses);
     const recordNote = recordDiffers
-      ? `<div class="record-note">As the starter you went <b>${season.wins}-${season.losses}</b>; the backup went ${season.teamWins-season.wins}-${season.teamLosses-season.losses} in relief.</div>`
+      ? `<div class="record-note">As the starter you went <b>${recordLine(season.wins, season.losses, season.ties||0)}</b>; the backup went ${recordLine(season.teamWins-season.wins, season.teamLosses-season.losses, (season.teamTies||0)-(season.ties||0))} in relief.</div>`
       : "";
 
     let playoffRoundsHtml = "";
@@ -7849,7 +7977,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
             </div>
           </div>
           <div class="sb-right">
-            <div class="sb-record"><span>Your Record</span>${season.wins}-${season.losses}</div>
+            <div class="sb-record"><span>Your Record</span>${recordLine(season.wins, season.losses, season.ties||0)}</div>
           </div>
         </div>
 
@@ -8716,7 +8844,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         : `A ${career.slot.label.toLowerCase()} selection in ${career.draftYear} out of ${career.college}, ${career.name} arrived in the league with modest expectations and a chip on his shoulder.`;
     paras.push(originLine);
 
-    const peakLine = `The tape people still cite is <b>${peak.year}</b>: ${peak.td} touchdowns, a ${peak.rating} passer rating, and a ${peak.wins}-${peak.losses} record with the ${peak.teamName}${peak.awards.length?` that earned him ${peak.awards.join(" and ")}`:""}. It's the year that told the league who he really was.`;
+    const peakLine = `The tape people still cite is <b>${peak.year}</b>: ${peak.td} touchdowns, a ${peak.rating} passer rating, and a ${recordLine(peak.wins, peak.losses, peak.ties||0)} record with the ${peak.teamName}${peak.awards.length?` that earned him ${peak.awards.join(" and ")}`:""}. It's the year that told the league who he really was.`;
     paras.push(peakLine);
 
     if(t.rings>0){
@@ -8892,7 +9020,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <td>${s.comp}/${s.att}</td><td>${(s.pct*100).toFixed(1)}%</td><td>${s.yards.toLocaleString()}</td>
         <td>${s.td}</td><td>${s.int}</td><td>${s.rating}</td>
         <td>${s.rushAtt>0 ? s.rushYards.toLocaleString()+" / "+s.rushTd+"TD" : "—"}</td>
-        <td>${s.wins}-${s.losses}</td><td>${s.teamWins}-${s.teamLosses}</td>
+        <td>${recordLine(s.wins, s.losses, s.ties||0)}</td><td>${recordLine(s.teamWins, s.teamLosses, s.teamTies||0)}</td>
         <td>${s.playoffs.made ? "Seed #"+s.playoffs.seed+(s.playoffs.wonRing?" — Champs":"") : "Missed"}</td>
         <td>${fmtMoney(s.contractApy)}</td><td>${s.awards.join(", ")||"—"}</td>
       </tr>`).join("")}</tbody>`;
