@@ -1823,6 +1823,89 @@ confirmed defect in Section 4's list. (3) `simulateGameScore`'s literal signatur
 the spec's example `simulateGame({home,away})` object shape (see the scope note above) — every real
 call site was still updated to supply the new, correctly-sourced defense value.
 
+### Wave 8 — UI accessibility and runtime performance
+
+**New shared module, `src/ui/dialog.js`**: `openDialog(overlayEl, opts)`/`closeDialog(overlayEl)`,
+exported so both `src/main.js` (six overlays: rival profile, team profile, baseball card, bracket
+box score, Key Moment, admin panel) and `src/ads/rewardedAd.js` (a separate module by its own
+existing design, not folded into main.js) share one real implementation instead of each hand-rolling
+its own inconsistent version — a genuinely small, additive utility extraction, not the kind of
+`generateSeason()`-scale modularization risk Wave 7 deferred to Wave 9. Gives every overlay, in one
+place: `role="dialog"`/`aria-modal="true"`/an accessible name (`aria-labelledby` pointing at each
+overlay's own existing heading, given a real `id` for the first time, or `aria-label` where no
+heading exists), initial focus landing inside the dialog, Tab/Shift+Tab trapping that recomputes
+focusable elements live (safe across an in-place re-render, e.g. the admin panel's own tab
+switching), Escape-to-close (or a caller-supplied `onEscape`, e.g. the ad's Escape = Skip, never a
+silent dismiss that skips resolving its promise), and focus restoration to whatever had focus before
+the dialog opened. `inert` (feature-detected, `aria-hidden` fallback) is applied to `#mainEl` + the
+header while ANY dialog is open, tracked via a stack (not a flag) so an admin-panel-style repeated
+`openDialog` call on an ALREADY-open overlay never pushes a duplicate stack entry — a real bug
+caught wiring this up: without the idempotency check, switching admin tabs (which re-calls
+`openAdminOverlay()` on every click) would wedge the stack permanently above 0, leaving the
+background inert forever after the very first close. Fixes the confirmed "overlays lack complete
+dialog semantics, focus trapping, focus restoration, and Escape handling" defect (task #1) for every
+overlay in the app, and "prevent background interaction while a modal is active" (task #2).
+
+**Task #3, the confirmed ad-focus defect.** `showRewardedAd`'s countdown timer called
+`overlay.innerHTML = ...` on every 200ms tick — up to ~150 times over one 30-second ad — destroying
+and recreating the Skip/Claim buttons (and whatever had keyboard focus on either) from scratch every
+tick. The markup is now built once; each tick only updates the progress bar's width, the countdown
+text, and the claim button's `disabled` state. Verified against a temporarily-restored copy of the
+old code to confirm the new test actually catches it (focus dropped on tick 1 under the old version).
+
+**Tasks #4-#6, audited and confirmed already satisfied — no code changes needed, each verified by a
+new test rather than left as an unverified assumption:**
+- **Reduced motion** (task #4): a blanket, pre-existing global rule (`*,*::before,*::after{
+  animation-duration:0.001ms!important; transition-duration:0.001ms!important; }` under
+  `prefers-reduced-motion:reduce`) already covers every CSS-driven animation app-wide, including the
+  bracket reveal and every modal's open/close transition (both are CSS-only, no JS-timed sequencing).
+  The one JS-timed sequence in the 4 named surfaces — draft night's decoy-team cycling animation —
+  was already independently gated on `matchMedia("(prefers-reduced-motion: reduce)")` before this
+  wave (checked and short-circuited to the final result immediately, before the `setTimeout` chain
+  even starts). Audited every `setTimeout`/`setInterval` call in the file for any other un-gated
+  JS-driven animation sequence; found none outside already-covered cases (a "Copied!" button-label
+  reset and the fast-forward stepper's own internal pacing are not visual animations in the
+  accessibility sense).
+- **Offline fonts** (task #5): every CSS custom property that names a font already declares a real,
+  legible fallback stack (`--display: "Oswald", "Arial Narrow", "Impact", sans-serif`; `--body:
+  "Libre Franklin", -apple-system, "Segoe UI", sans-serif`; `--mono: "IBM Plex Mono", ui-monospace,
+  "SFMono-Regular", monospace`) — a failed/blocked Google Fonts request is a normal, silent browser
+  fallback to the next font in the stack, never a JS error or broken render. No self-hosting was
+  added; the "deliberately tested offline system-font stack" alternative the task itself offers was
+  already in place, now actually verified rather than assumed.
+- **Mobile layout** (task #6): swept the menu, combine, and every career dashboard tab (Season,
+  Schedule, Standings, League, Team, Scheme) at all four required widths (320/360/390/768px);
+  `document.documentElement.scrollWidth` never exceeded the viewport at any of them on the first
+  attempt — the existing `.table-wrap{ overflow-x:auto }` convention (already used everywhere a wide
+  table appears) was already sufficient.
+
+**Verification.** 4 new regression tests: `dialog-traps-and-restores-focus` (scenario #26 — a real
+keyboard-only open of the rival profile overlay: dialog semantics, initial focus inside, Tab never
+escapes after 15 presses, Escape closes and restores focus to the exact opener, background
+inert/aria-hidden toggles correctly), `ad-countdown-does-not-drop-button-focus` (scenario #27 —
+focuses Skip, survives 6 real 200ms ticks, confirms the countdown text is actually live; verified
+against a temporarily-restored copy of the old renderer to confirm it fails on tick 1 there),
+`mobile-layout-no-horizontal-overflow` (2 tests: menu/combine, and all 6 dashboard tabs, at all 4
+widths), `legible-without-external-fonts` (blocks every request to the Google Fonts domains,
+confirms the menu and combine screens still render real, visible, non-empty, correctly-sized text
+using the declared fallback font stack, not just "didn't crash"). Full suite (35 files/tests) run 3
+consecutive times: identical **35 pass / 0 fail** every time. `npm run build` clean, `git diff
+--check` clean. Committed locally, **not pushed** — push requires separate explicit authorization,
+which "Wave 8" was not.
+
+**Known limitations, stated plainly**: (1) No automated axe-core/Lighthouse-style accessibility
+scanner was wired in — "automated accessibility smoke tests find no missing dialog name or focus
+escape" (the exit criterion) is satisfied by the purpose-built Playwright test above (which checks
+the exact same things a scanner would flag: role/aria-modal/accessible-name presence, focus escape),
+not a general-purpose third-party scanner; adding one is a reasonable follow-up but wasn't required
+to close this wave's literal exit criteria. (2) The admin panel's dialog wiring was completed for
+consistency (a developer using it deserves the same accessible UI), even though Wave 7 already
+removed it from production navigation — it's dev-only, but still real, tested code, not left
+half-done. (3) `inert`'s browser-fallback path (`aria-hidden` on the background, for a browser
+without native `inert` support) was written and is exercised in the shared test whenever `!inert`,
+but every browser this project actually tests against (recent Chromium via Playwright) already
+supports `inert` natively, so the fallback branch itself has not been separately exercised.
+
 ### Round 33 — Playoff Tree follow-up fixes: Continue-button gating, full-tree preview, QB-link bug, Standings tab redesign
 
 User feedback (with screenshots) on Round 32's shipped work, four items:

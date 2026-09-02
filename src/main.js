@@ -1,4 +1,5 @@
 import { showRewardedAd } from "./ads/rewardedAd.js";
+import { openDialog, closeDialog } from "./ui/dialog.js";
 
 (function(){
   "use strict";
@@ -1419,19 +1420,17 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         </div>
         <div class="card-export-status" id="cardExportStatus"></div>
       </div>`;
-    overlay.classList.add("open");
-    overlay.setAttribute("aria-hidden","false");
     const flipEl = overlay.querySelector("#cardFlip");
     overlay.querySelector("#cardCloseBtn").addEventListener("click", closeBaseballCard);
     overlay.querySelector("#cardFlipBtn").addEventListener("click", ()=> flipEl.classList.toggle("flipped"));
     flipEl.addEventListener("click", ()=> flipEl.classList.toggle("flipped"));
     overlay.querySelector("#cardExportBtn").addEventListener("click", (e)=>{ e.stopPropagation(); exportBaseballCard(entry); });
+    openDialog(overlay, { label: `${entry.name} baseball card`, initialFocus: overlay.querySelector("#cardCloseBtn") });
   }
   function closeBaseballCard(){
     const overlay = document.getElementById("baseballCardOverlay");
     if(!overlay) return;
-    overlay.classList.remove("open");
-    overlay.setAttribute("aria-hidden","true");
+    closeDialog(overlay);
     overlay.innerHTML = "";
   }
   function exportBaseballCard(entry){
@@ -3905,7 +3904,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return `
       <div class="rival-card">
         <div class="rival-eyebrow"><button type="button" class="rival-link" data-team-id="${rival.teamId}">${svgEscape(teamNameAt(rival.teamId, career.year))}</button>${rival.retired?" · Retired":""}</div>
-        <h3>${svgEscape(rival.name)}</h3>
+        <h3 id="rivalProfileHeading">${svgEscape(rival.name)}</h3>
         <div class="rival-meta">Age ${rival.age} · Drafted ${rival.draftYear} · Overall <b>${overall}</b> (${svgEscape(g.flavor)})</div>
         ${contractLine}
         ${availabilityLine}
@@ -3936,8 +3935,6 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const overlay = document.getElementById("rivalProfileOverlay");
     if(!rival || !overlay) return;
     overlay.innerHTML = buildRivalProfileHTML(rival);
-    overlay.classList.add("open");
-    overlay.setAttribute("aria-hidden", "false");
     const closeBtn = overlay.querySelector(".rival-close");
     if(closeBtn) closeBtn.addEventListener("click", closeRivalProfile);
     // The team-name eyebrow link lives inside THIS overlay, which is a sibling of #careerContent
@@ -3945,6 +3942,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // click here, so it needs its own explicit wiring, same as the close button above.
     const teamLink = overlay.querySelector("[data-team-id]");
     if(teamLink) teamLink.addEventListener("click", ()=>{ closeRivalProfile(); openTeamProfile(teamLink.dataset.teamId); });
+    openDialog(overlay, { labelledBy: "rivalProfileHeading" });
   }
   // Round 32 item 4: a generic page for ANY team in the league (not just the player's own, which
   // keeps its own richer, dedicated Team tab -- buildTeamTabHTML, unchanged -- since career.defense/
@@ -4026,7 +4024,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return `
       <div class="rival-card">
         <div class="rival-eyebrow">${confLabel(div.conf, year)} ${svgEscape(div.name)}</div>
-        <h3>${svgEscape(name)}${isMine?" (your team)":""}</h3>
+        <h3 id="teamProfileHeading">${svgEscape(name)}${isMine?" (your team)":""}</h3>
         <div class="rival-meta">Team Grade <b>${overall}</b> (${svgEscape(g.flavor)})${overallRankHtml}</div>
         ${schemeHtml}
         <div class="rival-stats-grid">
@@ -4045,8 +4043,6 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const overlay = document.getElementById("teamProfileOverlay");
     if(!teamId || !overlay) return;
     overlay.innerHTML = buildTeamPageHTML(teamId, faRoleLabel);
-    overlay.classList.add("open");
-    overlay.setAttribute("aria-hidden", "false");
     const closeBtn = overlay.querySelector(".rival-close");
     if(closeBtn) closeBtn.addEventListener("click", closeTeamProfile);
     const gotoBtn = overlay.querySelector("#teamProfileGotoTab");
@@ -4058,19 +4054,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     overlay.querySelectorAll("[data-rival-id]").forEach(qbLink=>{
       qbLink.addEventListener("click", ()=>{ closeTeamProfile(); openRivalProfile(qbLink.dataset.rivalId); });
     });
+    openDialog(overlay, { labelledBy: "teamProfileHeading" });
   }
   function closeTeamProfile(){
     const overlay = document.getElementById("teamProfileOverlay");
     if(!overlay) return;
-    overlay.classList.remove("open");
-    overlay.setAttribute("aria-hidden", "true");
+    closeDialog(overlay);
     overlay.innerHTML = "";
   }
   function closeRivalProfile(){
     const overlay = document.getElementById("rivalProfileOverlay");
     if(!overlay) return;
-    overlay.classList.remove("open");
-    overlay.setAttribute("aria-hidden", "true");
+    closeDialog(overlay);
     overlay.innerHTML = "";
   }
 
@@ -8444,7 +8439,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const recap = match.winnerId==null ? "Nobody blinked — this one ended in a tie."
       : margin<=3 ? "A nail-biter decided in the final minutes." : margin>=21 ? "Never really in doubt after the first half." : "A hard-fought, back-and-forth game.";
     return `<div class="modal-box">
-        <div class="modal-head"><h3>${svgEscape(roundDisplayLabel(roundLabel, year))}</h3><button type="button" class="modal-close">Close</button></div>
+        <div class="modal-head"><h3 id="bracketBoxScoreHeading">${svgEscape(roundDisplayLabel(roundLabel, year))}</h3><button type="button" class="modal-close">Close</button></div>
         <div class="table-wrap"><table class="standings-table"><thead><tr><th></th><th class="tabular">Q1</th><th class="tabular">Q2</th><th class="tabular">Q3</th><th class="tabular">Q4</th><th class="tabular">F</th></tr></thead>
           <tbody>
             <tr class="${match.winnerId===match.aId?"me":""}"><td>${aName}</td><td class="tabular">${q1a}</td><td class="tabular">${q2a}</td><td class="tabular">${q3a}</td><td class="tabular">${q4a}</td><td class="tabular"><b>${match.aScore}</b></td></tr>
@@ -8459,8 +8454,6 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const overlay = document.getElementById("bracketBoxScoreOverlay");
     if(!overlay || !match.bId) return;
     overlay.innerHTML = buildBracketBoxScoreModalHTML(match, year, roundLabel);
-    overlay.classList.add("open");
-    overlay.setAttribute("aria-hidden", "false");
     const closeBtn = overlay.querySelector(".modal-close");
     if(closeBtn) closeBtn.addEventListener("click", closeBracketBoxScore);
     // This overlay is a DOM SIBLING of #careerContent, not a descendant of it -- the shared
@@ -8475,12 +8468,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       overlay._backdropWired = true;
       overlay.addEventListener("click", (e)=>{ if(e.target===overlay) closeBracketBoxScore(); });
     }
+    openDialog(overlay, { labelledBy: "bracketBoxScoreHeading", initialFocus: closeBtn });
   }
   function closeBracketBoxScore(){
     const overlay = document.getElementById("bracketBoxScoreOverlay");
     if(!overlay) return;
-    overlay.classList.remove("open");
-    overlay.setAttribute("aria-hidden", "true");
+    closeDialog(overlay);
     overlay.innerHTML = "";
   }
   // Playoff Tree, Round 32: lives inside the Season tab now (not its own dash-tab -- see the
@@ -9744,7 +9737,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       overlay.innerHTML = `
         <div class="km-card">
           <div class="km-eyebrow">${roundDisplayLabel(round.round, season.year)} · Key Moment <span class="km-difficulty">${situation.difficulty}</span></div>
-          <h3>Fourth quarter. This possession decides it.</h3>
+          <h3 id="keyMomentHeading">Fourth quarter. This possession decides it.</h3>
           <div class="km-situation">${svgEscape(situation.text)}</div>
           <div class="km-clue">${keyMomentClue(tendency, situation.difficulty)}</div>
           <div class="km-options">${options.map(o=>`<button type="button" class="km-option" data-call="${o.id}">${svgEscape(o.label)}</button>`).join("")}</div>
@@ -9796,8 +9789,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       continueBtn.className = "btn btn-primary km-continue";
       continueBtn.textContent = "Continue";
       continueBtn.addEventListener("click", ()=>{
-        overlay.classList.remove("open");
-        overlay.setAttribute("aria-hidden","true");
+        closeDialog(overlay);
         overlay.innerHTML = "";
         // refresh the final-score line and the just-revealed quarter cards so the swing is
         // visible immediately, not just once the round finishes revealing.
@@ -9811,8 +9803,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       card.appendChild(continueBtn);
     }
     renderCard();
-    overlay.classList.add("open");
-    overlay.setAttribute("aria-hidden","false");
+    openDialog(overlay, { labelledBy: "keyMomentHeading" });
   }
 
   // Player-paced quarter-by-quarter reveal for EVERY playoff round the player took part in, not
@@ -9851,8 +9842,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // defensively close any Key Moment overlay left open by a now-superseded reveal
     const staleOverlay = document.getElementById("keyMomentOverlay");
     if(staleOverlay && staleOverlay.classList.contains("open")){
-      staleOverlay.classList.remove("open");
-      staleOverlay.setAttribute("aria-hidden","true");
+      closeDialog(staleOverlay);
       staleOverlay.innerHTML = "";
     }
     if(!season.playoffs.made || !season.playoffs.rounds.length) return;
@@ -11073,7 +11063,7 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
       <div class="admin-panel">
         <div class="admin-head">
           <div>
-            <h2>Admin &amp; Testing Tools</h2>
+            <h2 id="adminOverlayHeading">Admin &amp; Testing Tools</h2>
             <div class="admin-sub">v10.1 · browse data, force-fire events, inspect live state</div>
           </div>
           <button type="button" class="admin-close" id="adminCloseBtn" aria-label="Close admin panel">✕</button>
@@ -11096,14 +11086,12 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
       overlay.addEventListener("click", (e)=>{ if(e.target===overlay) closeAdminOverlay(); });
     }
     renderAdminTabContent();
-    overlay.classList.add("open");
-    overlay.setAttribute("aria-hidden","false");
+    openDialog(overlay, { labelledBy: "adminOverlayHeading" });
   }
   function closeAdminOverlay(){
     const overlay = document.getElementById("adminOverlay");
     if(!overlay) return;
-    overlay.classList.remove("open");
-    overlay.setAttribute("aria-hidden","true");
+    closeDialog(overlay);
     overlay.innerHTML = "";
   }
   function initAdminPanel(){
