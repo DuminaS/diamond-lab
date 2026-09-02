@@ -1456,29 +1456,42 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // build}. `checkpoint` records WHERE in the career-advance flow the save happened (phase/year/
   // playoffRoundIndex), for diagnostics and for future waves that need to resume more precisely
   // than "re-render the last logged season's card" -- that resume behavior itself is unchanged
-  // this wave. SAVE_SCHEMA_VERSION is 1 -- schemaVersion 2 (the qbsById canonical QB registry) is
-  // Wave 2A's job, not this one; nothing here restructures career's own internals.
-  const SAVE_SCHEMA_VERSION = 1;
+  // this wave.
+  // Wave 2A: bumped to schemaVersion 2 -- the canonical qbsById/teamQbDepth/freeAgentQbIds/
+  // retiredQbIds registry (Section 5's target schema). See syncQbRegistryFromLegacy for what
+  // building it actually involves.
+  const SAVE_SCHEMA_VERSION = 2;
   const ACTIVE_CAREER_KEY = "gridironlab.activeCareer";
   let _lastCheckpoint = null;
-  // Pure -- never mutates `raw`. A pre-Wave-1 save has no schemaVersion at all (just
-  // {career,build,savedAt}); wrap it into the v1 envelope with a safe, generic checkpoint rather
-  // than guessing which exact phase it was mid-flow (resume's own logic -- re-rendering the last
-  // logged season's card -- already handles any of those cases identically today, so nothing here
-  // needs to be precise, only present). An already-enveloped save passes through unchanged --
-  // there is no v2 to migrate to yet.
+  // Pure -- never mutates `raw` in place (spreads into new objects instead), and never rolls fresh
+  // Math.random() (migration requirement #9: the same save must migrate identically every time).
+  // A pre-Wave-1 save has no schemaVersion at all (just {career,build,savedAt}); wrap it into the
+  // v1 envelope with a safe, generic checkpoint rather than guessing which exact phase it was
+  // mid-flow (resume's own logic -- re-rendering the last logged season's card -- already handles
+  // any of those cases identically today, so nothing here needs to be precise, only present).
+  // Wave 2A: every load -- pre-Wave-1, v1, or already-v2 -- then runs syncQbRegistryFromLegacy on
+  // whatever `career` it has, unconditionally. This is what actually builds qbsById/teamQbDepth/
+  // freeAgentQbIds/retiredQbIds for a save that never had them (the real v1->v2 migration), AND
+  // re-derives them fresh for an already-v2 save loaded in a NEW session -- a save/reload round trip
+  // deserializes every object reference independently, so without an unconditional rebuild here,
+  // a previously-serialized qbsById's copies and the legacy leagueRivals/leagueDepthCharts/
+  // freeAgentPool arrays' copies would silently diverge into different object instances sharing the
+  // same id the moment either was mutated post-reload.
   function migrateSaveEnvelope(raw){
     if(!raw) return null;
-    if(raw.schemaVersion==null){
-      return {
+    let envelope = raw;
+    if(envelope.schemaVersion==null){
+      envelope = {
         schemaVersion: 1,
-        savedAt: raw.savedAt || Date.now(),
-        checkpoint: { phase:"decision", year: raw.career ? raw.career.year : null, eventId:null, playoffRoundIndex:null },
-        career: raw.career,
-        build: raw.build,
+        savedAt: envelope.savedAt || Date.now(),
+        checkpoint: { phase:"decision", year: envelope.career ? envelope.career.year : null, eventId:null, playoffRoundIndex:null },
+        career: envelope.career,
+        build: envelope.build,
       };
     }
-    return raw;
+    if(envelope.career) syncQbRegistryFromLegacy(envelope.career);
+    if(envelope.schemaVersion < SAVE_SCHEMA_VERSION) envelope = { ...envelope, schemaVersion: SAVE_SCHEMA_VERSION };
+    return envelope;
   }
   // `checkpointPatch` merges onto whatever checkpoint fields the last save already had (tracked in
   // _lastCheckpoint for this session; a cold load falls back to a generic "decision" phase) -- so
@@ -1494,9 +1507,32 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       store.setItem(ACTIVE_CAREER_KEY, JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(), checkpoint, career, build }));
     }catch(e){}
   }
+  // Migration requirement #12: persist the migrated/repaired envelope immediately once it's built,
+  // rather than waiting for gameplay's own next natural checkpoint (playing a season, a trade, a
+  // signing...) -- otherwise a corrupted or pre-Wave-2A save's fix (a new schemaVersion, a rebuilt
+  // qbsById registry, a repaired duplicate starter) only ever lives in the in-memory `career` object
+  // returned here, and closing the app before the next checkpoint would mean the very same repair
+  // has to run again next time (harmless, since migration is pure/idempotent, but never actually
+  // converges in storage). The untouched original is kept once under a one-time backup key so a
+  // migration bug discovered later still has the pre-migration data to recover from; it's
+  // overwritten (never accumulated) on each subsequent real migration, so this never grows
+  // unbounded.
   function loadActiveCareer(){
     if(!store) return null;
-    try{ const raw = store.getItem(ACTIVE_CAREER_KEY); return raw ? migrateSaveEnvelope(JSON.parse(raw)) : null; }catch(e){ return null; }
+    try{
+      const raw = store.getItem(ACTIVE_CAREER_KEY);
+      if(!raw) return null;
+      const parsed = JSON.parse(raw);
+      const wasCurrent = parsed.schemaVersion===SAVE_SCHEMA_VERSION && parsed.career && parsed.career.qbsById;
+      const migrated = migrateSaveEnvelope(parsed);
+      if(migrated && !wasCurrent){
+        try{ store.setItem(ACTIVE_CAREER_KEY+".backup", raw); }catch(e){}
+      }
+      if(migrated){
+        try{ store.setItem(ACTIVE_CAREER_KEY, JSON.stringify(migrated)); }catch(e){}
+      }
+      return migrated;
+    }catch(e){ return null; }
   }
   function clearActiveCareer(){
     if(!store) return;
@@ -2295,11 +2331,20 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       devSpeed: rollDevSpeed(),
       devCarry: {},
       originalBuild: {...build},
+      // Wave 2A (MASTER_REMEDIATION_SPEC.md): the canonical, ID-based QB registry -- see the
+      // "Canonical QB registry" block above rivalForTeam for what owns these and how they stay in
+      // sync with the legacy leagueRivals/leagueDepthCharts/freeAgentPool arrays above.
+      qbsById: {},
+      teamQbDepth: {},
+      freeAgentQbIds: [],
+      retiredQbIds: [],
     };
     career.leagueRivals = generateLeagueRivals();
+    career.leagueRivals.forEach(r=> assignQuarterbackToRoster(r.id, r.teamId, "QB1"));
     // Player's own team gets a depth chart too (QB2/QB3 behind whoever's QB1) -- purely
     // informational/flavor, never a mechanism that can autonomously bench the player (that's what
     // the incumbent check right below is for; see PROGRESS.md Round 7 for the scope boundary).
+    // generateDepthChart itself registers + assigns both slots into the canonical registry.
     career.leagueDepthCharts[team.id] = generateDepthChart(team.id, decade, draftYear, leagueStrength[team.id]);
     // Is there already an established, entrenched starter blocking this rookie? A true 1st-round
     // pick only sits behind a truly elite incumbent; anyone else needs a merely-good one. If so,
@@ -2308,7 +2353,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const incumbent = rollDraftIncumbent(team.id, decade, draftYear, leagueStrength[team.id]);
     const entrenchThreshold = slot.round===1 ? 80 : 72;
     if(incumbent.talent>=entrenchThreshold && incumbent.age<=32){
-      career.leagueRivals.push(incumbent);
+      assignQuarterbackToRoster(incumbent.id, team.id, "QB1");
       career.isBackup = true;
       career.transactions.push(`${draftYear}: Enters camp behind ${incumbent.name}, QB1.`);
     }
@@ -3086,16 +3131,279 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // term. This is the direct fix for both "no grind even at 95 overall" (a genuinely elite rival
   // starter can now swing a game on his own, the same way the player's own QB does) and "let me
   // see the opposing QB's overall" (rivalEffTalent IS that displayed number).
-  function rivalForTeam(teamId){
-    if(!career.leagueRivals) return null;
-    return career.leagueRivals.find(r=>r.teamId===teamId && !r.retired) || null;
+  /* ================= Wave 2A (MASTER_REMEDIATION_SPEC.md): canonical QB registry =================
+     career.qbsById / career.teamQbDepth / career.freeAgentQbIds / career.retiredQbIds are the
+     spec's ID-based ownership model. The pre-existing career.leagueRivals / career.leagueDepthCharts
+     / career.freeAgentPool arrays remain the actual backing store the rest of this file's deeply
+     calibrated simulation math (simulateRivalSeasons, simulateDepthChartSeasons, standings,
+     schedule building, succession, trade/waiver/FA UI, etc.) reads and mutates directly --
+     rewriting those call sites' own math is Wave 2B's job, not this one. Every OWNERSHIP change (a
+     QB joining a roster, entering free agency, retiring, or swapping depth-chart roles) instead
+     goes through one of the 7 helpers below, which mutate the legacy structures in EXACTLY the
+     shape they always held (zero behavior change for every pure-read call site elsewhere in this
+     file) while keeping qbsById/teamQbDepth/freeAgentQbIds/retiredQbIds in sync as a same-reference
+     index over those same objects -- never a second, independently-mutable copy (Section 3
+     invariant #15). syncQbRegistryFromLegacy(careerObj) rebuilds that index from whatever the
+     legacy structures currently hold; it is pure (no Math.random()) and safe to call on ANY shape
+     (a pristine save, one a test mutated directly, or one with duplicate/orphaned entries left over
+     from a pre-Wave-2A save) since it always derives the index fresh rather than trusting whatever
+     was previously persisted. Called once by migrateSaveEnvelope on every load -- a save/reload
+     round-trip deserializes every reference independently, so without an unconditional rebuild on
+     load, qbsById's copies and the legacy arrays' copies would silently diverge into two different
+     object instances sharing the same id the moment either was mutated post-reload. */
+  const USER_QB_ID = "user";
+  function _ensureQbRegistryFields(target){
+    const c = target || career;
+    if(!c.qbsById) c.qbsById = {};
+    if(!c.teamQbDepth) c.teamQbDepth = {};
+    if(!c.freeAgentQbIds) c.freeAgentQbIds = [];
+    if(!c.retiredQbIds) c.retiredQbIds = [];
+    return c;
   }
-  // Unlike rivalForTeam, this also finds RETIRED rivals -- a profile card opened from an old
-  // season's schedule/playoff log should still resolve to that season's actual starter, not
-  // whoever currently holds the job (or nothing at all, if he's since retired).
+  // Pure, deterministic, no Math.random() -- migration requirement #9. Rebuilds qbsById/
+  // teamQbDepth/freeAgentQbIds/retiredQbIds from whatever careerObj.leagueRivals/leagueDepthCharts/
+  // freeAgentPool currently hold. Where an id was left dual-tracked by the pre-Wave-2A pattern
+  // (enterFreeAgentPool used to set retired=true AND push into freeAgentPool at once, conflating
+  // "free agent" with "retired" -- Section 4's named defect), free-agent status wins: a QB still
+  // sitting in the free-agent pool is, by definition, not actually retired.
+  function syncQbRegistryFromLegacy(careerObj){
+    const c = _ensureQbRegistryFields(careerObj);
+    c.qbsById = {}; c.teamQbDepth = {}; c.freeAgentQbIds = []; c.retiredQbIds = [];
+    const _reservedQb1Teams = new Set();
+    (c.leagueRivals||[]).forEach(r=>{
+      if(!r || !r.id) return;
+      c.qbsById[r.id] = r;
+      if(r.retired){
+        if(!c.retiredQbIds.includes(r.id)) c.retiredQbIds.push(r.id);
+        return;
+      }
+      // Migration requirement #6: report and repair a duplicate active starter deterministically --
+      // a corrupted/pre-Wave-2A save could have two rivals both claiming the same team's QB1 the
+      // moment it's loaded. Whoever comes first in leagueRivals array order keeps the job; anyone
+      // else claiming an already-reserved team is demoted to free agency instead (never left
+      // dangling as "active" while owning no actual roster slot, which would itself violate
+      // invariant #2 -- a QB occupies at most one of a roster slot, the free-agent pool, or
+      // retired).
+      if(_reservedQb1Teams.has(r.teamId)){
+        r.retired = false; r.status = "free_agent"; r.rosterRole = null;
+        r.exitReason = r.exitReason || "duplicate-starter-migration-repair";
+        r.joblessSeasons = r.joblessSeasons || 0;
+        if(!c.freeAgentQbIds.includes(r.id)) c.freeAgentQbIds.push(r.id);
+        if(!c.freeAgentPool) c.freeAgentPool = [];
+        if(!c.freeAgentPool.includes(r)) c.freeAgentPool.push(r);
+        return;
+      }
+      _reservedQb1Teams.add(r.teamId);
+      if(!c.teamQbDepth[r.teamId]) c.teamQbDepth[r.teamId] = { QB1:null, QB2:null, QB3:null };
+      c.teamQbDepth[r.teamId].QB1 = r.id;
+      r.rosterRole = "QB1"; r.status = "active"; r.currentTeamId = r.teamId;
+    });
+    Object.keys(c.leagueDepthCharts||{}).forEach(teamId=>{
+      const chart = c.leagueDepthCharts[teamId];
+      if(!chart) return;
+      if(!c.teamQbDepth[teamId]) c.teamQbDepth[teamId] = { QB1:null, QB2:null, QB3:null };
+      [["qb2","QB2"],["qb3","QB3"]].forEach(([slot,role])=>{
+        const p = chart[slot];
+        if(!p || !p.id) return;
+        c.qbsById[p.id] = p;
+        if(!p.retired){
+          c.teamQbDepth[teamId][role] = p.id;
+          p.rosterRole = role; p.status = "active"; p.currentTeamId = teamId; p.teamId = teamId;
+        }
+      });
+    });
+    (c.freeAgentPool||[]).forEach(p=>{
+      if(!p || !p.id) return;
+      c.qbsById[p.id] = p;
+      // Free-agent-pool membership wins over a stale/corrupted roster slot too -- a save produced
+      // before this wave (or hand-corrupted by a test) could have the same id sitting in BOTH a
+      // team's depth chart AND the pool at once; clearing every roster slot he's found in here is
+      // the "duplicate reference resolved deterministically" migration requirement (Section 6 #3).
+      Object.keys(c.teamQbDepth).forEach(teamId=>{
+        const slots = c.teamQbDepth[teamId];
+        ["QB1","QB2","QB3"].forEach(role=>{ if(slots[role]===p.id) slots[role] = null; });
+      });
+      p.retired = false; p.status = "free_agent"; p.rosterRole = null;
+      if(!c.freeAgentQbIds.includes(p.id)) c.freeAgentQbIds.push(p.id);
+    });
+    // Free-agent status (just set above, if applicable) always wins over a stale retired=true from
+    // the old conflated flag -- see the function comment.
+    c.retiredQbIds = c.retiredQbIds.filter(id=>!c.freeAgentQbIds.includes(id));
+    return c;
+  }
+  // A live, computed-on-demand view of the user's own QB -- deliberately never a stored qbsById
+  // entry with its own copy of name/age/totals, which would be exactly the "same entity duplicated
+  // across multiple mutable collections" Section 3 invariant #15 warns against (career/build are
+  // already the one real, mutable source for the user's own identity and stats). Lets
+  // getTeamQuarterbacks()/getQuarterbackById() answer "who is this team's QB1" / "who is this id"
+  // uniformly for the user's own team without a second, driftable copy of the user's data.
+  function userQuarterbackView(){
+    if(!career) return null;
+    return {
+      id: USER_QB_ID, isUser: true, name: career.name, teamId: career.teamId, currentTeamId: career.teamId,
+      rosterRole: career.isBackup ? "QB2" : "QB1", age: career.age, retireAge: null, retired: false,
+      status: "active", talent: null, seasons: career.seasonLog, totals: career.totals,
+      contract: career.contract, exitReason: null,
+    };
+  }
+  // Registers (or re-registers) a QB in the canonical index. Does not assign a roster role --
+  // callers that already know where the QB belongs call assignQuarterbackToRoster right after.
+  function registerQuarterback(qb){
+    if(!qb || !qb.id) return qb;
+    _ensureQbRegistryFields();
+    career.qbsById[qb.id] = qb;
+    if(qb.status==null) qb.status = qb.retired ? "retired" : "active";
+    if(qb.currentTeamId===undefined) qb.currentTeamId = qb.teamId ?? null;
+    if(qb.rosterRole===undefined) qb.rosterRole = null;
+    return qb;
+  }
+  function _clearQbFromAllRosterSlots(qbId){
+    _ensureQbRegistryFields();
+    Object.keys(career.teamQbDepth).forEach(teamId=>{
+      const slots = career.teamQbDepth[teamId];
+      ["QB1","QB2","QB3"].forEach(role=>{ if(slots[role]===qbId) slots[role] = null; });
+    });
+    career.freeAgentQbIds = career.freeAgentQbIds.filter(id=>id!==qbId);
+    career.freeAgentPool = (career.freeAgentPool||[]).filter(p=>p.id!==qbId);
+    career.retiredQbIds = career.retiredQbIds.filter(id=>id!==qbId);
+  }
+  // The ONE place a QB ever occupies a roster slot -- removes them from wherever they were first
+  // (any team's QB1/QB2/QB3, the free-agent pool, or retired status), then assigns the new slot,
+  // mirroring the assignment into the legacy leagueRivals/leagueDepthCharts arrays in the exact
+  // shape every existing read call site already expects.
+  function assignQuarterbackToRoster(qbId, teamId, role){
+    _ensureQbRegistryFields();
+    const qb = career.qbsById[qbId];
+    if(!qb || !teamId || !role) return null;
+    _clearQbFromAllRosterSlots(qbId);
+    if(!career.teamQbDepth[teamId]) career.teamQbDepth[teamId] = { QB1:null, QB2:null, QB3:null };
+    career.teamQbDepth[teamId][role] = qbId;
+    qb.teamId = teamId; qb.currentTeamId = teamId; qb.rosterRole = role;
+    qb.retired = false; qb.status = "active"; qb.exitReason = null;
+    if(role==="QB1"){
+      if(!career.leagueRivals) career.leagueRivals = [];
+      if(!career.leagueRivals.includes(qb)) career.leagueRivals.push(qb);
+    } else {
+      if(!career.leagueDepthCharts) career.leagueDepthCharts = {};
+      if(!career.leagueDepthCharts[teamId]) career.leagueDepthCharts[teamId] = { qb2:null, qb3:null };
+      career.leagueDepthCharts[teamId][role==="QB2"?"qb2":"qb3"] = qb;
+    }
+    return qb;
+  }
+  // Free agency is NOT retirement (Section 4's named defect: the pre-Wave-2A enterFreeAgentPool set
+  // retired=true for a free agent too) -- a free-agent QB keeps retired=false and gets a distinct
+  // status instead, so any future "is this QB currently retired" check can't be fooled by someone
+  // who's merely between jobs.
+  function moveQuarterbackToFreeAgency(qbId, reason){
+    _ensureQbRegistryFields();
+    const qb = career.qbsById[qbId];
+    if(!qb) return null;
+    _clearQbFromAllRosterSlots(qbId);
+    qb.rosterRole = null; qb.retired = false; qb.status = "free_agent";
+    qb.exitReason = reason || qb.exitReason || "free_agent";
+    qb.joblessSeasons = qb.joblessSeasons || 0;
+    if(!career.freeAgentQbIds.includes(qbId)) career.freeAgentQbIds.push(qbId);
+    if(!career.freeAgentPool) career.freeAgentPool = [];
+    if(!career.freeAgentPool.includes(qb)) career.freeAgentPool.push(qb);
+    return qb;
+  }
+  function retireQuarterback(qbId, reason){
+    _ensureQbRegistryFields();
+    const qb = career.qbsById[qbId];
+    if(!qb) return null;
+    _clearQbFromAllRosterSlots(qbId);
+    qb.rosterRole = null; qb.retired = true; qb.status = "retired";
+    qb.exitReason = reason || qb.exitReason || "retired";
+    if(!career.retiredQbIds.includes(qbId)) career.retiredQbIds.push(qbId);
+    return qb;
+  }
+  // Not yet called by any live game system this wave (nothing in the current codebase reorders an
+  // existing QB2/QB3 without also regenerating one of them) -- added because the spec names it as
+  // one of the 7 sole ownership-mutating helpers, and Wave 2B's starter-selection work is expected
+  // to need it for reordering a depth chart without manufacturing a new player.
+  function swapDepthRoles(teamId, roleA, roleB){
+    _ensureQbRegistryFields();
+    const slots = career.teamQbDepth[teamId];
+    if(!slots) return;
+    const aId = slots[roleA] || null, bId = slots[roleB] || null;
+    slots[roleA] = bId; slots[roleB] = aId;
+    if(aId && career.qbsById[aId]) career.qbsById[aId].rosterRole = roleB;
+    if(bId && career.qbsById[bId]) career.qbsById[bId].rosterRole = roleA;
+    const chart = career.leagueDepthCharts && career.leagueDepthCharts[teamId];
+    const legacySlot = r => r==="QB2" ? "qb2" : r==="QB3" ? "qb3" : null;
+    const sa = legacySlot(roleA), sb = legacySlot(roleB);
+    if(chart && sa && sb){ const tmp = chart[sa]; chart[sa] = chart[sb]; chart[sb] = tmp; }
+  }
+  function getTeamQuarterbacks(teamId){
+    _ensureQbRegistryFields();
+    const slots = career.teamQbDepth[teamId] || { QB1:null, QB2:null, QB3:null };
+    const result = {
+      QB1: slots.QB1 ? career.qbsById[slots.QB1] : null,
+      QB2: slots.QB2 ? career.qbsById[slots.QB2] : null,
+      QB3: slots.QB3 ? career.qbsById[slots.QB3] : null,
+    };
+    // The user's own team is never tracked in teamQbDepth (career/build ARE the user's own QB
+    // record) -- when the user is the active, non-backup starter at their own team, QB1 there is
+    // the user, not a registry entry.
+    if(career.teamId===teamId && !career.isBackup && !result.QB1) result.QB1 = userQuarterbackView();
+    return result;
+  }
+  function getQuarterbackById(qbId){
+    if(!qbId) return null;
+    if(qbId===USER_QB_ID) return userQuarterbackView();
+    _ensureQbRegistryFields();
+    return career.qbsById[qbId] || null;
+  }
+  // Development-only invariant checker (Section 3). Exposed to Playwright via a single narrow,
+  // read-only global (see the __glValidateLeagueState assignment in the Init block) rather than any
+  // broader admin/debug surface -- it takes no state, mutates nothing, and returns only a plain
+  // array of violation descriptions, so it cannot be used to alter or cheat a real player's career
+  // even if found in devtools.
+  function validateLeagueState(careerObj, year){
+    const issues = [];
+    if(!careerObj) return issues;
+    const qbsById = careerObj.qbsById || {};
+    const teamQbDepth = careerObj.teamQbDepth || {};
+    const freeAgentQbIds = careerObj.freeAgentQbIds || [];
+    const retiredQbIds = careerObj.retiredQbIds || [];
+    const seenSlots = new Map();
+    const qb1Owners = new Map();
+    Object.keys(teamQbDepth).forEach(teamId=>{
+      const slots = teamQbDepth[teamId];
+      ["QB1","QB2","QB3"].forEach(role=>{
+        const qbId = slots[role];
+        if(!qbId) return;
+        if(seenSlots.has(qbId)) issues.push({ type:"duplicate-roster-slot", qbId, year, teamId, role, otherLocation: seenSlots.get(qbId) });
+        seenSlots.set(qbId, `${teamId}:${role}`);
+        if(!qbsById[qbId] && qbId!==USER_QB_ID) issues.push({ type:"roster-slot-unregistered-qb", qbId, year, teamId, role });
+        if(freeAgentQbIds.includes(qbId)) issues.push({ type:"rostered-and-free-agent", qbId, year, teamId, role });
+        if(retiredQbIds.includes(qbId)) issues.push({ type:"rostered-and-retired", qbId, year, teamId, role });
+      });
+      const qb1 = slots.QB1;
+      if(qb1){
+        if(qb1Owners.has(qb1)) issues.push({ type:"duplicate-qb1", qbId:qb1, year, teams:[qb1Owners.get(qb1), teamId] });
+        qb1Owners.set(qb1, teamId);
+      }
+    });
+    freeAgentQbIds.forEach(id=>{
+      if(retiredQbIds.includes(id)) issues.push({ type:"free-agent-and-retired", qbId:id, year });
+      if(!qbsById[id]) issues.push({ type:"free-agent-unregistered", qbId:id, year });
+    });
+    retiredQbIds.forEach(id=>{ if(!qbsById[id]) issues.push({ type:"retired-unregistered", qbId:id, year }); });
+    return issues;
+  }
+
+  function rivalForTeam(teamId){
+    const slots = career.teamQbDepth && career.teamQbDepth[teamId];
+    if(!slots || !slots.QB1) return null;
+    return (career.qbsById && career.qbsById[slots.QB1]) || null;
+  }
+  // Unlike a plain teamQbDepth lookup, this also finds RETIRED/free-agent QBs -- a profile card
+  // opened from an old season's schedule/playoff log should still resolve to that season's actual
+  // starter, not whoever currently holds the job (or nothing at all, if he's since moved on).
   function findRivalById(id){
-    if(!career.leagueRivals || !id) return null;
-    return career.leagueRivals.find(r=>r.id===id) || null;
+    if(!id) return null;
+    return getQuarterbackById(id);
   }
   // Age-adjusted the same way a rival's own season stats already are (ageMult in
   // simulateRivalSeasons) -- an aging rival starter shouldn't blend in at his career-peak talent.
@@ -4083,7 +4391,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const age = isProspect ? randInt(22,25) : randInt(24,32);
     const talent = isProspect ? clamp(teamGrade + randInt(-10,10), 20, 90) : clamp(teamGrade + randInt(-25,-5), 15, 75);
     const contract = isProspect ? rollRookieDepthContract(decade, randInt(2,7)) : rollRivalContract(decade, talent);
-    return {
+    const bench = {
       id: "bqb_"+teamId+"_"+Math.round(Math.random()*1e6),
       name: randomFullName(), teamId, talent, age,
       retireAge: clamp(age + randInt(3,12), 30, 45),
@@ -4091,23 +4399,32 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
       retired: false, contract, entrenchedYears: rollEntrenchedYears(talent),
     };
+    return registerQuarterback(bench);
   }
+  // Wave 2A: both bench slots are assigned into the canonical registry (teamQbDepth[teamId].QB2/
+  // QB3) here, right where teamId is already known -- the one caller (spawnFreshRival) then still
+  // assigns the returned {qb2,qb3} directly onto career.leagueDepthCharts[teamId] itself, which is
+  // harmless/redundant with what assignQuarterbackToRoster already wrote there (same objects).
   function generateDepthChart(teamId, decade, year, teamGrade){
-    return {
-      qb2: generateBenchPlayer(teamId, decade, year, teamGrade, Math.random()<0.3),
-      qb3: generateBenchPlayer(teamId, decade, year, teamGrade, Math.random()<0.65),
-    };
+    const qb2 = generateBenchPlayer(teamId, decade, year, teamGrade, Math.random()<0.3);
+    const qb3 = generateBenchPlayer(teamId, decade, year, teamGrade, Math.random()<0.65);
+    assignQuarterbackToRoster(qb2.id, teamId, "QB2");
+    assignQuarterbackToRoster(qb3.id, teamId, "QB3");
+    return { qb2, qb3 };
   }
   // Rolled once, at draft night, purely to answer "is there already a real starter blocking this
   // rookie at his own team" -- an established veteran (never a rookie; a rookie never blocks
   // another rookie's path this hard), skewed a bit above team grade since a guy entrenched enough
   // to sit a draft pick is probably legitimately good. If he clears the entrenchment bar in the
-  // draft-night handler, he's pushed into career.leagueRivals as this team's real QB1 and ages/
-  // retires/gets fully simulated exactly like any other rival from then on.
+  // draft-night handler, he's assigned as this team's real QB1 (assignQuarterbackToRoster) and
+  // ages/retires/gets fully simulated exactly like any other rival from then on; registered here
+  // either way so a discarded (non-entrenched) incumbent still has a stable, harmless registry
+  // entry rather than an untracked object -- it's never assigned a roster slot, so it never shows
+  // up anywhere with totals.games===0.
   function rollDraftIncumbent(teamId, decade, year, teamGrade){
     const age = randInt(26, 34);
     const talent = clamp(teamGrade + randInt(-10, 20), 20, 99);
-    return {
+    const incumbent = {
       id: "riv_"+teamId+"_incumbent",
       name: randomFullName(), teamId, talent, age,
       retireAge: clamp(age + randInt(3,10), 30, 45),
@@ -4115,20 +4432,23 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
       retired: false, contract: rollRivalContract(decade, talent), entrenchedYears: rollEntrenchedYears(talent),
     };
+    return registerQuarterback(incumbent);
   }
   // Builds one fresh rival (+ that team's depth chart) for a team that currently has neither --
   // shared by draft night (generateLeagueRivals), a new franchise's first season
   // (spawnNewFranchiseRivals), and whenever the player's own team change leaves a team without a
   // starter (reassignRivalsForTeamChange). Age skews veteran-ish (23-34) rather than rookie-only,
   // matching how a real roster -- whether a fresh expansion team or a team that just lost its guy
-  // in a trade -- is stocked from a mix of available veterans, not exclusively rookies.
+  // in a trade -- is stocked from a mix of available veterans, not exclusively rookies. Callers are
+  // responsible for assigning the returned rival to QB1 (assignQuarterbackToRoster) -- this
+  // function only registers him and builds his bench.
   function spawnFreshRival(teamId, decade, year, idSuffix){
     const teamGrade = career.leagueStrength[teamId] ?? 60;
     const age = randInt(23, 34);
     const talent = clamp(teamGrade + randInt(-15, 15), 20, 99);
     if(!career.leagueDepthCharts) career.leagueDepthCharts = {};
     career.leagueDepthCharts[teamId] = generateDepthChart(teamId, decade, year, teamGrade);
-    return {
+    const rival = {
       id: "riv_"+teamId+"_"+idSuffix,
       name: randomFullName(),
       teamId,
@@ -4147,6 +4467,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       contract: rollRivalContract(decade, talent),
       entrenchedYears: rollEntrenchedYears(talent),
     };
+    return registerQuarterback(rival);
   }
   function generateLeagueRivals(){
     career.leagueDepthCharts = {};
@@ -4165,6 +4486,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const classmates = rivals.slice().sort(()=>Math.random()-0.5).slice(0, Math.min(3, rivals.length));
     classmates.forEach(r=>{ r.isRival = true; r.age = 22; r.draftYear = career.year; r.retireAge = randInt(32, 42); });
     return rivals;
+    // NOTE: callers assign each returned rival to QB1 (career init does this right after calling
+    // generateLeagueRivals -- see there) -- this function only builds and registers them.
   }
   // A new franchise joining the league THIS season needs a starter too, same as any other team --
   // generateLeagueRivals() only seeds teams that already existed at draft night (see above), so a
@@ -4185,12 +4508,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.leagueRivals.forEach(r=>{
       if(r.retired) return;
       const t = TEAMS.find(x=>x.id===r.teamId);
-      if(t && t.start>year){ r.retired = true; r.exitReason = "not-yet-founded"; }
+      if(t && t.start>year) retireQuarterback(r.id, "not-yet-founded");
     });
     TEAMS.forEach(t=>{
       if(t.start!==year || t.id===career.teamId) return;
-      if(career.leagueRivals.some(r=>r.teamId===t.id && !r.retired)) return;
-      career.leagueRivals.push(spawnFreshRival(t.id, decade, year, "new"+year));
+      if(rivalForTeam(t.id)) return;
+      const nr = spawnFreshRival(t.id, decade, year, "new"+year);
+      assignQuarterbackToRoster(nr.id, t.id, "QB1");
     });
   }
   // Called at every site where the PLAYER changes teams (trade, waiver pickup, free-agent sign,
@@ -4204,28 +4528,26 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // Phase 2 of the QB-entity redesign: a QB who loses his job doesn't just vanish into a plain
   // "retired" flag -- if he's still plausibly good enough to play (rivalEffTalent>=50) and hasn't
   // hit his own retireAge yet, he goes into career.freeAgentPool instead, a shared jobless-QB
-  // portal any team might sign him from later (see resolveFreeAgentPool). He's the SAME object
-  // reference already sitting in career.leagueRivals (or, for a bench player, no longer referenced
-  // by any depth chart) -- when eventually signed, flipping entity.retired back to false and
-  // updating entity.teamId is all that's needed, since nothing else needs re-pushing. If he's not
-  // viable (washed up or past retireAge), this is just a normal, permanent retirement -- exactly
-  // the prior behavior, unchanged.
+  // portal any team might sign him from later (see resolveFreeAgentPool). Wave 2A: this now
+  // delegates to the canonical moveQuarterbackToFreeAgency/retireQuarterback helpers instead of
+  // hand-flipping entity.retired -- free agency is no longer represented by the same flag as a
+  // genuine retirement (Section 4's named defect), even though every existing call site's own
+  // signature/behavior is unchanged.
   function enterFreeAgentPool(entity, reason){
-    entity.retired = true;
-    entity.exitReason = reason;
+    if(!entity || !entity.id) return;
+    if(!career.qbsById || !career.qbsById[entity.id]) registerQuarterback(entity);
     const stillViable = rivalEffTalent(entity)>=50 && entity.age<entity.retireAge;
-    if(!stillViable) return;
-    if(!career.freeAgentPool) career.freeAgentPool = [];
-    entity.joblessSeasons = 0;
-    career.freeAgentPool.push(entity);
+    if(!stillViable){ retireQuarterback(entity.id, reason); return; }
+    moveQuarterbackToFreeAgency(entity.id, reason);
   }
   function reassignRivalsForTeamChange(oldTeamId, newTeamId){
     if(!career.leagueRivals || career.isBackup) return;
     const decade = decadeForYear(career.year);
-    const incoming = career.leagueRivals.find(r=>r.teamId===newTeamId && !r.retired);
+    const incoming = rivalForTeam(newTeamId);
     if(incoming) enterFreeAgentPool(incoming, "displaced");
-    if(oldTeamId && oldTeamId!==newTeamId && !career.leagueRivals.some(r=>r.teamId===oldTeamId && !r.retired)){
-      career.leagueRivals.push(spawnFreshRival(oldTeamId, decade, career.year, "repl"+career.year));
+    if(oldTeamId && oldTeamId!==newTeamId && !rivalForTeam(oldTeamId)){
+      const nr = spawnFreshRival(oldTeamId, decade, career.year, "repl"+career.year);
+      assignQuarterbackToRoster(nr.id, oldTeamId, "QB1");
     }
   }
   // Shared per-player season-stat math -- originally inline in simulateRivalSeasons, extracted so
@@ -4293,7 +4615,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.leagueRivals.forEach(r=>{
       if(r.retired) return;
       if(r.age > r.retireAge){
-        r.retired = true;
+        // Wave 2A: retireQuarterback keeps him permanently discoverable by id (retiredQbIds/
+        // qbsById) instead of just flipping a flag on an object nothing else indexes by id.
+        retireQuarterback(r.id, "age");
         // replace with a fresh rookie at the same team so the league doesn't thin out over a
         // 20-season player career -- the new starter takes over the same roster spot.
         const teamGrade = career.leagueStrength[r.teamId] ?? 60;
@@ -4305,12 +4629,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         // sudden large team-strength swings.
         const successionNudge = Math.round((newTalent - rivalEffTalent(r)) * 0.3 * (ERA_TEAM_VOLATILITY[decade] ?? 1.0));
         career.leagueStrength[r.teamId] = clamp(teamGrade + successionNudge, 20, 96);
-        career.leagueRivals.push({
+        const successor = {
           id: "riv_"+r.teamId+"_"+year, name: randomFullName(), teamId: r.teamId,
           talent: newTalent, age: 22, retireAge: randInt(30,40),
           draftYear: year, seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
           retired: false, succeededId: r.id, contract: rollRookieDepthContract(decade, randInt(1,4)), entrenchedYears: rollEntrenchedYears(newTalent),
-        });
+        };
+        registerQuarterback(successor);
+        assignQuarterbackToRoster(successor.id, r.teamId, "QB1");
         return;
       }
       const seasonResult = simulatePlayerSeasonStats(r, decade, league, year);
@@ -4370,8 +4696,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const p = chart[slot];
         if(!p || p.retired) return;
         if(p.age > p.retireAge){
+          // Wave 2A fix: the departing bench player used to just be overwritten here with no
+          // retirement/free-agency record anywhere -- unreachable by id, invisible to All-Time even
+          // though he may have actually played real relief games. retireQuarterback keeps him
+          // permanently discoverable before the slot moves on.
+          retireQuarterback(p.id, "age");
           const teamGrade = career.leagueStrength[teamId] ?? 60;
-          chart[slot] = generateBenchPlayer(teamId, decade, year, teamGrade, slot==="qb3" ? Math.random()<0.65 : Math.random()<0.3);
+          const repl = generateBenchPlayer(teamId, decade, year, teamGrade, slot==="qb3" ? Math.random()<0.65 : Math.random()<0.3);
+          assignQuarterbackToRoster(repl.id, teamId, slot==="qb2"?"QB2":"QB3");
           return;
         }
         if(p._reliefGames>0){
@@ -4468,8 +4800,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       if(Math.random()<0.5){
         tradeBenchPlayer(p, teamId, slot, decade, year);
       } else {
-        chart[slot] = generateBenchPlayer(teamId, decade, year, career.leagueStrength[teamId] ?? 60, Math.random()<0.4);
+        // Wave 2A: move the departing player before the replacement takes his slot (task 5 --
+        // never overwrite a QB object without moving the outgoing occupant to free agency/
+        // retirement first).
         enterFreeAgentPool(p, "waived");
+        const repl = generateBenchPlayer(teamId, decade, year, career.leagueStrength[teamId] ?? 60, Math.random()<0.4);
+        assignQuarterbackToRoster(repl.id, teamId, slot==="qb2"?"QB2":"QB3");
         career.leagueNewsLog.push({ year, teamId, title:"Waives a Depth QB", delta:0,
           flavor:`${teamNameAt(teamId, year)} part ways with ${p.name} to open up a roster spot.` });
       }
@@ -4496,12 +4832,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const destSlot = isUpgradeFor(destTeam.id);
     const displaced = destChart[destSlot];
     if(displaced) enterFreeAgentPool(displaced, "traded-away");
-    const fromChart = career.leagueDepthCharts[fromTeamId];
-    fromChart[fromSlot] = generateBenchPlayer(fromTeamId, decade, year, career.leagueStrength[fromTeamId] ?? 60, Math.random()<0.4);
-    player.teamId = destTeam.id;
+    const repl = generateBenchPlayer(fromTeamId, decade, year, career.leagueStrength[fromTeamId] ?? 60, Math.random()<0.4);
+    assignQuarterbackToRoster(repl.id, fromTeamId, fromSlot==="qb2"?"QB2":"QB3");
     player.contract = rollRivalContract(decade, player.talent);
     player.entrenchedYears = rollEntrenchedYears(player.talent);
-    destChart[destSlot] = player;
+    assignQuarterbackToRoster(player.id, destTeam.id, destSlot==="qb2"?"QB2":"QB3");
     career.leagueNewsLog.push({ year, teamId: destTeam.id, title:"Trades for Depth", delta:0,
       flavor:`${teamNameAt(destTeam.id, year)} trade for ${player.name}, adding a real arm to the QB room.` });
   }
@@ -4522,8 +4857,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       entity.joblessSeasons = n;
       const retireChanceVal = clamp(0.05*n*n, 0, 0.95);
       if(Math.random()<retireChanceVal){
-        entity.retired = true;
-        entity.exitReason = "retired-unsigned";
+        retireQuarterback(entity.id, "retired-unsigned");
         toRemove.add(entity);
         return;
       }
@@ -4534,13 +4868,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           const chart = career.leagueDepthCharts[teamId];
           const incumbent = chart[slot];
           if(incumbent) enterFreeAgentPool(incumbent, "waived-for-fa");
-          entity.teamId = teamId;
-          entity.retired = false;
-          entity.exitReason = null;
           entity.contract = rollRivalContract(decade, entity.talent);
           entity.entrenchedYears = rollEntrenchedYears(entity.talent);
           entity.joblessSeasons = 0;
-          chart[slot] = entity;
+          assignQuarterbackToRoster(entity.id, teamId, slot==="qb2"?"QB2":"QB3");
           toRemove.add(entity);
           career.leagueNewsLog.push({ year, teamId, title:"Signs a Free-Agent Backup", delta:0,
             flavor:`${teamNameAt(teamId, year)} bring in ${entity.name} off the open market to compete for QB depth.` });
@@ -4578,7 +4909,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // developmental QB purely to groom a future successor, same as a real front office does.
     if(Math.random()<0.04){
       const teamGrade = career.leagueStrength[teamId] ?? 60;
-      chart.qb3 = generateBenchPlayer(teamId, decade, year, teamGrade, true);
+      // Wave 2A: move the outgoing qb3 to free agency/retirement before the slot is reassigned --
+      // he used to just be overwritten here with no trace anywhere (Section 4's named defect).
+      if(chart.qb3) enterFreeAgentPool(chart.qb3, "replaced-by-prospect");
+      const newQb3 = generateBenchPlayer(teamId, decade, year, teamGrade, true);
+      assignQuarterbackToRoster(newQb3.id, teamId, "QB3");
       career.leagueNewsLog.push({ year, teamId, title:"Drafts a QB to Develop", delta:0,
         flavor:`${teamNameAt(teamId, year)} use a mid-round pick on a developmental quarterback — no pressure on the current starter yet, but the clock is quietly ticking.` });
     }
@@ -4601,9 +4936,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     function promoteQb2(flavor){
       const oldName = rival.name;
       enterFreeAgentPool(rival, "lost-job");
+      // Wave 2A: registerQuarterback re-points qbsById[qb2.id] at this NEW object (the promotion
+      // still rebuilds a fresh object here, same as before this wave, to reset contract/
+      // entrenchedYears cleanly) -- without this, qbsById would keep pointing at the stale
+      // pre-promotion object forever, a real duplicate-identity bug of its own.
       const promoted = { ...qb2, contract: rollRivalContract(decade, qb2.talent), entrenchedYears: rollEntrenchedYears(qb2.talent) };
-      career.leagueRivals.push(promoted);
-      chart.qb2 = generateBenchPlayer(teamId, decade, year, career.leagueStrength[teamId] ?? 60, Math.random()<0.4);
+      registerQuarterback(promoted);
+      assignQuarterbackToRoster(promoted.id, teamId, "QB1");
+      const newQb2 = generateBenchPlayer(teamId, decade, year, career.leagueStrength[teamId] ?? 60, Math.random()<0.4);
+      assignQuarterbackToRoster(newQb2.id, teamId, "QB2");
       const delta = randInt(-3,6);
       career.leagueStrength[teamId] = clamp((career.leagueStrength[teamId]??60)+delta, 20, 96);
       career.leagueNewsLog.push({ year, teamId, title:"Backup Wins the Starting Job", delta, flavor: flavor(oldName, promoted.name) });
@@ -4639,23 +4980,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         .sort((a,b)=>rivalEffTalent(b)-rivalEffTalent(a))[0];
       let signed;
       if(poolCandidate && rivalEffTalent(poolCandidate)>=teamGrade-15){
-        career.freeAgentPool = career.freeAgentPool.filter(p=>p!==poolCandidate);
-        poolCandidate.teamId = teamId;
-        poolCandidate.retired = false;
-        poolCandidate.exitReason = null;
         poolCandidate.contract = rollRivalContract(decade, poolCandidate.talent);
         poolCandidate.entrenchedYears = rollEntrenchedYears(poolCandidate.talent);
+        assignQuarterbackToRoster(poolCandidate.id, teamId, "QB1");
         signed = poolCandidate;
-        // A former starter is already IN career.leagueRivals (just marked retired); a former
-        // bench player never was -- only push if he's not already tracked there.
-        if(!career.leagueRivals.includes(poolCandidate)) career.leagueRivals.push(poolCandidate);
       } else {
         const newTalent = clamp(teamGrade + randInt(-10,20), 20, 99);
         signed = { id: "riv_"+teamId+"_"+year+"_fa", name: randomFullName(), teamId,
           talent: newTalent, age: randInt(26,34), retireAge: clamp(30+randInt(0,10), 30, 45),
           draftYear: year-randInt(3,10), seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
           retired:false, contract: rollRivalContract(decade, newTalent), entrenchedYears: rollEntrenchedYears(newTalent) };
-        career.leagueRivals.push(signed);
+        registerQuarterback(signed);
+        assignQuarterbackToRoster(signed.id, teamId, "QB1");
       }
       const delta = randInt(-4,8);
       career.leagueStrength[teamId] = clamp((career.leagueStrength[teamId]??60)+delta, 20, 96);
@@ -7284,14 +7620,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     rows.sort((a,b)=> b.rating-a.rating);
     return rows;
   }
+  // Wave 2A: registry-backed now, so a bench player who's since been traded/promoted/replaced/
+  // retired remains resolvable by id -- previously this only ever found someone CURRENTLY sitting
+  // in a live chart slot, so an old schedule/game-log reference to a departed bench player resolved
+  // to nothing at all the moment his slot was reassigned.
   function findDepthChartPlayerById(id){
-    if(!career.leagueDepthCharts || !id) return null;
-    for(const teamId of Object.keys(career.leagueDepthCharts)){
-      const chart = career.leagueDepthCharts[teamId];
-      if(chart.qb2 && chart.qb2.id===id) return chart.qb2;
-      if(chart.qb3 && chart.qb3.id===id) return chart.qb3;
-    }
-    return null;
+    return getQuarterbackById(id);
   }
   // The counterpart to computeSeasonAwardRows: everyone who did NOT actually play a game this
   // season -- bench players with no season entry for `year` (didn't get relief duty, see Part C of
@@ -7420,21 +7754,23 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   }
   // Round 32 item 5: the All-Time leaderboard population -- every QB who's actually played a real
   // game in THIS league's simulated history: the player themselves plus career.leagueRivals
-  // (current AND retired -- retired ones are never removed from that array, just flagged, which is
-  // exactly the "every player that's played" the user asked for). Bench QBs (career.leagueDepthCharts)
-  // are deliberately excluded, matching the Round 6 invariant that bench stats never reach a
-  // league-wide pooling site. Filtered to totals.games>0 so a rookie successor who was just
-  // generated (0 games) doesn't clutter the list with a zero-stat row. Ranked by the exact same
-  // greatness score computeHofScore already uses for the player's own Hall of Fame verdict -- one
-  // real, already-tuned formula, not a second invented-from-scratch ranking metric. This needs no
-  // explicit "update every season" mechanism at all: career.leagueRivals/career.totals already
-  // mutate every season on their own, so simply recomputing this at render time is always current.
+  // (current, retired, free-agent, AND bench -- Wave 2A: this now walks the canonical qbsById
+  // registry instead of only career.leagueRivals, which used to explicitly exclude
+  // career.leagueDepthCharts even when a bench QB had actually played real relief games -- a
+  // confirmed defect, since the product intent is literally "every quarterback who plays at least
+  // one real game remains visible... in the All-Time table"). Filtered to totals.games>0 so a
+  // rookie successor who was just generated (0 games) doesn't clutter the list with a zero-stat
+  // row. Ranked by the exact same greatness score computeHofScore already uses for the player's own
+  // Hall of Fame verdict -- one real, already-tuned formula, not a second invented-from-scratch
+  // ranking metric. This needs no explicit "update every season" mechanism at all: qbsById/
+  // career.totals already mutate every season on their own, so simply recomputing this at render
+  // time is always current.
   function buildAllTimeLeaderboardRows(){
     const entries = [
-      { id:null, name:career.name, teamId:career.teamId, isMine:true, totals:career.totals, seasons:career.seasonLog, retired:false, age:career.age, exitReason:null },
+      { id:USER_QB_ID, name:career.name, teamId:career.teamId, isMine:true, totals:career.totals, seasons:career.seasonLog, retired:false, age:career.age, exitReason:null },
     ];
-    (career.leagueRivals||[]).forEach(r=>{
-      entries.push({ id:r.id, name:r.name, teamId:r.teamId, isMine:false, totals:r.totals, seasons:r.seasons, retired:!!r.retired, age:r.age, exitReason:null });
+    Object.values(career.qbsById||{}).forEach(r=>{
+      entries.push({ id:r.id, name:r.name, teamId:r.teamId, isMine:false, totals:r.totals, seasons:r.seasons, retired:!!r.retired, age:r.age, exitReason:r.exitReason||null });
     });
     return entries.filter(e=>e.totals.games>0).map(e=>{
       const verdict = computeHofScore(e.totals, e.seasons, e.exitReason);
@@ -9945,4 +10281,16 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
   // at a glance instead of silently serving pre-fix logic while looking identical to the live site.
   const buildStampEl = document.getElementById("buildStamp");
   if(buildStampEl) buildStampEl.textContent = "build " + __BUILD_TIME__.replace("T"," ").replace(/\.\d+Z$/, "Z");
+
+  // Wave 0/2A (MASTER_REMEDIATION_SPEC.md, Section 3): a single, narrow, READ-ONLY test-only call
+  // path for the invariant validator -- deliberately NOT a broader debug/admin surface. It takes no
+  // arguments, mutates nothing, and returns only a plain array of violation descriptions (or null if
+  // no career is active), so finding it in devtools gives an ordinary player nothing to alter or
+  // cheat with. This is the one deliberate, spec-mandated exception to this project's normal "no
+  // debug hooks in the real file" rule (see CLAUDE.md) -- Playwright's regression suite runs against
+  // a real `vite preview` production build, so a dev-only guard (e.g. import.meta.env.DEV) would be
+  // false there too and defeat the point.
+  window.__glValidateLeagueState = function(){
+    return career ? validateLeagueState(career, career.year) : null;
+  };
 })();

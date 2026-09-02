@@ -1044,6 +1044,90 @@ fail, unchanged by anything in this wave — confirming Wave 1 fixed exactly wha
 nothing else. `npm run build` clean, `git diff --check` clean. Committed locally, **not pushed** —
 push requires separate explicit authorization per the spec, which "start Wave 1" was not.
 
+### Wave 2A — Canonical QB identity and roster migration
+
+Introduces `career.qbsById`/`teamQbDepth`/`freeAgentQbIds`/`retiredQbIds` (Section 5's target
+schema, `schemaVersion` bumped to 2) as the canonical, ID-based ownership model the spec calls for
+— WITHOUT rewriting the deeply calibrated simulation math that reads/writes the pre-existing
+`career.leagueRivals`/`leagueDepthCharts`/`freeAgentPool` arrays (`simulateRivalSeasons`,
+`simulateDepthChartSeasons`, standings, schedule building, succession probability/decision logic —
+that's explicitly Wave 2B's job, named as such in the spec's own wave breakdown). Design: those
+legacy arrays remain the actual backing store every pre-existing read call site still uses
+unchanged; every OWNERSHIP-changing line (a QB joining a roster, entering free agency, retiring, or
+being displaced when a slot is overwritten) now goes through one of 7 new helpers —
+`registerQuarterback`, `assignQuarterbackToRoster`, `moveQuarterbackToFreeAgency`,
+`retireQuarterback`, `swapDepthRoles` (not yet called by any live system — added because the spec
+names it as one of the 7, expected to matter once Wave 2B's starter-selection reordering needs it),
+`getTeamQuarterbacks`, `getQuarterbackById` — which mutate the legacy structures in the exact shape
+they always held while keeping the registry in sync as a same-reference index over those same
+objects. `syncQbRegistryFromLegacy(careerObj)` (pure, no `Math.random()`) rebuilds that index from
+whatever the legacy arrays currently hold; `migrateSaveEnvelope` now calls it unconditionally on
+EVERY load (not just a real version migration) specifically because a save/reload round-trip
+deserializes every object reference independently — without an unconditional rebuild, a previously
+persisted `qbsById`'s copies and the legacy arrays' copies would silently diverge into different
+object instances sharing the same id the moment either was mutated post-reload. `loadActiveCareer`
+now also re-persists the migrated/repaired envelope immediately (migration requirement #12) instead
+of waiting for the next natural gameplay checkpoint, with the untouched original kept once under a
+`.backup` key.
+
+**Fixed, as a direct consequence of routing ownership through the new helpers** (Section 4's named
+defects): `enterFreeAgentPool` no longer sets `retired=true` for an actual free agent (a distinct
+`status:"free_agent"` now exists, so "between jobs" and "actually retired" can never be confused
+again); every "overwrite a chart slot / push a new starter" site that used to silently orphan the
+departing QB (`simulateRivalSeasons`'/`simulateDepthChartSeasons`' natural age-out branches,
+`evaluateSuccession`'s developmental-QB3 draft-in, and its promotion/external-signing branches) now
+moves the outgoing occupant to free agency or retirement FIRST, so he stays permanently discoverable
+by id; `findRivalById`/`rivalForTeam`/`findDepthChartPlayerById` are now registry-backed instead of
+scanning-and-filtering `career.leagueRivals`/`leagueDepthCharts` by `.teamId`/`.retired` — a stale
+flag on a moved-on QB can no longer be mistaken for a current team assignment, and a departed bench
+player resolves correctly from an old schedule/game-log reference instead of coming back `null`;
+`buildAllTimeLeaderboardRows` now walks the full `qbsById` registry (filtered to `totals.games>0`)
+instead of only `career.leagueRivals`, which used to explicitly exclude every bench QB even after a
+real played relief-game season — this is the direct fix for
+`bench-qb-survives-in-all-time.spec.js`, which now passes.
+
+**Migration repairs, both covered by new committed tests**: a save with two different rivals both
+claiming the same team's QB1 slot deterministically keeps whichever comes first in array order and
+moves the other to free agency (never left "active" while owning no actual roster slot); a QB found
+simultaneously sitting in a live depth-chart slot AND `career.freeAgentPool` (the exact dual-
+membership shape the pre-Wave-2A `enterFreeAgentPool` could produce) resolves to free-agent status,
+cleared from every roster slot he was also found in.
+
+Also added: a development-only `validateLeagueState(career, year)` invariant checker (Section 3),
+exposed through exactly one narrow, read-only global (`window.__glValidateLeagueState`) rather than
+any broader debug/admin surface — it takes no arguments, mutates nothing, and returns only a plain
+array of violation descriptions, so finding it in devtools gives an ordinary player nothing to alter
+or cheat with. This is a deliberate, spec-mandated exception to this project's normal "no debug
+hooks in the real file" rule: Playwright's regression suite runs against a real `vite preview`
+production build (this project's own established norm, since jsdom produced false positives on
+interactive flows — see the testing-methodology addendum above), so a dev-only guard would be false
+there too and defeat the point of having the validator at all.
+
+**New regression tests** (5, all committed under `tests/regression/`): `one-active-qb1-per-team`
+and `free-agent-qb-has-no-active-roster-slot` sweep 12 real seasons under a seeded RNG, calling the
+live validator after every season; `long-seeded-career-league-invariants` runs the same check across
+2 different seeds for 25 seasons each (the QB-registry slice of Section 8 scenario #28 — the OTHER
+invariants that scenario names, like schedule/standings/award correctness, belong to the waves that
+actually build them and have their own scoped tests already, or don't exist yet); the two migration-
+repair scenarios described above. All 5 pass. The full suite (15 tests across 14 files) was re-run 3
+consecutive times for determinism: identical 11 pass / 4 fail every time — `xss-name-payload`,
+`save-migration`, `schedule-completeness`, `playoff-resume-ring-idempotency`, and all 5 new Wave 2A
+tests pass; `backup-incumbent-double-simulation`, `two-active-starters-after-backup-win`, and
+`pro-bowl-eligibility` (Wave 2B/7's job) and `suspension-freezes-league` (Wave 3's job) still
+correctly fail, unchanged by this wave. `npm run build` clean, `git diff --check` clean. Committed
+locally, **not pushed** — push requires separate explicit authorization, which "start Wave 2" was
+not.
+
+**Known limitations, stated plainly rather than hidden in prose**: `getTeamQuarterbacks`/
+`swapDepthRoles` are real, tested-indirectly-via-the-invariant-sweeps helpers but aren't yet wired
+into any UI render path (the existing UI still reads the legacy `leagueDepthCharts`/`rivalForTeam`,
+which are themselves now registry-backed, so this costs nothing today) — Wave 2B's starter-selection
+work is expected to be the first real caller. The double-simulation bug, the "two active starters
+after the user wins the backup job" bug, and Pro-Bowl-eligibility filtering are UNCHANGED this wave
+(their own regression tests still correctly fail) — Wave 2A only guarantees that whoever ends up
+holding a roster slot is trackable by id and doesn't lose history when displaced, not that the
+starter-selection/award logic itself is correct yet.
+
 ### Round 33 — Playoff Tree follow-up fixes: Continue-button gating, full-tree preview, QB-link bug, Standings tab redesign
 
 User feedback (with screenshots) on Round 32's shipped work, four items:
