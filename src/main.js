@@ -2685,12 +2685,24 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // used to be one monolithic function, which made it impossible to ask "is this level after 4
   // quarters" without also deciding what happens next. Never returns won/tie itself; the caller (or
   // resolveOvertime) does that once it knows whether the two totals actually match.
-  function simulateRegulationScore(offOverall, defOverall, myDefense){
+  // Wave 7 (MASTER_REMEDIATION_SPEC.md task #2): `oppDefense` -- the opponent's REAL persistent
+  // defense grade (opponentDefenseGrade) -- is what MY offense is actually resisted by; `defOverall`
+  // (the opponent's OFFENSE) still does exactly what it always did for the OTHER half of this
+  // function: it's what determines how many points THEY score. Before this wave, defOverall alone
+  // fed the resistance my own scoring faced too -- the confirmed defect. `oppDefense` defaults to
+  // `defOverall` when omitted so a caller that hasn't been updated yet keeps the exact old
+  // behavior (rival-vs-rival math elsewhere has no such concept and never passes it); every real
+  // simulateGameScore call site is updated to pass it. The OPPONENT's own resistance
+  // (oppFacingGrade, myDefense blended 80/20 with offOverall) is unchanged -- a separate, already-
+  // calibrated mechanic (see scoreForQuarter's own comment for the diagnostic sweep behind that
+  // 80/20 split), not part of this defect.
+  function simulateRegulationScore(offOverall, defOverall, myDefense, oppDefense){
+    const myFacingGrade = oppDefense!=null ? oppDefense : defOverall;
     const oppFacingGrade = myDefense!=null ? (offOverall*0.8 + myDefense*0.2) : offOverall;
     const quarters = [];
     let myTotal=0, oppTotal=0, myTds=0, myFgs=0, oppTds=0, oppFgs=0;
     for(let q=1;q<=4;q++){
-      const myQ = scoreForQuarter(offOverall, defOverall);
+      const myQ = scoreForQuarter(offOverall, myFacingGrade);
       const oppQ = scoreForQuarter(defOverall, oppFacingGrade);
       myTotal+=myQ.pts; oppTotal+=oppQ.pts;
       myTds+=myQ.tds; myFgs+=myQ.fgs; oppTds+=oppQ.tds; oppFgs+=oppQ.fgs;
@@ -2730,8 +2742,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // tie possible) so any call site that genuinely doesn't care about era (none currently exist,
   // but this keeps the function total/safe) degrades to the pre-Wave-4 "always resolves a winner"
   // behavior rather than throwing.
-  function simulateGameScore(offOverall, defOverall, myDefense, tieProb, year, postseason){
-    const regulation = simulateRegulationScore(offOverall, defOverall, myDefense);
+  // Wave 7: `oppDefense` (opponentDefenseGrade(oppId), trailing/optional for backward compatibility)
+  // threads through to simulateRegulationScore -- see its own comment for the defect this fixes.
+  function simulateGameScore(offOverall, defOverall, myDefense, tieProb, year, postseason, oppDefense){
+    const regulation = simulateRegulationScore(offOverall, defOverall, myDefense, oppDefense);
     if(regulation.myTotal!==regulation.oppTotal){
       return { ...regulation, won: regulation.myTotal>regulation.oppTotal, tie:false };
     }
@@ -2856,7 +2870,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       }
       started++;
       const oppOffense = opponentOffenseGrade(oppId, QB_INFLUENCE_REGULAR);
-      const scoreSim = simulateGameScore(myOff, oppOffense, career.defense, tieProbConditional, career.year, false);
+      const scoreSim = simulateGameScore(myOff, oppOffense, career.defense, tieProbConditional, career.year, false, opponentDefenseGrade(oppId));
       const won = scoreSim.won;
       if(scoreSim.tie) ties++; else if(won) wins++;
       bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won: scoreSim.tie?false:won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
@@ -2867,7 +2881,6 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const gAtt = Math.max(4, Math.round(attPerGame*(0.72+Math.random()*0.56)));
       const gComp = clamp(Math.round(gAtt*clamp(comp+(Math.random()-0.5)*0.16, 0.15, 0.97)*perfMult), 0, gAtt);
       const gYards = Math.max(0, Math.round(gAtt*clamp(ypa*(0.7+Math.random()*0.6), 0, 20)*perfMult));
-      const gTd = Math.max(0, Math.round(gAtt*clamp(tdRate*(0.3+Math.random()*1.4), 0, 1)*perfMult));
       const gInt = Math.max(0, Math.round(gAtt*clamp(intRate*(0.2+Math.random()*1.6), 0, 1)*(2-perfMult)));
       const gSacks = Math.max(0, Math.round(gAtt*clamp(sackRate*(0.3+Math.random()*1.4), 0, 1)));
 
@@ -2875,8 +2888,17 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const gRushAtt = Math.max(0, Math.round(gRushAttPerGame*(0.5+Math.random()*1.0)));
       const gRushYpc = clamp(3.4 + (effRush-55)*0.045, 1.8, 7.8);
       const gRushYards = gRushAtt>0 ? Math.max(0, Math.round(gRushAtt*gRushYpc*(0.6+Math.random()*0.8)*perfMult)) : 0;
-      const gRushTdRate = clamp(0.018 + (effRush-55)*0.0006, 0.004, 0.09);
-      const gRushTd = gRushAtt>0 && Math.random()<gRushTdRate*gRushAtt ? 1 : 0;
+      // Wave 7 (task #3, scenario #24 "scoreboard-and-qb-touchdowns-reconcile"): gTd/gRushTd are now
+      // derived from THIS game's own real scoreboard offensive TD count (scoreSim.myTds), never
+      // independently rolled from tdRate -- the confirmed "per-game QB passing touchdowns are
+      // generated independently from the scoreboard's offensive touchdowns" defect. Allocation
+      // matches the existing, documented rule generateGameBoxScore already uses for a fabricated
+      // single-game line: every offensive TD this game is credited to the QB, as either a pass or
+      // (18% chance, only when there's a rush attempt to attach it to) a QB rush -- this sim has no
+      // separately-tracked RB/WR entities to attribute a TD to instead, so passing+rushing TDs
+      // always exactly equal the scoreboard's offensive TD count for this game, never more.
+      const gRushTd = gRushAtt>0 && scoreSim.myTds>0 && Math.random()<0.18 ? 1 : 0;
+      const gTd = clamp(scoreSim.myTds - gRushTd, 0, scoreSim.myTds);
 
       tComp+=gComp; tAtt+=gAtt; tYards+=gYards; tTd+=gTd; tInt+=gInt; tSacks+=gSacks;
       tRushAtt+=gRushAtt; tRushYards+=gRushYards; tRushTd+=gRushTd;
@@ -3794,6 +3816,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(!rival) return teamStrength;
     return blendOffenseWithTeam(rivalEffTalent(rival), teamStrength, qbInfluence);
   }
+  // Wave 7 (MASTER_REMEDIATION_SPEC.md): the opponent's REAL persistent defense grade -- what MY
+  // offense should actually be resisted by. Before this wave, every call to simulateGameScore fed
+  // opponentOffenseGrade (the OPPONENT'S OFFENSE) into the parameter used as MY resistance, the
+  // confirmed "conflates an opponent's offense with the grade used as its defensive resistance"
+  // defect -- Wave 5's persistent per-team defense grades (career.leagueTeamGrades[id].defense)
+  // existed by then purely for display, "no game system ever needs to know another team's oline
+  // grade to resolve anything" (see that wave's own PROGRESS.md note) -- this is where that changes.
+  function opponentDefenseGrade(teamId){
+    if(teamId===career.teamId) return career.defense;
+    ensureLeagueTeamGrades(career.year);
+    const g = career.leagueTeamGrades[teamId];
+    return g ? g.defense : (career.leagueStrength[teamId] ?? 60);
+  }
   // ----- Rival QB profile: a clickable "character page" for any opposing starter, everywhere one
   // is shown by name (Schedule tab, playoff round boxes, League tab standings). Facts are all
   // derived from data the rival already carries -- no separate hand-authored joke pool to keep in
@@ -4398,7 +4433,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const oppRival = rivalForTeam(opp.id);
         const oppOffense = opponentOffenseGrade(opp.id, QB_INFLUENCE_PLAYOFF);
         const myOff = playoffOffenseGrade(myOffFn(), season);
-        const game = simulateGameScore(myOff, oppOffense, career.defense, null, season ? season.year : career.year, true);
+        const game = simulateGameScore(myOff, oppOffense, career.defense, null, season ? season.year : career.year, true, opponentDefenseGrade(opp.id));
         const round = {
           round: roundLabel, opponent: teamNameAt(opp.id, career.year), oppId: opp.id, mySeed: player.seed, oppSeed: opp.seed,
           myScore: game.myTotal, oppScore: game.oppTotal, won: game.won, quarters: game.quarters,
@@ -4472,7 +4507,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const oppRival = rivalForTeam(otherChampId);
     const oppOffense = opponentOffenseGrade(otherChampId, QB_INFLUENCE_PLAYOFF);
     const myOff = playoffOffenseGrade(playoffs._effOverall, season);
-    const game = simulateGameScore(myOff, oppOffense, career.defense, null, season.year, true);
+    const game = simulateGameScore(myOff, oppOffense, career.defense, null, season.year, true, opponentDefenseGrade(otherChampId));
     const sbRound = {
       round:"Super Bowl", opponent: teamNameAt(otherChampId, career.year), oppId: otherChampId,
       myScore: game.myTotal, oppScore: game.oppTotal, won: game.won,
@@ -4665,8 +4700,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function resolveSeasonMVP(season, year){
     const rows = [{ isMine:true, awards: season.awards, score: season.mvpScore,
       eligible: season.mvpEligible, totals: career.totals }];
-    (career.leagueRivals||[]).forEach(r=>{
-      const s = r.seasons.find(x=>x.year===year);
+    // Wave 7 (MASTER_REMEDIATION_SPEC.md task #7): iterates the full qbsById registry, not just
+    // career.leagueRivals (starters only) -- the confirmed defect "their roster label alone must
+    // not exclude a qualifying played season." A bench QB who took real relief snaps (a genuine
+    // season row via applyStatLineToGames/reconcileWinLossFromGames) is exactly as eligible for MVP
+    // as any starter with the same score/eligibility -- the same source buildAllTimeLeaderboardRows
+    // already uses for the identical reason (a played season must never be invisible because of
+    // roster role).
+    Object.values(career.qbsById||{}).forEach(r=>{
+      const s = (r.seasons||[]).find(x=>x.year===year);
       if(!s) return;
       rows.push({ isMine:false, awards: s.awards, score: s.mvpScore, eligible: s.mvpEligible, totals: r.totals });
     });
@@ -4694,8 +4736,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const rows = [{ isMine:true, teamId: career.teamId, conf: conferenceOf(career.teamId, year),
       awards: season.awards, proBowlScore: season.proBowlScore, proBowlEligible: season.proBowlEligible,
       allProScore: season.allProScore, allProEligible: season.allProEligible, totals: career.totals }];
-    (career.leagueRivals||[]).forEach(r=>{
-      const s = r.seasons.find(x=>x.year===year);
+    // Wave 7 (task #7): same fix as resolveSeasonMVP above -- iterate the full qbsById registry so
+    // a bench QB's real, played season is never excluded from Pro Bowl/All-Pro consideration just
+    // because career.leagueRivals only ever tracks each team's current starter.
+    Object.values(career.qbsById||{}).forEach(r=>{
+      const s = (r.seasons||[]).find(x=>x.year===year);
       if(!s) return;
       rows.push({ isMine:false, teamId: r.teamId, conf: conferenceOf(r.teamId, year),
         awards: s.awards, proBowlScore: s.proBowlScore, proBowlEligible: s.proBowlEligible,
@@ -4704,14 +4749,26 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
     const slots = proBowlSlotsForYear(year);
     const seated = new Set();
+    // Wave 7 (MASTER_REMEDIATION_SPEC.md task #6): the confirmed defect -- the standard slots used
+    // to take the top `perConf` rows by score with NO proBowlEligible filter at all (only the bonus
+    // slot ever checked eligibility), so a QB who fails the real playing-time bar (a short, hot
+    // streak) could still win a standard Pro Bowl slot outright. Standard slots now come from the
+    // ELIGIBLE pool only; the explicit fallback (required by the same task) fills any slot the
+    // eligible pool can't cover from the ineligible pool by score, so a conference is never left
+    // with an empty seat just because too few QBs met the playing-time bar this season -- a real
+    // Pro Bowl roster is always full. The bonus slot stays eligible-only, same as before.
     ["AFC","NFC"].forEach(conf=>{
       const pool = rows.filter(r=>r.conf===conf);
       if(!pool.length) return;
-      const ranked = pool.slice().sort((a,b)=> b.proBowlScore-a.proBowlScore);
-      const selected = ranked.slice(0, slots.perConf);
+      const rankedEligible = pool.filter(r=>r.proBowlEligible).sort((a,b)=> b.proBowlScore-a.proBowlScore);
+      const selected = rankedEligible.slice(0, slots.perConf);
+      if(selected.length<slots.perConf){
+        const rankedIneligible = pool.filter(r=>!r.proBowlEligible).sort((a,b)=> b.proBowlScore-a.proBowlScore);
+        selected.push(...rankedIneligible.slice(0, slots.perConf-selected.length));
+      }
       if(slots.maxPerConf>slots.perConf){
-        const bonus = ranked[slots.perConf];
-        if(bonus && bonus.proBowlEligible) selected.push(bonus);
+        const bonus = rankedEligible[slots.perConf];
+        if(bonus) selected.push(bonus);
       }
       selected.forEach(r=>{ r.awards.push("Pro Bowl"); r.totals.proBowls++; seated.add(r); });
     });
@@ -10678,17 +10735,22 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const myOff = regularSeasonOffenseGrade(effOverall, career.age, decade);
     const winProb = simpleWinProb(myOff, 65);
 
-    const leagueAvgRating = leagueAvgRatingForDecade(decade);
-    const ratingEdge = expRating - leagueAvgRating;
+    // Wave 7 (MASTER_REMEDIATION_SPEC.md task #8): calls the REAL production evaluateSeasonAwards
+    // instead of a hand-duplicated, now-OBSOLETE model. The old proBowlOdds/allProOdds ("a
+    // percentage chance") never matched how awards actually work at all -- real resolution is a
+    // comparative, fixed-slot/winner-take-all selection (resolveSeasonAllProAndProBowl/
+    // resolveSeasonMVP), never an independent per-QB coin flip -- and the old proBowlGateOk/
+    // allProGateOk gates additionally required ratingEdge>=1/>=9 on top of playing time, a stricter
+    // rule production explicitly REMOVED (see evaluateSeasonAwards's own comment: "an earlier
+    // version gated on ratingEdge... in a league-wide down year that could empty the eligible pool
+    // entirely"). Passing this preview's own expected full-healthy-season numbers through the SAME
+    // function production actually calls can never drift from what a real season would compute.
     const gamesPlayedShare = 1; // this preview assumes a full healthy season
-    const proBowlScore = ratingEdge*0.6 + Math.max(0, expTd-16)*0.45 + (winProb-0.5)*10;
-    const proBowlGateOk = expAttempts>200 && gamesPlayedShare>=0.65 && ratingEdge>=1;
-    const proBowlOdds = proBowlGateOk ? clamp(proBowlScore*0.017, 0, 0.85) : 0;
-    const allProScore = ratingEdge*0.75 + Math.max(0, expTd-22)*0.55 + (winProb-0.5)*18;
-    const allProGateOk = proBowlGateOk && gamesPlayedShare>=0.8 && ratingEdge>=9;
-    const allProOdds = allProGateOk ? clamp(allProScore*0.013, 0, 0.55) : 0;
-    const mvpScore = ratingEdge*0.55 + (winProb-0.5)*40 + Math.max(0, expTd-25)*0.6;
-    const mvpEligible = expAttempts>150 && gamesPlayedShare>=0.5;
+    const awardCalc = evaluateSeasonAwards({
+      rating: expRating, td: expTd, winPct: winProb, attempts: expAttempts,
+      gamesPlayed: expGames, leagueGames: league.games, decade,
+    });
+    const { leagueAvgRating, ratingEdge, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = awardCalc;
 
     return {
       decade, league, schemeId, scheme, eff, neutral, primeMult, W, cal,
@@ -10697,9 +10759,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       comp, ypa, tdRate, intRate, sackRate, expSacks, roleShare, roleShareRange, attPerGame,
       expGames, expAttempts, expComp, expYards, expTd, expInt, expRating,
       rushAttPerGame, rushYpc, rushTdRate, expRushAtt, expRushYards, expRushTd,
-      winProb, myOff, leagueAvgRating, ratingEdge,
-      proBowlScore, proBowlGateOk, proBowlOdds,
-      allProScore, allProGateOk, allProOdds,
+      winProb, myOff, leagueAvgRating, ratingEdge, gamesPlayedShare,
+      proBowlScore, proBowlEligible,
+      allProScore, allProEligible,
       mvpScore, mvpEligible,
     };
   }
@@ -10877,7 +10939,7 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
       ],
       gateLine(d.expAttempts>200, `attempts > 200 (${d.expAttempts})`) +
       gateLine(true, `played ≥ 65% of games (this preview assumes a full healthy season)`) +
-      gateLine(d.ratingEdge>=1, `ratingEdge ≥ 1 — must grade out above league average himself (${d.ratingEdge.toFixed(1)})`));
+      gateLine(d.proBowlEligible, `proBowlEligible (production's real gate — playing time only, no rating bar)`));
 
     const apCard = card("All-Pro Score", d.allProScore.toFixed(2),
       [
@@ -10885,9 +10947,9 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
         `      = ${d.ratingEdge.toFixed(1)}×0.75 + max(0, ${d.expTd}−22)×0.55 + (${d.winProb.toFixed(2)}−0.5)×18 = ${d.allProScore.toFixed(2)}`,
         `All-Pro is no longer an independent per-QB roll -- exactly 1 First-Team and 1 Second-Team All-Pro are named league-wide, the two highest scores across the player and every simulated rival this season.`,
       ],
-      gateLine(d.proBowlGateOk, `must clear the Pro Bowl gate first`) +
+      gateLine(d.expAttempts>250, `attempts > 250 (${d.expAttempts})`) +
       gateLine(true, `played ≥ 80% of games (this preview assumes a full healthy season)`) +
-      gateLine(d.ratingEdge>=9, `ratingEdge ≥ 9 (${d.ratingEdge.toFixed(1)})`));
+      gateLine(d.allProEligible, `allProEligible (production's real gate — playing time only, no rating bar)`));
 
     const mvpCard = card("MVP Score", d.mvpScore.toFixed(1),
       [
@@ -11047,6 +11109,12 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
   function initAdminPanel(){
     const btn = document.getElementById("adminToggleBtn");
     if(!btn) return;
+    // Wave 7 (MASTER_REMEDIATION_SPEC.md task #9): "Hide Admin Calc behind a development flag or
+    // remove it from production navigation." import.meta.env.DEV is Vite's own dev/production flag
+    // -- true under `npm run dev`, statically false (and dead-code-eliminated) in `npm run build` --
+    // so the button is removed from the DOM entirely in a production build, not just disabled or
+    // hidden by CSS; the whole admin overlay (including the Admin Calc tab) is simply unreachable.
+    if(!import.meta.env.DEV){ btn.remove(); return; }
     btn.addEventListener("click", openAdminOverlay);
   }
 

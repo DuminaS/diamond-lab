@@ -1698,6 +1698,131 @@ the bulk of a rival's real playoff-relevant reputation. (2) No cap/guarantees mo
 (division/conference/championship implies it; a wildcard-and-out season does not, so an old row like
 that reads `false`) — exact for every row recorded going forward.
 
+### Wave 7 — Unified game, stat, and award calculations
+
+**Scope note.** Several of Section 4's named defects in this wave's territory were already fixed by
+earlier waves before this one started: placeholder-W-L award scores (Wave 2B's
+`reconcileWinLossFromGames`), no-ties/standings-sort (Wave 4), qbRings staleness (Wave 5), expansion
+trigger timing (Wave 3). This wave audited every remaining literal task against the current code and
+fixed the genuine gaps: the opponent-defense conflation, per-game TD/scoreboard disagreement, the
+Pro Bowl eligibility filter, bench-QB award-pool exclusion, and Admin Calc's obsolete/duplicated math
+and production exposure. Task #1's literal example API shape (`simulateGame({home:{...},
+away:{...}})`) was NOT adopted as a wholesale rewrite of `simulateGameScore`'s call sites — that
+would have meant touching every regular-season/playoff/Super Bowl call site's calling convention for
+a purely cosmetic shape change; instead, `simulateGameScore`/`simulateRegulationScore` gained a new,
+additive, backward-compatible parameter (`oppDefense`) that fixes the SUBSTANCE of task #1/#2 (each
+side's offense now genuinely resists against the other side's real defense) without an API rename.
+
+**Task #2, the confirmed "asymmetric inputs" defect.** `simulateRegulationScore`'s `defOverall`
+parameter was being used for TWO different things: correctly, as the opponent's own offense (for
+their own scoring), and — the bug — ALSO as "my resistance," meaning the player's own offense was
+being resisted by the OPPONENT'S OFFENSE grade instead of their defense. This dates to before Wave 5
+ever gave every team a real, persistent, mechanically-meaningful defense grade (`career.
+leagueTeamGrades[id].defense`) — before that, there was no OTHER number to use, so the opponent's
+offense doubled as a defense-resistance stand-in by necessity. New `opponentDefenseGrade(teamId)`
+(mirrors `opponentOffenseGrade`) reads that real persistent grade; `simulateRegulationScore` gained
+an `oppDefense` parameter (defaults to `defOverall` when omitted, so nothing already calling it
+silently breaks) that now supplies the resistance the PLAYER's own offense faces, leaving the
+OPPONENT's own resistance term (the already-calibrated 80/20 `offOverall`/`myDefense` blend — see
+`scoreForQuarter`'s own comment for the diagnostic sweep behind that specific split) untouched, since
+nothing in the audit or this wave's own re-reading found that blend itself defective. All 3 real
+`simulateGameScore` call sites (regular season, `stepConferenceBracket`'s playoff round, the Super
+Bowl) updated to pass `opponentDefenseGrade(oppId)`.
+
+**Task #3 / scenario #24, the confirmed "scoreboard and QB touchdowns disagree" defect.**
+`simulateRegularSeasonGames`'s per-game passing TD count (`gTd`) used to be rolled independently from
+`tdRate`, completely unrelated to how many touchdowns the scoreboard (`simulateGameScore`) actually
+produced that same game — a QB could show 3 passing TDs in a game the scoreboard recorded as a 9-6
+field-goal contest. `gTd`/`gRushTd` are now derived from the game's own real `scoreSim.myTds`,
+allocating a small (18%, gated on having a rush attempt that game), documented share to a QB rush —
+the SAME allocation rule `generateGameBoxScore` already used for a fabricated single-game line
+(Round-era convention), applied consistently here for the first time. `distributeAcrossGames`
+(season-total distribution onto specific tagged weeks for a backup/incumbent's real box score) was
+separately audited for the same "aggregate from games, don't redistribute independently" principle
+(task #4) and found already correct — it exact-sums back to the real total for att/yards/td/int; only
+`comp` is derived per-game from that game's own attempts share rather than exact-summed, a DELIBERATE
+existing tradeoff (documented in its own comment) that guarantees `comp<=att` every single game,
+which an independent exact-sum distribution could violate — left unchanged, not a defect.
+
+**Task #6, the confirmed Pro Bowl eligibility defect** (this wave's own `pro-bowl-eligibility.spec.js`
+— tracked as "Wave 7's job" since Round/Wave 2B — is now GREEN for the first time). The standard
+Pro Bowl slots (`ranked.slice(0, slots.perConf)`) took the top-scoring rows with NO `proBowlEligible`
+filter at all; only the single bonus slot ever checked it. Standard slots now come from the eligible
+pool only, sorted by score; the required explicit fallback fills any slot the eligible pool can't
+cover from the ineligible pool by score (a conference is never left with an empty seat just because
+too few QBs met the playing-time bar this season) — the bonus slot stays eligible-only, unchanged.
+
+**Task #7, bench/relief QB award-pool exclusion.** `resolveSeasonMVP`/`resolveSeasonAllProAndProBowl`
+only ever iterated `career.leagueRivals` (each team's current STARTER only) — a bench QB who took
+real relief snaps (a genuine season row, already correctly scored by `evaluateSeasonAwards` inside
+`simulatePlayerSeasonStats` regardless of roster role) was structurally invisible to MVP/Pro
+Bowl/All-Pro resolution, exactly the confirmed "their roster label alone must not exclude a
+qualifying played season" defect. Both functions now iterate the full `qbsById` registry — the same
+source `buildAllTimeLeaderboardRows` already uses for the identical reason (a played season must
+never be invisible because of roster role).
+
+**Tasks #8/#9, Admin Calc.** `computeMetricBreakdown()`'s `proBowlScore`/`allProScore`/`mvpScore` were
+already hand-copied formulas (kept manually "in sync" per its own comment — the exact
+duplication-risk task #8 names), but its eligibility gates (`proBowlGateOk`/`allProGateOk`) ALSO still
+required `ratingEdge>=1`/`>=9` on top of playing time — a stricter rule production explicitly removed
+(see `evaluateSeasonAwards`'s own comment: an earlier version's `ratingEdge` gate could empty the
+eligible pool entirely in a league-wide down year). The obsolete probabilistic "odds" model
+(`proBowlOdds`/`allProOdds`, a fabricated percentage chance) never matched how awards actually
+resolve at all — a real, comparative, fixed-slot/winner-take-all selection, never an independent
+per-QB coin flip. Fixed by calling `evaluateSeasonAwards` directly with this preview's own expected
+full-season numbers, removing the `*Odds`/`*GateOk` fields entirely and rendering the real
+`*Eligible` booleans instead. `initAdminPanel` now removes `#adminToggleBtn` from the DOM entirely
+when `import.meta.env.DEV` is false (Vite's own dev/production flag, statically evaluated and dead-
+code-eliminated at build time) — the whole admin overlay, Stat Calculator included, is unreachable
+in a production build; confirmed by the production bundle shrinking ~30KB after this change. The
+deeper duplication this wave deliberately did NOT touch: `computeMetricBreakdown()`'s
+comp/ypa/tdRate/intRate rate-coefficient block (STAT_BLEND/STAT_SENSITIVITY) is still a hand-copied
+mirror of the equivalent block inside `generateSeason()` — extracting that into one shared function
+was judged too risky for this wave (that block sits inside the single most complex, most heavily-
+referenced function in the file, with many downstream local-variable dependents); deferred to Wave
+9's own "incremental modularization" mandate, which is explicitly the wave meant to carry this kind
+of extraction, rather than doing a partial, risk-heavy one here under a different wave's focus.
+
+**Calibration.** TD-rate shift measured directly (8-season, 5-seed sweep, modern era): median season
+TD count 21→20, avg TD/game 1.288→1.151 (~11% down) after tying `gTd` to the real scoreboard instead
+of an independently-calibrated `tdRate` — an expected, accepted side effect of fixing "TDs generated
+independently of the scoreboard," not a new problem (rating/eligibility gates are playing-time- and
+rating-relative, not raw-TD-count gates, so award resolution is unaffected). Tie-rate re-verified
+after the `opponentDefenseGrade` change (6-seed, 15-season 1960s sweep): ~3.8% my-games / ~5.1%
+league-games, consistent with Wave 4's own ~4.9%/4.7% baseline — the resistance-calculation fix
+didn't meaningfully move the tie mechanism, though it DID shift exactly which seeds land a tie within
+a bounded test window (see the reseeded test below).
+
+**Verification.** 2 new regression tests: `scoreboard-and-qb-touchdowns-reconcile` (confirms, for
+every one of the player's own real games across 8 modern-era seasons, that `(td+rushTd)*7` — this
+engine scores a TD as exactly 7 points, no 2-point conversions modeled — never exceeds the team's own
+final score; verified against a deliberately-reverted copy of the old independent-tdRate code to
+confirm it actually catches the old defect) and `admin-calculator-calls-production-math` (confirms
+the old, removed `ratingEdge>=1` gate text never reappears and the real `proBowlEligible` production
+gate correctly PASSES for a deliberately worst-case min-10 build with a full season's attempts —
+exactly the scenario the old, stricter gate would have failed; also verified against a reverted copy
+of the old gate). This second test needs the dev-only Admin panel, so `playwright.config.js` gained a
+SECOND `webServer` entry (`vite dev` on port 5343) used ONLY by that one file via an explicit absolute
+URL — every other test in the suite is unchanged, still exercising the real production preview build
+on port 5342. Also reseeded `regular-season-era-can-produce-tie` (24680→97531): seed 24680's specific
+career now ends early under the new resistance calculation (an RNG-sequence-shift side effect, not a
+broken mechanism — confirmed via the tie-rate sweep above), landing zero player ties in its own
+career's total game count; 97531 reliably produces several within 15 seasons. Full suite (30
+files/tests) run 3 consecutive times: identical **30 pass / 0 fail** every time — this is the first
+wave where `pro-bowl-eligibility` is green; it is no longer "Wave 7's job," it's done. `npm run build`
+clean, `git diff --check` clean. Committed locally, **not pushed** — push requires separate explicit
+authorization, which "Wave 7" was not.
+
+**Known limitations, stated plainly**: (1) The `comp/ypa/tdRate/intRate` rate-coefficient duplication
+between `generateSeason()` and `computeMetricBreakdown()` remains (see above) — deferred to Wave 9.
+(2) `resolveOvertime`'s own OT-possession-winner coin flip still compares `offOverall`/`defOverall`
+(both sides' OFFENSE grades) rather than incorporating real defense grades — left unchanged since the
+audit's specific "asymmetric inputs" wording was about REGULATION scoring (`scoreForQuarter` calls),
+and OT is already a documented simplification (no possession-by-possession simulation) rather than a
+confirmed defect in Section 4's list. (3) `simulateGameScore`'s literal signature was not renamed to
+the spec's example `simulateGame({home,away})` object shape (see the scope note above) — every real
+call site was still updated to supply the new, correctly-sourced defense value.
+
 ### Round 33 — Playoff Tree follow-up fixes: Continue-button gating, full-tree preview, QB-link bug, Standings tab redesign
 
 User feedback (with screenshots) on Round 32's shipped work, four items:

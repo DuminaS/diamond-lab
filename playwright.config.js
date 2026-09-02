@@ -5,6 +5,14 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const PORT = 5342;
+// Wave 7 (MASTER_REMEDIATION_SPEC.md task #9): the Admin Calc panel is now gated behind
+// import.meta.env.DEV (removed from the DOM entirely in `vite preview`'s production build, per
+// this project's own testing norm of exercising the real user-facing build everywhere else). One
+// test (admin-calculator-calls-production-math.spec.js) genuinely needs to reach that dev-only UI
+// to verify it, so a second webServer runs `vite dev` on its own port -- every OTHER test still
+// targets the default `baseURL` (the production preview server) unchanged; only that one file
+// navigates to DEV_PORT explicitly via an absolute URL.
+const DEV_PORT = 5343;
 
 export default defineConfig({
   testDir: "./tests",
@@ -28,10 +36,18 @@ export default defineConfig({
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
   ],
-  webServer: {
-    command: `npx vite preview --port ${PORT} --strictPort`,
-    url: `http://localhost:${PORT}`,
-    reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
-  },
+  webServer: [
+    {
+      command: `npx vite preview --port ${PORT} --strictPort`,
+      url: `http://localhost:${PORT}`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
+    {
+      command: `npx vite --port ${DEV_PORT} --strictPort`,
+      url: `http://localhost:${DEV_PORT}`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
+  ],
 });
