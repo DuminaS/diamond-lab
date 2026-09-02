@@ -7,6 +7,13 @@ import { shuffle, pick, clamp, randInt, lerp, svgEscape, fmtPct, safeNum, fmtMon
 import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js";
 import { FOOTBALL_OVERALL_WEIGHTS as OVERALL_WEIGHTS, chooseDraftTeam, evaluateProspect } from "./sim/ratings.js";
 import {
+  KEY_MOMENT_BASE_TRIGGER_CHANCE,
+  KEY_MOMENT_SITUATION_FLAGS,
+  PLAY_CALLS,
+  executeKeyMomentQuality,
+  keyMomentCallScore,
+} from "./sim/keyMoments.js";
+import {
   DEVELOPMENT_PLAN_LIST,
   advanceDevelopmentSeason,
   applyOffseasonPlanResources,
@@ -3228,10 +3235,12 @@ import {
   //  - Clutch: effOverall already folds Clutch in at a flat 10% (OVERALL_WEIGHTS.CLU), same as
   //    every other attribute, all season long -- it doesn't capture that Clutch specifically is
   //    the "plays well under playoff pressure" trait. This adds a second, playoff-only bump for
-  //    it on top of that base weighting, on the same logic the Key Moment mini-game already uses
-  //    Clutch to gate (see keyMomentChanceFor) -- Clutch should matter more exactly when the
-  //    stakes are highest, not just at a flat rate across 17 regular-season games and a Super Bowl
-  //    alike.
+  //    it on top of that base weighting -- Clutch should matter more exactly when the stakes are
+  //    highest, not just at a flat rate across 17 regular-season games and a Super Bowl alike.
+  //    Balance Wave 3: the Key Moment mini-game used to ALSO gate on Clutch (whether the mini-game
+  //    even triggered at all) -- moved to leverage-only triggering (KEY_MOMENT_BASE_TRIGGER_CHANCE
+  //    x keyMomentScoreEligibility); Clutch's role there is now purely execution-variance once a
+  //    moment fires (see triggerKeyMoment's resolve()), matching what it already does right here.
   // ----- Round 4: team quality now BLENDS with the QB's own grade instead of just nudging it -----
   // Previously team quality was a small additive edge on top of the QB's own effOverall (out to
   // roughly +-10 points at the extremes) -- meaning an elite individual QB's own grade dominated
@@ -9090,6 +9099,22 @@ import {
         <div class="fo-row-sub">${qb1Line}${benchLine?` · ${benchLine}`:""}${career.isBackup ? " — you're competing for the starting job." : ""}</div>
       </div>`;
   }
+  // Balance Wave 3: a lightweight, visible tally of Key Moment decision quality across the whole
+  // career -- "track decision quality... use it for development" from the original brief. The
+  // development hook already exists (career.breakthroughMomentum, nudged per-decision in
+  // triggerKeyMoment's resolve()); this is the legible surface for it. Coach-trust/contract-value
+  // hooks off this same tally are deliberately not built yet -- see PROGRESS.md.
+  function keyMomentRecordRowHTML(){
+    const rec = career.keyMomentRecord;
+    if(!rec || (rec.good+rec.meh+rec.bad)===0) return "";
+    const total = rec.good+rec.meh+rec.bad;
+    const goodShare = rec.good/total;
+    const tag = goodShare>=0.7 ? "Ice in his veins" : goodShare>=0.45 ? "More right than wrong" : goodShare>=0.25 ? "Hit or miss" : "Rattled under pressure";
+    return `<div class="fo-row">
+        <div class="fo-row-head"><span class="fo-row-label">Key Moment Decisions</span><span class="fo-row-value tabular">${rec.good}-${rec.meh}-${rec.bad}</span></div>
+        <div class="fo-row-sub">${tag} (good-meh-bad reads across ${total} possession${total===1?"":"s"} that decided a playoff game). Right reads bank breakthrough momentum; wrong ones cost it.</div>
+      </div>`;
+  }
   function buildFrontOfficeWidgetHTML(){
     const schemeId = career.teamScheme ? career.teamScheme[career.teamId] : null;
     const scheme = SCHEMES.find(s=>s.id===schemeId);
@@ -9117,6 +9142,7 @@ import {
           <div class="fo-row-head"><span class="fo-row-label">Current Development Program</span><span class="fo-row-value tabular">${svgEscape(developmentPlan.label)}</span></div>
           <div class="fo-row-sub">${svgEscape(developmentPlan.summary)}</div>
         </div>
+        ${keyMomentRecordRowHTML()}
         <div class="fo-row">
           <div class="fo-row-head"><span class="fo-row-label">Career Outlook</span><span class="fo-row-value tabular">${durTag}</span></div>
           <div class="fo-row-sub">Durability ${build.DUR} — the body should hold up through roughly age ${ageCap}${yearsLeft>0 ? ` (about ${yearsLeft} more season${yearsLeft===1?"":"s"} at current age, injuries permitting)` : " — this could be the last one"}.</div>
@@ -9132,6 +9158,18 @@ import {
           <div class="fo-row-head"><span class="fo-row-label">Achievements</span><span class="fo-row-value tabular">${Object.values(career.achievements.unlocked).filter(Boolean).length} / ${ACHIEVEMENTS.length}</span></div>
         </div>` : ""}
       </div>`;
+  }
+  // Re-renders the Front Office widget in place wherever it's currently mounted -- used any time
+  // something it displays changes mid-season (a life event, a Key Moment resolving) rather than
+  // waiting for the whole season card to next re-render. outerHTML replaces the node itself, so the
+  // one internal link it wires up (Scheme tab) needs re-binding after every call.
+  function refreshFrontOfficeWidget(){
+    const foWidget = document.querySelector(".front-office-widget");
+    if(!foWidget) return;
+    foWidget.outerHTML = buildFrontOfficeWidgetHTML();
+    const content = document.getElementById("careerContent");
+    const schemeLink = content && content.querySelector("[data-goto-scheme]");
+    if(schemeLink) schemeLink.addEventListener("click", ()=> switchDashTab("scheme"));
   }
 
   /* Achievements tab: the full 30-achievement roster, earned ones shown gold with their blurb,
@@ -9439,27 +9477,10 @@ import {
   }
 
   /* ================= Key Moment mini-game ================= */
-  // A play-call archetype that directly counters one opponent tendency each -- one clean 1:1
-  // mapping keeps "was that the right read?" unambiguous, while still requiring the player to
-  // actually recognize which of 8 tendencies they're facing from the clue given.
-  const PLAY_CALLS = [
-    { id:"spreadthrow", label:"Spread them out and throw", countersTendencyId:"runheavy",
-      why:"A run-committed front leaves light coverage behind it — make them defend the whole field through the air." },
-    { id:"quickgame", label:"Quick game — get the ball out fast", countersTendencyId:"blitzheavy",
-      why:"Beat extra rushers before they arrive with a fast, pre-determined read." },
-    { id:"attackmiddle", label:"Attack the middle of the field", countersTendencyId:"lockdowncorners",
-      why:"Their corners are the strength — work the throws that never go near them." },
-    { id:"controlclock", label:"Keep it on the ground, control the clock", countersTendencyId:"preventlate",
-      why:"Against a shell that's conceding everything underneath, don't force a shot you don't need." },
-    { id:"checkdowns", label:"Play it safe — check downs only", countersTendencyId:"turnoverhunting",
-      why:"Ball-hawking safeties feed on risk — take what's guaranteed and live for the next down." },
-    { id:"playaction", label:"Play-action to slow the rush", countersTendencyId:"physicalfront",
-      why:"A run fake buys a beat of hesitation from a front that's pinning its ears back." },
-    { id:"horizontalstretch", label:"Stretch them horizontally with quick outs", countersTendencyId:"disciplinedzone",
-      why:"A patient zone won't bite on a double move — make it defend sideline to sideline instead." },
-    { id:"protectball", label:"Play conservative, protect the ball", countersTendencyId:"suddenchange",
-      why:"Give this defense a short field off a turnover and they'll make it count — don't hand it to them." },
-  ];
+  // Balance Wave 3 (difficulty/balance remediation brief item 2): PLAY_CALLS, the situational
+  // scoring model, and the leverage-only trigger constant all live in src/sim/keyMoments.js now
+  // (pure, importable, shared with headless tests) -- see that module's own header comment for the
+  // full "why" behind replacing the old permanent 1:1 tendency-to-call answer key.
   // "Hard" difficulty deliberately withholds the tendency's own label/blurb and gives only an
   // indirect, observational clue instead -- genuine deduction rather than just re-reading the
   // scouting-report line already shown on the round card.
@@ -9483,6 +9504,14 @@ import {
   // km_h2 read as if overtime were already happening) even though the moment can only ever be
   // entering the fourth when it fires; both were rewritten below to match what's actually
   // happening on the field.
+  // Balance Wave 3: `flags` are pulled from src/sim/keyMoments.js's KEY_MOMENT_SITUATION_FLAGS by
+  // id -- one shared source of truth for the structured, machine-readable half of each situation
+  // (protectLead/needScore/explosiveNeeded/shortYardage/longYardage/mustConvert/lateAndClose/
+  // ballSecurity), which is what keyMomentCallScore actually reasons about. The prose below is
+  // what the player reads; the imported flags are the ground truth it describes, and are what
+  // makes the same tendency counter genuinely right in one situation and wrong in another (see
+  // that module's own comment for the worked "controlclock vs. a trailing, needScore situation"
+  // example).
   const KEY_MOMENT_SITUATIONS = [
     { id:"km_e1", difficulty:"easy", text:"1st-and-10 to open the fourth quarter. Plenty of clock left to find something that works." },
     { id:"km_e2", difficulty:"easy", text:"2nd-and-6 early in the fourth, comfortably up two scores. No need to force anything — just keep the chains moving." },
@@ -9502,7 +9531,7 @@ import {
     { id:"km_h4", difficulty:"hard", text:"2nd-and-19 in the fourth after back-to-back penalties, no timeouts left, trailing late." },
     { id:"km_h5", difficulty:"hard", text:"3rd-and-1 at your own goal line in the fourth, protecting a one-point lead with 90 seconds on the clock." },
     { id:"km_h6", difficulty:"hard", text:"4th-and-1 to seal it in the fourth, up three, under a minute to go." },
-  ];
+  ].map(s=> ({ ...s, flags: KEY_MOMENT_SITUATION_FLAGS[s.id] || [] }));
   // Higher-stakes rounds skew the situation pool toward the harder tiers -- the deeper the run,
   // the less hand-holding the mini-game gives.
   const ROUND_DIFFICULTY_WEIGHTS = {
@@ -9525,24 +9554,42 @@ import {
     if(difficulty==="medium") return `The scouting report keeps coming back to the same read: ${svgEscape(tendency.blurb)}`;
     return `Nobody in the box is certain yet, but the tape from earlier tonight hinted at it: ${svgEscape(TENDENCY_SUBTLE_CLUES[tendency.id] || tendency.blurb)}`;
   }
-  // Trigger odds scale with the build's era-effective Clutch rating -- a low-Clutch build almost
-  // never sees one, an elite-Clutch build sees one close to half the time, per eligible round.
-  function keyMomentChanceFor(clu){ return clamp(0.15 + (clu-50)*0.006, 0.05, 0.55); }
-  // Four options, three distinct outcome tiers: the actual counter-call (Good — full swing in the
-  // player's favor), one other call tagged Meh (a defensible-but-not-optimal read — a much smaller,
-  // capped swing against the player, sometimes none at all), and two tagged Bad (the wrong read,
-  // full swing to the opponent). Every option carries its tier so applyKeyMomentSwing/resolve()
-  // downstream never has to re-derive it. This used to be a flat "1 right, 3 identically wrong"
-  // choice -- which meant three of the four options were mechanically indistinguishable and picking
-  // wrong always cost the maximum.
-  function keyMomentOptionsFor(correctCall){
-    const others = PLAY_CALLS.filter(c=>c.id!==correctCall.id).sort(()=>Math.random()-0.5).slice(0,3);
-    const mehIdx = Math.floor(Math.random()*others.length);
-    const tagged = [
-      { ...correctCall, quality:"good" },
-      ...others.map((c,i)=> ({ ...c, quality: i===mehIdx ? "meh" : "bad" })),
-    ];
-    return tagged.sort(()=>Math.random()-0.5);
+  // Four options, three distinct outcome tiers, RANKED by the shared keyMomentCallScore for THIS
+  // exact tendency+situation pairing rather than one fixed call always being "good." The true
+  // best-EV call (across all 8, not just the 4 shown) is always included so there's always a
+  // genuinely correct answer available to reward real reasoning -- it just isn't the same call
+  // every time the same tendency shows up. Ties (a real possibility once situational flags are
+  // empty, e.g. km_e1/km_e4 above) break by whichever the fresh shuffle happens to place first,
+  // matching how a real coordinator would treat two genuinely equivalent calls.
+  function keyMomentOptionsFor(tendency, situation){
+    const ranked = [...PLAY_CALLS].sort((a,b)=> keyMomentCallScore(b,tendency.id,situation.flags) - keyMomentCallScore(a,tendency.id,situation.flags));
+    const bestCall = ranked[0];
+    const others = PLAY_CALLS.filter(c=>c.id!==bestCall.id).sort(()=>Math.random()-0.5).slice(0,3);
+    const presented = shuffle([bestCall, ...others]);
+    const scored = presented.map(c=> ({ call:c, score: keyMomentCallScore(c,tendency.id,situation.flags) }))
+      .sort((a,b)=> b.score-a.score);
+    const mehId = scored[1] ? scored[1].call.id : null;
+    const goodId = scored[0].call.id;
+    return presented.map(c=> ({ ...c, quality: c.id===goodId ? "good" : c.id===mehId ? "meh" : "bad" }));
+  }
+  // Balance Wave 3: composes a per-moment explanation instead of always reprinting the correct
+  // call's static tactical blurb -- when the situation itself (not just the tendency) is what made
+  // this call best, say so explicitly, including naming the tempting "textbook" tendency-counter
+  // when it would actually have been wrong here. This is the teaching moment that makes the fix
+  // legible to the player, not just a different number under the hood.
+  function describeKeyMomentReasoning(bestCall, tendency, situation){
+    const textbookCounter = PLAY_CALLS.find(c=>c.countersTendencyId===tendency.id);
+    const situationalHitsForBest = (bestCall.goodWhen||[]).filter(f=>situation.flags.includes(f));
+    if(bestCall.countersTendencyId===tendency.id && (!textbookCounter || textbookCounter.id===bestCall.id)){
+      return bestCall.why;
+    }
+    if(situationalHitsForBest.length && textbookCounter && textbookCounter.id!==bestCall.id){
+      const textbookBadHits = (textbookCounter.badWhen||[]).filter(f=>situation.flags.includes(f));
+      if(textbookBadHits.length){
+        return `${bestCall.why} The textbook answer to that look is normally "${textbookCounter.label}," but not with this much on the line right now — that call would have played right into what the moment actually demanded.`;
+      }
+    }
+    return bestCall.why;
   }
   // Real score swing: a correct read always scores FOR the player, a wrong read always scores
   // for the opponent -- full stop, no safety net. This CAN and regularly will flip who actually
@@ -9658,6 +9705,11 @@ import {
     round.won = round.myScore > round.oppScore;
     return { dMy, dOpp, scoreType, otNote };
   }
+  // Balance Wave 3: Clutch's role in the Key Moment mini-game moves from gating PARTICIPATION
+  // (removed -- see KEY_MOMENT_BASE_TRIGGER_CHANCE) to gating EXECUTION once a moment fires, via
+  // the shared executeKeyMomentQuality (src/sim/keyMoments.js). The "quality" a choice earns
+  // (good/meh/bad, from keyMomentOptionsFor's tendency+situation ranking) is a statement about the
+  // DECISION; the executed quality is what actually happens on the field this time.
   function triggerKeyMoment(season, round, roundIdx, onResolved, stillCurrent){
     // stillCurrent (optional) guards against a reveal that was superseded by a new season's
     // render between the moment this was scheduled and the moment it actually fires -- without
@@ -9665,8 +9717,8 @@ import {
     if(stillCurrent && !stillCurrent()) return;
     const situation = pickKeyMomentSituation(round.round);
     const tendency = round.oppTendency;
-    const correctCall = PLAY_CALLS.find(c=>c.countersTendencyId===tendency.id) || PLAY_CALLS[0];
-    const options = keyMomentOptionsFor(correctCall);
+    const options = keyMomentOptionsFor(tendency, situation);
+    const bestCall = options.find(o=>o.quality==="good") || options[0];
     const overlay = document.getElementById("keyMomentOverlay");
     if(!overlay){ onResolved(); return; }
     function renderCard(){
@@ -9684,39 +9736,51 @@ import {
     }
     function resolve(chosenId){
       const chosenOption = options.find(o=>o.id===chosenId) || {};
-      const quality = chosenOption.quality || (chosenId===correctCall.id ? "good" : "bad");
+      const quality = chosenOption.quality || "bad";
+      const clu = eraEffective(season.age, season.decade).CLU;
+      const executedQuality = executeKeyMomentQuality(quality, clu);
+      const slipped = quality==="good" && executedQuality==="meh";
+      const saved = quality==="bad" && executedQuality==="meh";
       const wonBeforeSwing = round.won;
-      const swing = applyKeyMomentSwing(round, quality);
+      const swing = applyKeyMomentSwing(round, executedQuality);
       const flippedResult = round.won !== wonBeforeSwing;
-      const repDelta = quality==="good" ? randInt(2,5) : quality==="meh" ? randInt(-2,1) : -randInt(2,5);
+      const repDelta = executedQuality==="good" ? randInt(2,5) : executedQuality==="meh" ? randInt(-2,1) : -randInt(2,5);
       career.reputation = clamp(career.reputation + repDelta, 0, 100);
       // Key Moments are the player's direct execution input into development.
       // They happen after the season's ordinary development roll, so they bank
       // momentum for a future earned breakthrough rather than rewriting ratings
-      // in the middle of a playoff game.
+      // in the middle of a playoff game. Banked off the DECISION's own quality, not the executed
+      // one -- recognizing the right read is the skill this is meant to reward, even on the rare
+      // occasion the execution itself (Clutch's own domain) doesn't fully cash it in.
       const requestedDevelopmentDelta = quality==="good" ? 4 : quality==="bad" ? -4 : 0;
       const momentumBefore = career.breakthroughMomentum || 0;
       career.breakthroughMomentum = clamp(momentumBefore + requestedDevelopmentDelta, 0, 100);
       const developmentDelta = career.breakthroughMomentum - momentumBefore;
       season.keyMomentDevelopmentDelta = Number(season.keyMomentDevelopmentDelta || 0) + developmentDelta;
-      const verbPhrase = quality==="good" ? "Delivered" : quality==="meh" ? "Settled for a lesser read" : "Came up short";
+      career.keyMomentRecord = career.keyMomentRecord || { good:0, meh:0, bad:0 };
+      career.keyMomentRecord[quality] = (career.keyMomentRecord[quality]||0) + 1;
+      const verbPhrase = executedQuality==="good" ? "Delivered" : executedQuality==="meh" ? "Settled for a lesser read" : "Came up short";
       career.transactions.push(`${season.year}: ${verbPhrase} in a key moment vs. the ${round.opponent} (${roundDisplayLabel(round.round, season.year)}).`);
       overlay.querySelectorAll(".km-option").forEach(btn=>{
         btn.disabled = true;
-        if(btn.dataset.call===correctCall.id) btn.classList.add("correct");
+        if(btn.dataset.call===bestCall.id) btn.classList.add("correct");
         else if(btn.dataset.call===chosenId && quality==="meh") btn.classList.add("meh");
         else if(btn.dataset.call===chosenId) btn.classList.add("wrong");
       });
       const outcomeEl = document.createElement("div");
-      outcomeEl.className = "km-outcome " + (quality==="good" ? "good" : quality==="meh" ? "meh" : "bad");
-      outcomeEl.innerHTML = quality==="good"
+      outcomeEl.className = "km-outcome " + (executedQuality==="good" ? "good" : executedQuality==="meh" ? "meh" : "bad");
+      outcomeEl.innerHTML = slipped
+        ? `Right read — but it didn't come out clean under the pressure. The defense makes just enough to hold it below what it should've been.`
+        : saved
+        ? `Wrong read — but he made something happen anyway. Pure talent bailing out a bad call.`
+        : quality==="good"
         ? `Right read. The play works exactly as drawn up.`
         : quality==="meh"
         ? `Not the sharpest read — it doesn't blow up on you, but it doesn't answer the defense either.`
         : `Wrong read. The defense was sitting on it.`;
       const whyEl = document.createElement("div");
       whyEl.className = "km-why";
-      whyEl.textContent = correctCall.why;
+      whyEl.textContent = describeKeyMomentReasoning(bestCall, tendency, situation);
       const effectEl = document.createElement("div");
       effectEl.className = "km-effect";
       const scoreBit = swing.dMy ? `Your score ${fmtDelta(swing.dMy)}${swing.scoreType?` (${swing.scoreType})`:""}` : (swing.dOpp ? `Their score ${fmtDelta(swing.dOpp)}${swing.scoreType?` (${swing.scoreType})`:""}` : "No score change — the margin was already too tight to move.");
@@ -9742,6 +9806,7 @@ import {
         if(finalEl) finalEl.textContent = `${round.myScore}-${round.oppScore}`;
         const attributesPanel = document.getElementById("tabpanel-attributes");
         if(attributesPanel) attributesPanel.innerHTML = buildAttributesTabHTML(season);
+        refreshFrontOfficeWidget(); // reflects the just-updated career.keyMomentRecord immediately
         onResolved();
       });
       const card = overlay.querySelector(".km-card");
@@ -9796,8 +9861,7 @@ import {
     const actions = document.getElementById("seasonActions");
     const rounds = season.playoffs.rounds;
     rounds.forEach(r=>{ r._revealedCount = 0; r._keyMomentChecked = false; });
-    const clu = eraEffective(season.age, season.decade).CLU;
-    const baseChance = keyMomentChanceFor(clu);
+    const baseChance = KEY_MOMENT_BASE_TRIGGER_CHANCE;
     function stillCurrent(){ return myToken === _playoffRevealToken; }
 
     function quarterLabel(q){ return typeof q.q==="number" ? "Q"+q.q : q.q; }
@@ -10001,15 +10065,7 @@ import {
     if(badgesPanel) badgesPanel.innerHTML = buildAchievementsTabHTML();
     const badgeRow = document.getElementById("badgeRow");
     if(badgeRow) badgeRow.innerHTML = season.awards.map(a=>`<span class="badge ${/Champion$/.test(a)||a==="MVP"?"gold":"good"}">${a}</span>`).join("");
-    const foWidget = document.querySelector(".front-office-widget");
-    if(foWidget){
-      foWidget.outerHTML = buildFrontOfficeWidgetHTML();
-      // outerHTML replaced the node itself -- re-wire the "See details" link to the Scheme tab,
-      // same as the one built into the initial season-card render.
-      const content = document.getElementById("careerContent");
-      const schemeLink = content && content.querySelector("[data-goto-scheme]");
-      if(schemeLink) schemeLink.addEventListener("click", ()=> switchDashTab("scheme"));
-    }
+    refreshFrontOfficeWidget();
     const trendsPanel = document.getElementById("tabpanel-trends");
     if(trendsPanel){ trendsPanel.innerHTML = buildTrendsTabHTML(); renderTrendsSparkline(); }
     const logPanel = document.getElementById("tabpanel-log");

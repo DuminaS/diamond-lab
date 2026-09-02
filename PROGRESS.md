@@ -254,6 +254,87 @@ availability redesign, win-above-expectation award scoring, and the declarative 
 remain entirely unstarted. The rare 1960s schedule/standings mismatch found above is a new, separate,
 documented-but-unfixed finding, not part of the original balance brief.
 
+## 2026-09-02 — Balance implementation Wave 3: contextual Key Moment decisions, leverage-only triggering
+
+Scope: item 2 of the "Next balance waves" list -- "Contextual regular-season and playoff decision
+system; remove permanent one-answer tendency map." Implements the CORE fix (the permanent 1:1
+tendency-to-play-call answer key, and Clutch gating participation instead of execution) with real
+test coverage. Does NOT implement the full original brief's much larger ask for this area -- see
+"Not done this wave" below, stated plainly rather than implied as complete.
+
+### What shipped
+
+- New pure module `src/sim/keyMoments.js` (`PLAY_CALLS`, `KEY_MOMENT_SITUATION_FLAGS`,
+  `keyMomentCallScore`, `rankKeyMomentCalls`, `executeKeyMomentQuality`,
+  `KEY_MOMENT_BASE_TRIGGER_CHANCE`) -- same "shared, not duplicated" pattern as `ratings.js`/
+  `development.js`. `src/main.js`'s `KEY_MOMENT_SITUATIONS` now pulls its structured `flags` from
+  this module by id, so the prose (main.js) and the ground truth it describes (keyMoments.js) can't
+  drift apart.
+- **The permanent answer key is gone.** Each of the 8 play calls still has a real tendency it
+  counters (+2 EV), but now also carries `goodWhen`/`badWhen` situational-flag lists
+  (protectLead/needScore/explosiveNeeded/shortYardage/longYardage/mustConvert/lateAndClose/
+  ballSecurity, each worth +/-1.5 EV) that can outweigh the tendency bonus entirely. Verified via a
+  144-combination sweep (8 tendencies x 18 situations): the textbook tendency counter is no longer
+  best in 47.9% of combinations. The exact reported defect -- "'control the clock' marked correct
+  against prevent defense even when trailing late and needing a touchdown" -- is fixed and directly
+  regression-tested: controlclock now scores -1 (was the guaranteed answer) against
+  preventlate+km_h3 (needScore/mustConvert/lateAndClose), while quickgame (+3) is now genuinely
+  best. The best-EV call among the 8 is still always one of the 4 presented options, so there's
+  always a real correct answer to reward reasoning -- it just isn't the same call every time the
+  same tendency shows up anymore.
+- **Clutch moved from gating participation to gating execution.** The old
+  `clamp(0.15+(clu-50)*0.006, 0.05, 0.55)` trigger chance (a low-Clutch build almost never got a
+  Key Moment at all) is replaced by one flat, leverage-only constant
+  (`KEY_MOMENT_BASE_TRIGGER_CHANCE=0.28`), multiplied only by the pre-existing, unchanged
+  score-margin eligibility gate. Clutch's new role is `executeKeyMomentQuality`: a low-Clutch build
+  can occasionally slip a genuinely correct read down to a "meh" execution under pressure (3-30%,
+  scaling with Clutch), and a high-Clutch build can occasionally save a genuinely bad read up to
+  "meh" through sheer talent (0-20%). "Meh" itself is never pushed to "good" or "bad" -- it stays
+  the designed-neutral, capped tier. The decision quality banked toward `breakthroughMomentum`
+  (Wave 2) is the DECISION's quality, not the executed one -- recognizing the right read is the
+  skill this rewards, even on the rare occasion Clutch itself doesn't fully cash it in.
+- `describeKeyMomentReasoning` composes a per-moment "why," including explicitly naming the
+  tempting textbook counter when the situation is what overrode it -- a teaching moment, not just a
+  different number under the hood.
+- `career.keyMomentRecord` (`{good,meh,bad}`) tallies decision quality across the whole career --
+  "track decision quality... use it for development" from the original brief. Surfaced as a new
+  Front Office widget row (`keyMomentRecordRowHTML`), refreshed live the instant a Key Moment
+  resolves via a new `refreshFrontOfficeWidget()` helper (extracted from an existing inline call
+  site, now reused by both). Coach-trust/contract-value hooks off this same tally are explicitly
+  NOT built yet.
+
+### Verification
+
+- `tests/balance/key-moments.node.mjs` (new, 6 tests): the exact reported defect is fixed; a
+  substantial (>=25%, actual 47.9%) share of tendency+situation combinations override the textbook
+  answer; every combination produces a usable ranking; execution variance moves the right direction
+  at Clutch extremes and stays within its documented bounds across the full 0-100 range; the
+  trigger chance is a flat constant.
+- `tests/regression/key-moment-mini-game-resolves.spec.js` (new): real end-to-end coverage since
+  Key Moments are OFF by default and so weren't exercised by any of this project's other seeded-
+  career tests at all before this. Walks a real career quarter-by-quarter through playoff rounds
+  (seed chosen via a disposable sweep to reliably trigger within a few seasons, not to force one)
+  with the beta toggle enabled, confirms the overlay renders 4 distinct real options, resolves
+  correctly (exactly one option marked "correct," a real why/effect line), the Front Office widget
+  reflects the updated tally immediately, and the tally survives to the next real save checkpoint.
+  Found and fixed one real integration gap while building this test: the Front Office widget wasn't
+  refreshed in place after a Key Moment resolved (only the Attributes tab was) -- would have shown
+  a stale decision tally until the next season's full re-render.
+- `npm test`: 14/14 balance tests (8 prior + 6 new), production build clean, 38/38 Playwright (37
+  prior + 1 new).
+
+### Not done this wave (stated plainly)
+
+The original brief's full vision for this area is much larger than what shipped: a per-play
+breakdown of success/explosive-play/turnover/sack-injury risk and clock consumption (this wave adds
+situational fit, not a full risk model); a "predictability penalty" for repeating the same call; an
+audible/preparation resource; regular-season interactive key drives (today's regular season remains
+fully auto-simulated -- adding manual per-game decision points is a new UI surface, not a rules
+change, and was judged too large to fold into this wave); and coach-trust/contract-value hooks off
+`career.keyMomentRecord`. Contracts/cap pressure, the coordinator carousel, wear-affects-availability,
+win-above-expectation award scoring, and the declarative achievement ledger (items 3-5 of the "Next
+balance waves" list) remain entirely unstarted.
+
 ## Testing methodology (established pattern, reuse every round)
 - jsdom in `/tmp/gtest`, debug hooks (`window.__debug`) injected only into throwaway copies (`index.debugN.html`), never the real file. Latest debug build: `index.debug24.html` (Round 4, item 3).
 - `grep -c "__debug" index.html` must return 0 on the real file before every publish.

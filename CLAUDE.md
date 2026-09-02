@@ -6,21 +6,24 @@ when you need the detailed "why" behind a specific mechanic, formula, or bug fix
 
 ## Current local status — 2026-09-02
 
-The remediation waves and Android verification are complete. Balance implementation Wave 1 (honest
-Combine-vs-Football-OVR ratings, draft order tied to team quality, retuned development, dynasty-
-feedback removal) and Wave 2 (performance-over-expectation development, a player-chosen offseason
-program, team chemistry, and now AI/rival parity on that same performance/earned-breakthrough
-mechanic) are implemented locally; read the newest sections at the top of `PROGRESS.md` before
-changing career difficulty or development math. Rating and development math has begun moving out of
-the IIFE into pure production modules under `src/sim/`. Run `npm run balance:audit` for the seeded
-distribution report and `npm test` for the balance guards, production build, and full browser suite.
-Do not restore the old QB-to-all-five-team-grades feedback or the self-amplifying breakout/devSpeed
-loop.
+The remediation waves and Android verification are complete. Balance implementation Waves 1-3 are
+implemented locally: Wave 1 (honest Combine-vs-Football-OVR ratings, draft order tied to team
+quality, retuned development, dynasty-feedback removal), Wave 2 (performance-over-expectation
+development, a player-chosen offseason program, team chemistry, AI/rival parity on that same
+mechanic), and Wave 3 (the Key Moment mini-game's permanent 1:1 tendency-to-play-call answer key is
+gone -- replaced by a contextual EV model in `src/sim/keyMoments.js`; Clutch now gates execution, not
+whether the mini-game triggers at all). Read the newest sections at the top of `PROGRESS.md` before
+changing career difficulty, development math, or the Key Moment decision model. Rating/development/
+Key-Moment math has begun moving out of the IIFE into pure production modules under `src/sim/`. Run
+`npm run balance:audit` for the seeded distribution report and `npm test` for the balance guards,
+production build, and full browser suite. Do not restore the old QB-to-all-five-team-grades feedback,
+the self-amplifying breakout/devSpeed loop, or a fixed tendency-to-play-call answer key.
 
 **Known, documented, NOT yet fixed**: a rare (~2/8 seeds in one sweep) pre-existing bug somewhere in
 1960s-era schedule/standings reconciliation can lose exactly one recorded game for one team in one
-season (see the "Wave 2 continued" PROGRESS.md entry for the exact repro). Unrelated to the balance
-work; a dedicated future session should investigate it directly rather than reseeding around it again.
+season (see the Wave 2 continuation's PROGRESS.md entry for the exact repro). Unrelated to the
+balance work; a dedicated future session should investigate it directly rather than reseeding around
+it again.
 
 ## What this is
 
