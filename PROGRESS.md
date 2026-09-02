@@ -1253,6 +1253,107 @@ a silently skipped requirement. Full suite (16 files / 17 tests) run 3 consecuti
 Wave 2A, still passes. `npm run build` clean, `git diff --check` clean. Committed locally, **not
 pushed** — push requires separate explicit authorization, which "start Wave 2B" was not.
 
+### Wave 3 — Living league during user absence; AI availability
+
+Fixes the defect the whole remediation effort keeps circling back to from a different angle each
+wave: `renderSuspensionYear`/`renderInjuryLeaveYear` used to just decrement a counter and call
+`nextSeason()` directly -- `advanceCareer()` returned before `generateSeason()` was ever reached for
+a suspended/injured year, so NOTHING else in the league moved for that calendar year at all: no
+rival aged, no new season was recorded for anyone, no team's grade drifted, no expansion franchise
+starting that year got initialized, no awards or postseason happened for anyone. A multi-season
+absence silently froze the entire simulated world around the player.
+
+**`simulateLeagueYearWithoutUser(reason)`, the required new function, reuses `generateSeason()`
+itself rather than a parallel engine.** Forcing the user's own missed-games count
+(`career._suspensionMissedGames`/`_injuryMissedGames`) to the full season length makes
+`generateSeason()`'s EXISTING "a generic backup covers the missed games, team record and personal
+record can differ" machinery produce exactly the right shape (zero personal games, a real team
+record, a real -- if unwatched -- playoff run) using the exact same schedules/standings/awards/
+postseason/contracts/development/mobility/team-drift/history/expansion-catch-up code every normal
+season already runs. There is no second engine to keep in sync, and `renderSuspensionYear`/
+`renderInjuryLeaveYear` each call it exactly once, right where the counter decrements, before
+rendering their own interstitial.
+
+**The postseason, if the phantom team makes it (or even if it doesn't), is auto-resolved with no
+interactive reveal** (`autoResolveAbsencePlayoffRun`) -- nobody is watching a season card during an
+absence, so there's nothing to pace a reveal against, and no Key Moment mini-game (a player skill
+check) can fire. **A real bug this exposed**: when the phantom team misses the playoffs entirely,
+`resolvePlayoffs`'s own `mySeedIdx===-1` branch calls `tryFinalizeLeaguePlayoffBracket` immediately
+-- but that only finalizes once `bd.myChampionId` is already known, and "my" conference's flat
+bracket normally only steps forward via the player's own "Simulate Next Round" click, which never
+happens with no season card rendered at all. Fixed by flat-resolving "my" conference directly
+(`stepBracketConferenceOnce(bd, season, "my")`) whenever the phantom team didn't make the playoffs,
+with a safety-net pass over "other" regardless of which branch ran, before finalizing.
+
+**Any ring the phantom team wins is a team fact, never a personal one.** A NEW,
+`finalizeAbsenceSeasonPostseason` — deliberately NOT `finalizePlayoffOutcome` — records
+`playoffs.wonRing`/`ringLabel`/`season.awards` (so the season's own record and the team's
+permanent history correctly reflect a title won without the player) but never credits
+`career.totals.rings`, reputation, GM relationship, fan support, league popularity, or a "won the
+Super Bowl" transaction -- the user did not play a single snap, so none of that personal credit
+applies. A documented, deliberate trade-off: the phantom team's playoff-round offense still uses the
+player's own real `effOverall` (unavoidable without threading a parameter through dozens of
+`generateSeason()`'s internal formulas for a rare edge case -- a fully-absent player's team making a
+real playoff run at all requires their generic-backup-driven regular season to be good enough in the
+first place), so the very rare case of an absent player's team making a deep playoff run is
+cosmetically influenced by a skill rating nobody actually got to use that year.
+
+**Expansion catch-up** (required design #4): `spawnNewFranchiseRivals` used to gate on an EXACT
+`t.start===year` match -- if the calendar ever advanced across a franchise's founding year without
+calling this for every intermediate year individually, that team would never get a starter,
+permanently. Replaced with an idempotent catch-up: any team already born (`t.start<=year`) that
+still has no starter gets one, regardless of whether this is its exact founding year or a later
+catch-up. Kept as defense-in-depth even though `simulateLeagueYearWithoutUser` now calls
+`generateSeason()` (and therefore this) once per individual year even during an absence, which
+already makes the exact-equality bug far less reachable going forward.
+
+**AI availability, real reasons instead of an anonymous roll.** `simulatePlayerSeasonStats`'s
+missed-games roll used to have no reason attached anywhere ("AI injuries are represented only as
+anonymous random missed games... no persistent injury type... or suspension state" -- confirmed
+defect). Now rolls a real, distinct reason when it fires (injury, ~88% of the time, reusing the
+exact `INJURY_TYPES` table the player's own injury system already uses, so an AI QB's injury reads
+as the same kind of thing the user's own could be; suspension, ~12%, using neutral labels rather
+than a fabricated narrative incident -- Section 12 of the spec explicitly flags "should an AI
+suspension use narrative incidents or neutral labels" as a product decision needing user
+confirmation, not an engineering detail to decide silently; revisit if the user wants full
+narrative incidents for AI suspensions too) and stores it on `entity.availability` -- a single-
+season-scoped snapshot (reason/label/gamesMissed/year), matching how the missed-games count itself
+was already single-season-scoped before this wave. Visible on two surfaces per the exit criterion:
+the rival's own profile overlay (a new `availabilityLine`), and `career.leagueNewsLog` (a new
+"Starter Injured"/"Starter Suspended" entry, scoped to real QB1 starters only -- bench relief
+absences aren't pushed, to avoid flooding the log with noise a real front office wouldn't announce).
+
+**QB2→QB3 relief fallback** (required design #7): "QB2 receives exact relief weeks; QB3 receives
+them if QB2 is also unavailable." Before this wave, an unavailable/retired QB2 meant a starter's
+missed games went to NOBODY -- QB3 was never considered as a fallback target for relief snaps. Fixed
+in `simulateRivalSeasons`: `reliefTarget = qb2 || qb3`.
+
+**A real test-harness bug found and fixed while building this wave's own coverage** (not a
+production bug): `careerFlow.mjs`'s `ensureBracketFinalized` helper only ever clicked
+`#playoffTreeSimulateBtn` (the OTHER conference's flat-resolution button) while waiting for Continue
+to unlock -- it never clicked `#pqSimEnd-N` (the phantom/real team's OWN pending playoff round, when
+they made the playoffs that season). Any seeded run where the player's build happened to make the
+playoffs (not rare) hung this helper indefinitely, which is exactly why `suspension-freezes-
+league.spec.js` (unseeded, per its own long-standing note) was intermittently flaky even before this
+wave touched any of its own logic -- confirmed by reproducing the exact hang with a diagnostic
+script showing a real, active `#pqSimEnd-0` sitting there unclicked. Fixed by teaching
+`ensureBracketFinalized` to advance the player's own pending round the same way
+`advanceOneSeason`'s `walkToDecisionPoint` already does. Re-ran `suspension-freezes-league.spec.js`
+10 consecutive times after the fix: 10/10 passed (previously routinely 1-2 failures per 10 runs).
+
+**Verification.** 3 new regression tests: `two-year-user-absence-advances-entire-league` (Section 8
+scenario #11's exact name -- confirms a real rival ages exactly 2 years, gains two real season rows,
+the player's own team gains two real team-history rows, and both frozen years crown a real
+champion), `expansion-catchup-initializes-missed-start-year` (Section 8 scenario #12 -- forces the
+exact "already-founded team with no starter" shape a calendar-skip would leave and confirms the
+very next league year repairs it), `ai-injury-status-visible-on-profile-and-history` (sweeps seasons
+until a real starter's availability roll fires, confirms both surfaces). Full suite (19 files/tests)
+run 3 consecutive times: identical 19 pass / 1 fail every time -- `pro-bowl-eligibility` (Wave 7's
+job) still correctly fails, unchanged by this wave; `suspension-freezes-league` now correctly PASSES
+(the harness fix above resolved its own flakiness, and the underlying freeze it was written to catch
+is now actually fixed). `npm run build` clean, `git diff --check` clean. Committed locally, **not
+pushed** -- push requires separate explicit authorization, which "Wave 3" was not.
+
 ### Round 33 — Playoff Tree follow-up fixes: Continue-button gating, full-tree preview, QB-link bug, Standings tab redesign
 
 User feedback (with screenshots) on Round 32's shipped work, four items:

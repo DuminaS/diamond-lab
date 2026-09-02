@@ -3559,6 +3559,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const rivalryHtml = rec ? fanMeterRow("Rivalry", rec.score,
       `${rivalryLevelLabel(rec.score)} — ${rec.meetings} meeting${rec.meetings===1?"":"s"}${rec.playoffMeetings?`, ${rec.playoffMeetings} in the playoffs`:""}.`) : "";
     const contractLine = (!rival.retired && rival.contract) ? `<div class="rival-meta">Contract: <b>${fmtMoney(rival.contract.apy)}</b>/yr · ${rival.contract.years} year${rival.contract.years===1?"":"s"} left · ${svgEscape(rival.contract.tier)}${rival.entrenchedYears>0?"":" · expiring"}</div>` : "";
+    // Wave 3 (MASTER_REMEDIATION_SPEC.md, exit criterion: "AI injury/suspension status is visible
+    // on the player profile..."): rival.availability is a single-season-scoped snapshot (see
+    // simulatePlayerSeasonStats) of why he missed time THIS season, if he did -- distinct reason/
+    // label, not an anonymous missed-games count.
+    const availabilityLine = (!rival.retired && rival.availability) ? `<div class="rival-meta">${rival.availability.reason==="suspension"?"Suspended":"Injured"} (${rival.availability.year}): <b>${svgEscape(rival.availability.label)}</b> — missed ${rival.availability.gamesMissed} game${rival.availability.gamesMissed===1?"":"s"}</div>` : "";
     // Round 32 item 4: the depth chart moved OFF a QB's own profile (it's team-organizational
     // info, not something about this specific person) and onto the team page instead (see
     // buildTeamPageHTML/openTeamProfile, reachable from teamNameAt links) -- a QB's own profile now
@@ -3580,6 +3585,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         <h3>${svgEscape(rival.name)}</h3>
         <div class="rival-meta">Age ${rival.age} · Drafted ${rival.draftYear} · Overall <b>${overall}</b> (${svgEscape(g.flavor)})</div>
         ${contractLine}
+        ${availabilityLine}
         <div class="rival-stats-grid">
           <div><div class="rv-label">Career Yards</div><div class="rv-value tabular">${t.yards.toLocaleString()}</div></div>
           <div><div class="rv-label">Touchdowns</div><div class="rv-value tabular">${t.td}</div></div>
@@ -4561,8 +4567,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const t = TEAMS.find(x=>x.id===r.teamId);
       if(t && t.start>year) retireQuarterback(r.id, "not-yet-founded");
     });
+    // Wave 3 (MASTER_REMEDIATION_SPEC.md, required design #4): this used to gate on an EXACT
+    // `t.start===year` match -- a confirmed defect if the calendar ever advances across a
+    // franchise's start year without calling this for every intermediate year individually (a
+    // multi-season suspension/injury-leave used to do exactly that before this same wave's
+    // simulateLeagueYearWithoutUser started calling generateSeason -- and hence this -- once per
+    // year even during an absence; kept as defense-in-depth here regardless, since any other future
+    // code path that skips a year would hit the identical bug). Idempotent catch-up instead: any
+    // team already born (`t.start<=year`) that still has no starter gets one, regardless of whether
+    // this is its exact founding year or a later catch-up.
     TEAMS.forEach(t=>{
-      if(t.start!==year || t.id===career.teamId) return;
+      if(t.id===career.teamId) return;
+      if(t.start>year) return;
       if(rivalForTeam(t.id)) return;
       const nr = spawnFreshRival(t.id, decade, year, "new"+year);
       assignQuarterbackToRoster(nr.id, t.id, "QB1");
@@ -4624,7 +4640,33 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // league should have SOME missed time in a given year (injury, benching, a QB change), not
     // just 1 in 6, both because that's more realistic and because it further trims how many rivals
     // ever accumulate a full-slate's worth of attempts in the same season.
-    const missedGames = Math.random()<0.30 ? randInt(1, 9) : 0;
+    // Wave 3 (MASTER_REMEDIATION_SPEC.md, required design #5/#6): this used to just be an anonymous
+    // missed-games count with no reason attached anywhere -- "AI injuries are represented only as
+    // anonymous random missed games... no persistent injury type... or suspension state." Now rolls
+    // a real, distinct reason (injury -- reusing the same INJURY_TYPES table the player's own
+    // injury system uses, so an AI QB's injury reads as the exact same kind of thing the user's own
+    // could be -- or, much more rarely, a suspension, using neutral labels rather than a fabricated
+    // narrative incident, since giving every background AI player their own scripted scandal is a
+    // product decision the spec itself flags as needing confirmation, not an engineering detail;
+    // revisit if the user wants full narrative incidents for AI suspensions too) and stores it on
+    // entity.availability -- a single-season-scoped snapshot of WHY he missed time this year (not
+    // multi-season persistent tracking, matching how missedGames itself was already single-season-
+    // scoped before this wave). forcedGames callers (a bench QB inheriting relief snaps, or the
+    // planned backup incumbent) never roll or overwrite this -- they didn't "miss" anything, they
+    // were simply never given the games in the first place.
+    let missedGames = 0, availabilityReason = null, availabilityLabel = null;
+    if(forcedGames==null && Math.random()<0.30){
+      missedGames = randInt(1, 9);
+      const isSuspension = Math.random()<0.12;
+      if(isSuspension){
+        availabilityReason = "suspension";
+        availabilityLabel = pick(AI_SUSPENSION_REASONS);
+      } else {
+        availabilityReason = "injury";
+        availabilityLabel = rollInjuryType().name;
+      }
+    }
+    entity.availability = missedGames>0 ? { reason: availabilityReason, label: availabilityLabel, gamesMissed: missedGames, year } : null;
     const gamesPlayed = forcedGames!=null ? clamp(forcedGames, 0, league.games) : clamp(league.games - missedGames, 0, league.games);
     const attempts = Math.round(attPerGame*gamesPlayed);
     const completions = Math.round(attempts*comp);
@@ -4714,6 +4756,20 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const isBackupIncumbent = career.isBackup && career._backupUsagePlan && r.id===career._backupUsagePlan.qbId;
       const seasonResult = simulatePlayerSeasonStats(r, decade, league, year, isBackupIncumbent ? career._backupUsagePlan.games : undefined);
       developEntityTalent(r, decade);
+      // Wave 3 (MASTER_REMEDIATION_SPEC.md, exit criterion: "AI injury/suspension status is visible
+      // on the player profile and transaction/history surfaces"): r.availability was just set (or
+      // cleared) inside simulatePlayerSeasonStats -- the player profile already reads it directly
+      // (see buildRivalProfileHTML), so this is the transaction/HISTORY half specifically. Scoped to
+      // real starters only (not bench relief players, who'd make this log too noisy) since a QB1
+      // missing real time is genuine team news the same way a trade or succession event is.
+      if(r.availability){
+        career.leagueNewsLog.push({ year, teamId: r.teamId,
+          title: r.availability.reason==="suspension" ? "Starter Suspended" : "Starter Injured",
+          delta: 0,
+          flavor: r.availability.reason==="suspension"
+            ? `${teamNameAt(r.teamId, year)} starter ${r.name} is suspended for part of the season (${r.availability.label}).`
+            : `${teamNameAt(r.teamId, year)} starter ${r.name} misses time with ${r.availability.label.toLowerCase()}.` });
+      }
       if(isBackupIncumbent){
         // The games he DIDN'T start this season went to the PLAYER (a different entity entirely,
         // already reflected on career.currentSeasonSchedules[r.teamId] -- which IS career.teamId's
@@ -4738,25 +4794,31 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const missedGames = league.games - seasonResult.games;
       const teamGames = career.currentSeasonSchedules && career.currentSeasonSchedules[r.teamId];
       const chart = career.leagueDepthCharts[r.teamId];
+      // Wave 3 (MASTER_REMEDIATION_SPEC.md, required design #7): "QB2 receives exact relief weeks;
+      // QB3 receives them if QB2 is also unavailable." Before this wave, an unavailable/retired QB2
+      // meant these relief snaps went to NOBODY -- QB3 was never considered as a fallback, so the
+      // missed games' box score just showed no attributed passer at all.
       const qb2 = chart && chart.qb2 && !chart.qb2.retired ? chart.qb2 : null;
+      const qb3 = chart && chart.qb3 && !chart.qb3.retired ? chart.qb3 : null;
+      const reliefTarget = qb2 || qb3;
       if(teamGames && teamGames.length){
         let starterWeeks = teamGames, reliefWeeks = [];
-        if(missedGames>0 && qb2){
+        if(missedGames>0 && reliefTarget){
           const start = randInt(0, Math.max(0, teamGames.length-missedGames));
           reliefWeeks = teamGames.slice(start, start+missedGames);
           starterWeeks = teamGames.filter(g=>!reliefWeeks.includes(g));
         }
         applyStatLineToGames(starterWeeks, r.id, seasonResult.comp, seasonResult.att, seasonResult.yards, seasonResult.td, seasonResult.int);
         reconcileWinLossFromGames(r, seasonResult, starterWeeks, decade, league.games);
-        if(reliefWeeks.length>0 && qb2){
-          qb2._reliefGames = reliefWeeks.length;
-          qb2._reliefWeeks = reliefWeeks;
+        if(reliefWeeks.length>0 && reliefTarget){
+          reliefTarget._reliefGames = reliefWeeks.length;
+          reliefTarget._reliefWeeks = reliefWeeks;
         }
-      } else if(missedGames>0 && qb2){
+      } else if(missedGames>0 && reliefTarget){
         // Defensive fallback (should never fire -- buildScheduleResults always builds a log for
         // every team currently in the league): no real schedule to tag against, so relief duty is
         // still credited by count only, same as before this round's per-game attribution existed.
-        qb2._reliefGames = missedGames;
+        reliefTarget._reliefGames = missedGames;
       }
     });
   }
@@ -6550,10 +6612,103 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     lifeEventCheck();
   }
 
+  /* ================= Wave 3 (MASTER_REMEDIATION_SPEC.md): living league during user absence =====
+     Before this wave, renderSuspensionYear/renderInjuryLeaveYear just decremented a counter and
+     called nextSeason() directly -- advanceCareer() returned before generateSeason() was ever
+     reached, so NOTHING else in the league moved for that calendar year: no rival aged, no new
+     season was recorded for anyone, no team's grade drifted, no expansion franchise starting that
+     year got initialized, no awards or postseason happened for anyone. A multi-season absence
+     silently froze the entire simulated world.
+     simulateLeagueYearWithoutUser(reason) fixes this by reusing generateSeason() ITSELF rather than
+     a parallel simulation engine: forcing the user's own missed-games count to the full season
+     length makes generateSeason()'s EXISTING "a generic backup covers the missed games, team record
+     and personal record can differ" machinery produce exactly the right shape (zero personal games,
+     a real team record, a real -- if unwatched -- playoff run) using the exact same schedules/
+     standings/awards/postseason/contracts/development/mobility/team-drift/history/expansion-
+     catch-up code every normal season already runs. There is no second engine to keep in sync. */
+  // Auto-resolves the phantom team's playoff run with no interactive reveal -- nobody is watching a
+  // season card during an absence, so there's nothing to pace this against. round.won is already
+  // fully decided the instant stepConferenceBracket creates each round (see confirmPlayoffRound's
+  // own comment); skipping the reveal just means no Key Moment mini-game ever gets a chance to swing
+  // it, which is correct here -- a Key Moment is a player skill check, and the player isn't present.
+  function autoResolveAbsencePlayoffRun(season){
+    const playoffs = season.playoffs;
+    const bd = season.leagueStandings && season.leagueStandings.bracket;
+    if(playoffs && playoffs.made){
+      // confirmPlayoffRound locksteps the other conference by exactly one round every time it
+      // confirms one of the phantom team's own -- by the time this loop ends, bd.otherChampionId
+      // is already resolved too, same as the normal interactive path.
+      while(!playoffs.done) confirmPlayoffRound(playoffs, season);
+    } else if(bd){
+      // A real bug caught while testing a two-season absence: when the phantom team misses the
+      // playoffs entirely, resolvePlayoffs's own mySeedIdx===-1 branch calls
+      // tryFinalizeLeaguePlayoffBracket immediately -- but that function only finalizes once
+      // bd.myChampionId is already known, and "my" conference's flat bracket normally only steps
+      // forward via the player's own "Simulate Next Round" click (simulateNextPlayoffTreeRound),
+      // which never happens during an absence with no season card rendered at all. Left alone,
+      // bd.myChampionId (and therefore ls.playoffBracket) would simply never resolve for an
+      // absence year the phantom team didn't make the playoffs in. Flat-resolve it directly here,
+      // exactly like the other conference already is.
+      while(bd.myChampionId==null) stepBracketConferenceOnce(bd, season, "my");
+    }
+    // Safety net regardless of which branch ran above: guarantee the other conference is also
+    // fully resolved before finalizing (a no-op if confirmPlayoffRound's own lockstepping already
+    // finished it).
+    if(bd){
+      while(bd.otherChampionId==null) stepBracketConferenceOnce(bd, season, "other");
+    }
+    finalizeAbsenceSeasonPostseason(season);
+    tryFinalizeLeaguePlayoffBracket(season);
+  }
+  // Counterpart to finalizePlayoffOutcome, deliberately NOT the same function: a ring the phantom
+  // team wins during an absence year is a real TEAM fact (recordTeamSeasonHistory/
+  // markConferenceChampionInHistory already captured the division/conference title; season.awards
+  // gets the ring label for this season's own record) but never a PERSONAL one -- the user did not
+  // play a single snap, so crediting career.totals.rings/reputation/gmRelationship/fanSupport/
+  // leaguePopularity/a "won the Super Bowl" transaction (everything finalizePlayoffOutcome normally
+  // does) would attribute an accomplishment to someone who wasn't on the field for it.
+  function finalizeAbsenceSeasonPostseason(season){
+    if(season.postseasonFinalized) return;
+    season.postseasonFinalized = true;
+    const playoffs = season.playoffs;
+    if(!playoffs || !playoffs.made) return;
+    const preSBEra = season.year < 1966;
+    const wonConfChamp = preSBEra && playoffs.rounds.some(r=> r.round==="Conference Championship" && r.won);
+    const wonRing = preSBEra ? wonConfChamp : playoffs.wonSuperBowl;
+    playoffs.wonRing = wonRing;
+    if(wonRing){
+      playoffs.ringLabel = preSBEra
+        ? `${confLabel(conferenceOf(career.teamId, season.year), season.year)} Champion`
+        : "Super Bowl Champion";
+      season.awards.push(playoffs.ringLabel);
+    }
+  }
+  // Runs a full league year -- schedules, every AI QB's usage/stats, standings, awards, postseason
+  // champion/ring attribution, contracts, development, mobility, team drift, history, and expansion
+  // catch-up -- for a season the user does not personally play. `reason` is "suspension" or
+  // "injury"; NOTE: this codebase has no cap/pay-docking mechanic distinguishing the two (contract
+  // years/earnings already accrue unconditionally inside generateSeason() for every season, always
+  // did before this wave too), so both reasons follow the exact same actual contract rules -- there
+  // is no existing "no pay during suspension" rule this wave would need to preserve or bypass.
+  function simulateLeagueYearWithoutUser(reason){
+    const decade = decadeForYear(career.year);
+    const league = LEAGUE[decade];
+    if(reason==="suspension") career._suspensionMissedGames = league.games;
+    else career._injuryMissedGames = league.games;
+    const season = generateSeason();
+    season.absenceReason = reason;
+    autoResolveAbsencePlayoffRun(season);
+    return season;
+  }
+
   function renderSuspensionYear(){
     const content = document.getElementById("careerContent");
     career.suspensionSeasonsRemaining--;
     const remaining = career.suspensionSeasonsRemaining;
+    // Wave 3: the league-year simulation runs exactly once per year actually served, right here --
+    // never on the "click Wait it out" transition (that would double-run it if the player reloaded
+    // mid-interstitial), and never skipped just because nobody's watching.
+    simulateLeagueYearWithoutUser("suspension");
     // Wave 1: checkpoint each year of a suspension actually served -- a real "material decision"
     // point (per the spec) that used to only ever get captured by the once-per-season save, which
     // this exact interstitial is never inside of (advanceCareer returns here before generateSeason
@@ -6573,6 +6728,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.injuryLeaveSeasonsRemaining--;
     const remaining = career.injuryLeaveSeasonsRemaining;
     const teamName = teamNameAt(career.teamId, career.year);
+    // Wave 3: same one-league-year-per-real-year rule as renderSuspensionYear above.
+    simulateLeagueYearWithoutUser("injury");
     saveActiveCareer({ phase:"decision", eventId:"injury_leave_year" });
     content.innerHTML = eraWrap(decadeForYear(career.year), `
         <div class="ev-eyebrow">${career.year} · Injured Reserve</div>
@@ -7077,6 +7234,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
      career-ending outcome is rare-er still and scales down the harder DUR fights it — so a
      bad break doesn't have to be a bad career (a Brees-style full recovery is the common case,
      not the exception). ----- */
+  // Wave 3: neutral (not narrative-scripted) reasons for an AI QB's rare suspension roll -- see
+  // simulatePlayerSeasonStats's availability comment for why these stay generic rather than reusing
+  // the player's own scripted infraction system.
+  const AI_SUSPENSION_REASONS = [
+    "League Suspension", "Personal Conduct Policy", "Performance-Enhancing Substance Policy",
+    "Team Conduct Violation",
+  ];
   const INJURY_TYPES = [
     { id:"ankle", name:"Ankle Sprain", weight:20, sev:0.28, keys:["MOB","IMP"] },
     { id:"shoulder", name:"Shoulder Injury", weight:14, sev:0.48, keys:["ARM","REL"] },

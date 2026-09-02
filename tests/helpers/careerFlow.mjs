@@ -64,14 +64,28 @@ export async function clickThroughToSeasonCard(page, maxTries = 60) {
 
 // Round 32/33: Continue/Play On stays disabled until season.leagueStandings.playoffBracket exists
 // -- click "Simulate Next Round" until it's clear, or until nothing more can be done.
+// Bug found while building Wave 3's suspension test coverage: whenever the player's OWN real
+// playoff run is still pending (they made the playoffs and have an active round with its own
+// "Sim to End of Game" button, #pqSimEnd-N -- see playoffRoundsHolder in the season card), this
+// helper used to just sit there re-checking #playoffTreeSimulateBtn forever, since THAT button
+// deliberately doesn't exist yet until the player's own path is done (the other conference's flat
+// side is paced in lockstep with it -- see finalizeRound's own comments). A seed where the player's
+// build happens to make the playoffs (not rare) hung this helper indefinitely. Fixed by also
+// advancing the player's own pending round the same way advanceOneSeason's walkToDecisionPoint
+// already does, so this helper can reach the point where playoffTreeSimulateBtn (or Continue
+// itself) becomes available regardless of whether the player made the playoffs this season.
 export async function ensureBracketFinalized(page, maxTries = 30) {
   for (let i = 0; i < maxTries; i++) {
     const state = await page.evaluate(() => {
       const btn = document.getElementById("continueBtn") || document.getElementById("playOnBtn") || document.getElementById("retireBtn");
-      return { ready: !!btn && !btn.disabled, hasSimBtn: !!document.getElementById("playoffTreeSimulateBtn") };
+      const simEnd = document.querySelector("#playoffRoundsHolder [id^='pqSimEnd-']:not([disabled])");
+      return { ready: !!btn && !btn.disabled, hasSimBtn: !!document.getElementById("playoffTreeSimulateBtn"), hasSimEnd: !!simEnd };
     });
     if (state.ready) return true;
-    if (state.hasSimBtn) {
+    if (state.hasSimEnd) {
+      await page.evaluate(() => document.querySelector("#playoffRoundsHolder [id^='pqSimEnd-']:not([disabled])")?.click());
+      await page.waitForTimeout(100);
+    } else if (state.hasSimBtn) {
       await page.evaluate(() => document.getElementById("playoffTreeSimulateBtn")?.click());
       await page.waitForTimeout(100);
     } else {
