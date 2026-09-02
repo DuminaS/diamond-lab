@@ -692,6 +692,80 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function rollSupportingCastGrade(teamStrength){
     return clamp(Math.round(safeNum(teamStrength,60) + randInt(-18,18)), 20, 99);
   }
+  // ----- Wave 5 (MASTER_REMEDIATION_SPEC.md): a team's overall/"Team Grade" is now a real,
+  // documented, reproducible DERIVATION of its five persistent component grades -- never an
+  // independently-drifting number of its own. Confirmed with the user: non-QB roster quality only
+  // (the QB's own value is blended in separately everywhere it matters -- see blendOffenseWithTeam/
+  // QB_INFLUENCE_REGULAR/PLAYOFF -- so this never double-counts the quarterback). Weights are the
+  // spec's own recommended calibration: O-line 20%, Weapons 20%, Defense 30% (the single biggest
+  // lever, since it's the one grade with no other mechanical outlet at all), Coaching 20%, Front
+  // Office 10%. Every consumer of career.teamStrength/career.leagueStrength[id] is unchanged --
+  // this only changes WHERE that number comes from.
+  const TEAM_OVERALL_WEIGHTS = { oline:0.20, weapons:0.20, defense:0.30, coaching:0.20, gmGrade:0.10 };
+  function computeTeamOverall(grades){
+    const g = grades || {};
+    return safeNum(g.oline,60)*TEAM_OVERALL_WEIGHTS.oline + safeNum(g.weapons,60)*TEAM_OVERALL_WEIGHTS.weapons +
+      safeNum(g.defense,60)*TEAM_OVERALL_WEIGHTS.defense + safeNum(g.coaching,60)*TEAM_OVERALL_WEIGHTS.coaching +
+      safeNum(g.gmGrade,60)*TEAM_OVERALL_WEIGHTS.gmGrade;
+  }
+  // Applies a team-quality delta to a holder object's five persistent components (never the
+  // aggregate directly) -- since TEAM_OVERALL_WEIGHTS sums to 1.0, nudging all five by the same
+  // `delta` reproduces the exact same aggregate movement a direct "strength += delta" used to, while
+  // keeping the components (the Team page's actual, displayed, persistent source of truth) legibly
+  // in sync instead of letting them go stale under an aggregate that moved out from under them.
+  // `noiseSpread` adds an independent +/-N wobble per component on top of delta -- 0 for a
+  // deliberate, already-calibrated event/succession delta; >0 for open-ended seasonal drift.
+  function driftFiveGrades(holder, delta, noiseSpread){
+    const spread = noiseSpread || 0;
+    ["oline","weapons","defense","coaching","gmGrade"].forEach(k=>{
+      const noise = spread>0 ? randInt(-spread, spread) : 0;
+      holder[k] = clamp(Math.round(safeNum(holder[k],60) + delta + noise), 20, 99);
+    });
+  }
+  // Re-derives the player's own team-level teamStrength/leagueStrength entry from whatever's
+  // currently in career.oline/weapons/defense/coaching/gmGrade -- call this after ANY direct edit to
+  // one of those five fields (a targeted org event, a fresh signing) so the aggregate never goes
+  // stale relative to the components that are now supposed to define it.
+  function recomputeMyTeamStrength(){
+    career.teamStrength = clamp(Math.round(computeTeamOverall(career)), 20, 97);
+    career.leagueStrength[career.teamId] = career.teamStrength;
+    return career.teamStrength;
+  }
+  // The one shared entry point for "this team's quality should move by `delta`" -- whether that's
+  // the player's own team or any other team in the league. Never touches leagueStrength/teamStrength
+  // directly; always goes through the five persistent components first (driftFiveGrades) and derives
+  // the aggregate from them (computeTeamOverall), so career.leagueTeamGrades (ensureLeagueTeamGrades)
+  // can never drift out of sync with the number the Team page/Standings/FA offers all show.
+  function adjustTeamStrength(teamId, delta, noiseSpread){
+    if(teamId===career.teamId){
+      driftFiveGrades(career, delta, noiseSpread);
+      return recomputeMyTeamStrength();
+    }
+    ensureLeagueTeamGrades(career.year);
+    if(!career.leagueTeamGrades) career.leagueTeamGrades = {};
+    const g = career.leagueTeamGrades[teamId] || (career.leagueTeamGrades[teamId] = { oline:60, weapons:60, defense:60, coaching:60, gmGrade:60 });
+    driftFiveGrades(g, delta, noiseSpread);
+    const overall = clamp(Math.round(computeTeamOverall(g)), 20, 96);
+    career.leagueStrength[teamId] = overall;
+    return overall;
+  }
+  // Called at every site the PLAYER's own team assignment changes (trade, waiver pickup, expansion
+  // draft, free-agent sign). Hands the OLD team back its own real, persistent five-grade profile --
+  // frozen at whatever it actually was under the player, never a fresh re-roll -- and gives the
+  // player the NEW team's own real, persistent profile in return: the exact same numbers
+  // buildTeamPageHTML/buildFreeAgentOffers already show for that franchise, never a second,
+  // independently-rolled copy. Must be called AFTER career.teamId is already reassigned to the new
+  // team, since recomputeMyTeamStrength writes into career.leagueStrength[career.teamId].
+  function handOffTeamProfile(oldTeamId, newTeamId){
+    if(oldTeamId){
+      if(!career.leagueTeamGrades) career.leagueTeamGrades = {};
+      career.leagueTeamGrades[oldTeamId] = { oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade };
+    }
+    ensureLeagueTeamGrades(career.year);
+    const np = (career.leagueTeamGrades && career.leagueTeamGrades[newTeamId]) || { oline:60, weapons:60, defense:60, coaching:60, gmGrade:60 };
+    career.oline = np.oline; career.weapons = np.weapons; career.defense = np.defense; career.coaching = np.coaching; career.gmGrade = np.gmGrade;
+    recomputeMyTeamStrength();
+  }
   function castLetterGrade(value){
     if(value>=93) return "A+"; if(value>=87) return "A"; if(value>=82) return "A-";
     if(value>=77) return "B+"; if(value>=72) return "B"; if(value>=67) return "B-";
@@ -1492,6 +1566,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(envelope.career){
       syncQbRegistryFromLegacy(envelope.career);
       migrateTiesDefaults(envelope.career);
+      migrateTeamOverallDerivation(envelope.career);
     }
     if(envelope.schemaVersion < SAVE_SCHEMA_VERSION) envelope = { ...envelope, schemaVersion: SAVE_SCHEMA_VERSION };
     return envelope;
@@ -1516,8 +1591,34 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       fixSeasons(qb.seasons);
     });
     Object.keys(careerObj.teamSeasonHistory||{}).forEach(teamId=>{
-      (careerObj.teamSeasonHistory[teamId]||[]).forEach(h=>{ if(h.ties==null) h.ties = 0; });
+      // Wave 5 (task #8): a save from before the championship flag existed has no wonChampionship
+      // field at all on its history rows -- every read site already treats a missing flag as falsy,
+      // so this is defense-in-depth, matching the ties backfill right above it.
+      (careerObj.teamSeasonHistory[teamId]||[]).forEach(h=>{ if(h.ties==null) h.ties = 0; if(h.wonChampionship==null) h.wonChampionship = false; });
     });
+  }
+  // Wave 5 (MASTER_REMEDIATION_SPEC.md task #3): reconciles every team's aggregate (leagueStrength/
+  // teamStrength) to computeTeamOverall's derivation from its five persistent components, exactly
+  // once on load. A save from before this wave has leagueStrength/teamStrength values that drifted
+  // independently of oline/weapons/defense/coaching/gmGrade -- without this one-time reconciliation,
+  // the very next adjustTeamStrength call (any seasonal drift, any org event) would silently snap
+  // the aggregate to whatever computeTeamOverall already implies, an unexplained jump the player
+  // never asked for. Deterministic and pure -- no Math.random(), just re-deriving from data the
+  // save already has. Safe to run every load: a save whose aggregate already matches its components
+  // is untouched (up to integer rounding).
+  function migrateTeamOverallDerivation(careerObj){
+    if(!careerObj) return;
+    if(careerObj.oline!=null){
+      careerObj.teamStrength = clamp(Math.round(computeTeamOverall(careerObj)), 20, 97);
+      if(careerObj.leagueStrength && careerObj.teamId) careerObj.leagueStrength[careerObj.teamId] = careerObj.teamStrength;
+    }
+    if(careerObj.leagueTeamGrades && careerObj.leagueStrength){
+      Object.keys(careerObj.leagueTeamGrades).forEach(teamId=>{
+        const g = careerObj.leagueTeamGrades[teamId];
+        if(!g) return;
+        careerObj.leagueStrength[teamId] = clamp(Math.round(computeTeamOverall(g)), 20, 96);
+      });
+    }
   }
   // `checkpointPatch` merges onto whatever checkpoint fields the last save already had (tracked in
   // _lastCheckpoint for this session; a cold load falls back to a generic "decision" phase) -- so
@@ -3794,43 +3895,68 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // coaching/gmGrade/oline/weapons only ever exist for whichever team the player currently belongs
   // to, never for an arbitrary other team). This is where the depth chart moved OFF a QB's own
   // profile TO -- team-organizational info belongs on the team, not the person.
+  // Wave 5 (task #6): one QB1/QB2/QB3 row, clickable to that QB's own profile where one exists,
+  // showing overall/age/contract/role/availability -- reads getTeamQuarterbacks (the same live,
+  // canonical registry lookup the rest of the app uses), never the older, less-current
+  // leagueDepthCharts snapshot, so this can never show a QB who's already been traded/released/
+  // retired since that snapshot was taken.
+  function teamPageQbRowHTML(qbEntry, slotLabel){
+    if(!qbEntry) return `<div><div class="rv-label">${svgEscape(slotLabel)}</div><div class="rv-value">—</div></div>`;
+    const isUserEntry = !!qbEntry.isUser;
+    const overall = isUserEntry ? Math.round(computeEffOverall(career.age, decadeForYear(career.year))) : rivalEffTalent(qbEntry);
+    const bits = [`${overall} ovr`];
+    if(qbEntry.age!=null) bits.push(`age ${qbEntry.age}`);
+    if(qbEntry.contract) bits.push(`${svgEscape(qbEntry.contract.tier||"")}, ${qbEntry.contract.years||0} yr${qbEntry.contract.years===1?"":"s"}`);
+    const availBit = qbEntry.availability ? ` (<b>${svgEscape(qbEntry.availability.label || qbEntry.availability.reason || "Unavailable")}</b>)` : "";
+    const nameHtml = isUserEntry
+      ? `${svgEscape(qbEntry.name)} (you)`
+      : `<button type="button" class="rival-link" data-rival-id="${qbEntry.id}">${svgEscape(qbEntry.name)}</button>`;
+    return `<div><div class="rv-label">${svgEscape(slotLabel)}</div><div class="rv-value">${nameHtml} (${bits.join(", ")})${availBit}</div></div>`;
+  }
   function buildTeamPageHTML(teamId, faRoleLabel){
     const year = career.year;
     const div = divisionOf(teamId, year);
     const name = teamNameAt(teamId, year);
     const isMine = teamId===career.teamId;
+    // Wave 5 (task #1): defensive, idempotent -- guarantees this team already has a persistent
+    // five-grade profile before this page reads it, regardless of whether resolvePlayoffs has
+    // already run this season for it yet (a fresh save, or a just-joined expansion team).
+    ensureLeagueTeamGrades(year);
     const overall = Math.round(isMine ? career.teamStrength : (career.leagueStrength[teamId] ?? 60));
     const g = gradeFor(clamp(overall, 0, 98));
-    const qb = rivalForTeam(teamId);
-    const qbLine = qb
-      ? `<button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button> (${rivalEffTalent(qb)} ovr)`
-      : (isMine ? `${svgEscape(career.name)} (you)` : "—");
+    // Wave 5 (task #6): league rank for the overall number and (via buildGradeCardsHtml) each of
+    // the five components below it.
+    const ranks = computeTeamGradeRanks(year);
+    const overallRankHtml = ranks.overall[teamId] ? ` — #${ranks.overall[teamId]} of ${ranks.total}` : "";
+    const qbs = getTeamQuarterbacks(teamId);
     const schemeId = career.teamScheme ? career.teamScheme[teamId] : null;
     const scheme = SCHEMES.find(s=>s.id===schemeId);
+    // Wave 5 (task #6): the scheme's ACTUAL mechanical effects, not just its name -- schemeAttrRows
+    // is the exact same per-attribute readout the Scheme tab already shows, reused directly so this
+    // page can never contradict what schemeEffective() is actually doing to stat production.
+    const schemeHtml = scheme ? `<div class="rival-meta">Scheme: <b>${svgEscape(scheme.name)}</b></div>
+        <p class="calc-refnote" style="margin-top:0.2rem;">${svgEscape(scheme.blurb)}</p>
+        <div class="table-wrap"><table class="career-table"><thead><tr><th>Attribute</th><th class="tabular">Effect</th><th>Fit</th></tr></thead>
+          <tbody>${schemeAttrRows(schemeId)}</tbody></table></div>` : "";
     // Round 33 item 5: only shown when this page was opened from a real Free Agency offer for THIS
     // team (faRoleLabel is that offer's own already-computed role string -- reused directly rather
     // than re-deriving a second, potentially-contradictory depth-chart-position estimate).
     const faRoleHtml = faRoleLabel ? `<div class="calc-refnote" style="margin-top:0.4rem;">If you sign here: <b>${svgEscape(faRoleLabel)}</b></div>` : "";
     // Round 33 QOL: the full five-grade breakdown, real for the player's own team, from
-    // leagueTeamGrades (ensureLeagueTeamGrades) for anyone else -- see buildGradeCardsHtml.
+    // leagueTeamGrades (ensureLeagueTeamGrades) for anyone else -- see buildGradeCardsHtml. Both
+    // surfaces (this page and the player's own Team tab) share this exact same renderer (task #7).
     const teamGrades = isMine
       ? { oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade }
       : (career.leagueTeamGrades && career.leagueTeamGrades[teamId]);
-    const gradeCardsHtml = teamGrades ? `<div class="team-grade-grid" style="margin-top:0.8rem;">${buildGradeCardsHtml(teamGrades)}</div>` : "";
-    const chart = (career.leagueDepthCharts||{})[teamId];
-    const depthChartHtml = chart ? `<div class="rival-facts">
-        <div class="rival-facts-label">Depth Chart</div>
-        <ul>
-          <li>QB2 — ${svgEscape(chart.qb2.name)} (${rivalEffTalent(chart.qb2)} ovr, age ${chart.qb2.age}, ${svgEscape(chart.qb2.contract.tier)})</li>
-          <li>QB3 — ${svgEscape(chart.qb3.name)} (${rivalEffTalent(chart.qb3)} ovr, age ${chart.qb3.age}, ${svgEscape(chart.qb3.contract.tier)})</li>
-        </ul>
-      </div>` : "";
+    const gradeCardsHtml = teamGrades ? `<div class="team-grade-grid" style="margin-top:0.8rem;">${buildGradeCardsHtml(teamGrades, { ranks, teamId })}</div>` : "";
     // Round 33 item 5: a real, permanent past-seasons record (see recordTeamSeasonHistory) --
     // starts accumulating only from whenever this feature first ran for this team, same limitation
     // Trophy Room/Achievements both already have for pre-existing careers.
     const hist = (career.teamSeasonHistory && career.teamSeasonHistory[teamId]) || [];
     const histRows = hist.slice().reverse().map(h=>{
-      const titles = [h.wonConference?"Conf. Champs":"", h.wonDivision?"Div. Champs":""].filter(Boolean).join(", ");
+      // Wave 5 (task #8): "Champions" now shows up here the moment the Super Bowl winner's own row
+      // is patched (markChampionInHistory), listed first since it's the biggest title of the three.
+      const titles = [h.wonChampionship?"Champions":"", h.wonConference?"Conf. Champs":"", h.wonDivision?"Div. Champs":""].filter(Boolean).join(", ");
       return `<tr><td>${h.year}</td><td>${h.qbName?svgEscape(h.qbName):"—"}</td><td class="tabular">${h.qbRings}</td>
           <td class="tabular">${recordLine(h.wins, h.losses, h.ties||0)}</td><td>${titles||"—"}</td><td>${h.scheme?svgEscape(h.scheme):"—"}</td></tr>`;
     }).join("");
@@ -3845,14 +3971,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       <div class="rival-card">
         <div class="rival-eyebrow">${confLabel(div.conf, year)} ${svgEscape(div.name)}</div>
         <h3>${svgEscape(name)}${isMine?" (your team)":""}</h3>
-        <div class="rival-meta">Team Grade <b>${overall}</b> (${svgEscape(g.flavor)})</div>
-        ${scheme ? `<div class="rival-meta">Scheme: <b>${svgEscape(scheme.name)}</b></div>` : ""}
+        <div class="rival-meta">Team Grade <b>${overall}</b> (${svgEscape(g.flavor)})${overallRankHtml}</div>
+        ${schemeHtml}
         <div class="rival-stats-grid">
-          <div><div class="rv-label">Starting QB</div><div class="rv-value">${qbLine}</div></div>
+          ${teamPageQbRowHTML(qbs.QB1, "QB1 (Starter)")}
+          ${teamPageQbRowHTML(qbs.QB2, "QB2")}
+          ${teamPageQbRowHTML(qbs.QB3, "QB3")}
         </div>
         ${faRoleHtml}
         ${gradeCardsHtml}
-        ${depthChartHtml}
         ${histHtml}
         ${viewFullTeamTabHtml}
         <button type="button" class="btn btn-ghost rival-close">Close</button>
@@ -3869,9 +3996,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const gotoBtn = overlay.querySelector("#teamProfileGotoTab");
     if(gotoBtn) gotoBtn.addEventListener("click", ()=>{ closeTeamProfile(); switchDashTab("team"); });
     // Same reasoning as openRivalProfile's own team-link wiring: this overlay is a sibling of
-    // #careerContent, so the Starting QB link's [data-rival-id] needs explicit wiring here too.
-    const qbLink = overlay.querySelector("[data-rival-id]");
-    if(qbLink) qbLink.addEventListener("click", ()=>{ closeTeamProfile(); openRivalProfile(qbLink.dataset.rivalId); });
+    // #careerContent, so every QB row's [data-rival-id] link needs explicit wiring here too.
+    // Wave 5: QB2/QB3 are now clickable links alongside QB1, so this wires ALL of them, not just
+    // the first match.
+    overlay.querySelectorAll("[data-rival-id]").forEach(qbLink=>{
+      qbLink.addEventListener("click", ()=>{ closeTeamProfile(); openRivalProfile(qbLink.dataset.rivalId); });
+    });
   }
   function closeTeamProfile(){
     const overlay = document.getElementById("teamProfileOverlay");
@@ -4049,6 +4179,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // the one fact that isn't known until the bracket actually confirms, unlike W-L/division/scheme.
     markConferenceChampionInHistory(bd.myChampionId, season.year);
     markConferenceChampionInHistory(bd.otherChampionId, season.year);
+    // Wave 5 (task #8): same idea, one level up -- patch the Super Bowl winner's own season-history
+    // row with the championship flag and a fresh ring-count snapshot, now that the ring itself has
+    // already been credited above (or, for the player's own real run, earlier still, by
+    // finalizePlayoffOutcome before this function was even called).
+    markChampionInHistory(superBowlWinnerId, season.year);
   }
   function awardRivalSuperBowlRing(teamId){
     const rival = rivalForTeam(teamId);
@@ -4083,7 +4218,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       if(!career.teamSeasonHistory[teamId]) career.teamSeasonHistory[teamId] = [];
       career.teamSeasonHistory[teamId].push({
         year, wins: r.wins, losses: r.losses, ties: r.ties||0, qbName, qbRings,
-        wonDivision: divWinnerIds.has(teamId), wonConference: false,
+        wonDivision: divWinnerIds.has(teamId), wonConference: false, wonChampionship: false,
         scheme: scheme ? scheme.name : null,
       });
     });
@@ -4094,38 +4229,91 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const entry = hist.find(h=>h.year===year);
     if(entry) entry.wonConference = true;
   }
+  // Wave 5 (MASTER_REMEDIATION_SPEC.md task #8): recordTeamSeasonHistory snapshots qbRings BEFORE
+  // the postseason plays out (it runs from resolvePlayoffs, the moment standings/seeding are known
+  // -- long before any bracket round, let alone the Super Bowl, is decided), so the eventual
+  // champion's own history row for THIS season is stale the instant they actually win it: it still
+  // shows their ring count from BEFORE this season's ring. Called from tryFinalizeLeaguePlayoffBracket
+  // once superBowlWinnerId is finally known (after the ring itself has already been credited, either
+  // to career.totals.rings via finalizePlayoffOutcome for the player, or to the rival's own totals
+  // via awardRivalSuperBowlRing) -- patches both the championship flag and a fresh qbRings snapshot
+  // onto that exact season's already-recorded row so the Team page's Past Seasons table always
+  // agrees with the real, current ring totals it's built from.
+  function markChampionInHistory(teamId, year){
+    const hist = career.teamSeasonHistory && career.teamSeasonHistory[teamId];
+    if(!hist) return;
+    const entry = hist.find(h=>h.year===year);
+    if(!entry) return;
+    entry.wonChampionship = true;
+    const isMine = teamId===career.teamId;
+    const rival = isMine ? null : rivalForTeam(teamId);
+    entry.qbRings = isMine ? career.totals.rings : (rival ? (rival.totals.rings||0) : entry.qbRings);
+  }
   // Full overall-grade breakdown for every OTHER team in the league -- the player's own team keeps
   // using the real, mechanically-wired career.oline/weapons/defense/coaching/gmGrade (those affect
   // actual gameplay: sack rate, dev speed, FA offers, etc.); every other team gets its own
-  // persistent, independently-noisy set of the same five sub-grades purely for DISPLAY (the Team
-  // page's breakdown) -- there is no mechanical hook for them, since no game system ever needs to
-  // know another team's oline grade to resolve anything. Rolled once per team the first time it's
-  // seen, then drifts gently toward that team's current overall each season after -- a snap re-roll
-  // every year would make a team's sub-grades flicker randomly, which the player's own experience
-  // (smooth, event-driven drift) never does; this stays visually consistent with that.
+  // persistent set of the same five sub-grades, the real (non-QB) source of truth for both DISPLAY
+  // (the Team page's breakdown) and for career.leagueStrength[id] itself (computeTeamOverall).
+  // Wave 5 (MASTER_REMEDIATION_SPEC.md): this is now INIT-ONLY -- rolls a team's five components
+  // exactly once, the first time it's seen (any active franchise, including a brand-new expansion
+  // team the moment it first appears in divisionsForYear), and never touches an existing entry
+  // again. All ongoing drift for every other team happens exclusively through adjustTeamStrength
+  // (season-end drift, succession, headline events) so the components can never be pulled toward --
+  // or silently overwritten by -- an aggregate number that used to be able to drift independently of
+  // them. That old "pull toward strength" behavior was the exact backwards causality Wave 5 fixes:
+  // components must determine the aggregate, never the other way around.
   function ensureLeagueTeamGrades(year){
     if(!career.leagueTeamGrades) career.leagueTeamGrades = {};
     const keys = ["oline","weapons","defense","coaching","gmGrade"];
-    divisionsForYear(year).flatMap(d=>d.teams).forEach(teamId=>{
+    // Wave 5 (task #1): iterates teamsAvailable(year) -- TEAMS.filter(t=>t.start<=year), the same
+    // "which franchises exist this year" source buildFreeAgentOffers/pickTeamByStrength/tradeCheck
+    // all already use -- rather than divisionsForYear(year)'s per-era division tables. A real gap
+    // found by this wave's own FA-offer regression test: an era's DIVISIONS_PRE_1970/1970_2001 table
+    // doesn't necessarily list every team TEAMS/teamsAvailable already considers foundeded that
+    // year (older division structures don't 1:1 cover every modern franchise id), so a team could be
+    // a legitimate FA/trade candidate while divisionsForYear silently never surfaced it here -- this
+    // is a strict superset (divisionsForYear itself intersects against teamsAvailable already), so
+    // it only ever ADDS coverage, never drops a team the old version already initialized.
+    teamsAvailable(year).forEach(t=>{
+      const teamId = t.id;
       if(teamId===career.teamId) return;
+      if(career.leagueTeamGrades[teamId]) return;
       const strength = career.leagueStrength[teamId] ?? 60;
-      let g = career.leagueTeamGrades[teamId];
-      if(!g){
-        g = {}; keys.forEach(k=> g[k] = rollSupportingCastGrade(strength));
-        career.leagueTeamGrades[teamId] = g;
-      } else {
-        keys.forEach(k=>{
-          const pull = (strength - g[k]) * 0.12;
-          g[k] = clamp(Math.round(g[k] + pull + randInt(-4,4)), 20, 99);
-        });
-      }
+      const g = {}; keys.forEach(k=> g[k] = rollSupportingCastGrade(strength));
+      career.leagueTeamGrades[teamId] = g;
     });
   }
   // The five sub-grade cards shared by the player's own Team tab and any other team's page --
   // `grades` is always {oline,weapons,defense,coaching,gmGrade}, real for the player's own team,
   // from leagueTeamGrades for anyone else. One shared renderer so the two surfaces can never drift
   // apart in look or wording.
-  function buildGradeCardsHtml(grades){
+  // Wave 5 (task #1): every active franchise's overall AND all five components, ranked against
+  // every other active franchise -- a real, mechanical league-rank rather than just a raw number,
+  // for the Team page's "league rank" requirement. Reads the exact same sources as everything else
+  // this wave touches (career.* for the player's own team, career.leagueTeamGrades for anyone
+  // else), so a rank shown here can never disagree with the number it's ranking.
+  function computeTeamGradeRanks(year){
+    ensureLeagueTeamGrades(year);
+    const rows = teamsAvailable(year).map(t=>{
+      const isMine = t.id===career.teamId;
+      const g = isMine
+        ? { oline:career.oline, weapons:career.weapons, defense:career.defense, coaching:career.coaching, gmGrade:career.gmGrade }
+        : (career.leagueTeamGrades[t.id] || { oline:60, weapons:60, defense:60, coaching:60, gmGrade:60 });
+      const overall = isMine ? career.teamStrength : (career.leagueStrength[t.id] ?? Math.round(computeTeamOverall(g)));
+      return { teamId:t.id, overall, ...g };
+    });
+    const rankOf = key=>{
+      const ranks = {};
+      rows.slice().sort((a,b)=>b[key]-a[key]).forEach((r,i)=> ranks[r.teamId]=i+1);
+      return ranks;
+    };
+    return { total: rows.length, overall: rankOf("overall"), oline: rankOf("oline"), weapons: rankOf("weapons"),
+      defense: rankOf("defense"), coaching: rankOf("coaching"), gmGrade: rankOf("gmGrade") };
+  }
+  // `ranks`/`teamId` are optional -- when given (rankInfo = {ranks, teamId}), each card also shows
+  // this team's league rank for that exact component (computeTeamGradeRanks), never a second,
+  // differently-derived ranking.
+  function buildGradeCardsHtml(grades, rankInfo){
     const defs = [
       { key:"oline", label:"Offensive Line",
         impact:"Sack rate and injury risk — a shaky line means more hits taken; an elite one buys extra time in the pocket." },
@@ -4140,9 +4328,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     ];
     return defs.map(g=>{
       const value = grades[g.key] ?? 60;
+      const rankHtml = (rankInfo && rankInfo.ranks && rankInfo.ranks[g.key])
+        ? `<div class="tg-rank">#${rankInfo.ranks[g.key][rankInfo.teamId]} of ${rankInfo.ranks.total}</div>` : "";
       return `<div class="team-grade-card">
         <div class="tg-label">${g.label}</div>
         <div class="tg-value tabular">${castLetterGrade(value)} <span class="tg-num">(${value})</span></div>
+        ${rankHtml}
         <div class="tg-impact">${g.impact}</div>
       </div>`;
     }).join("");
@@ -4909,7 +5100,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         // volatility too -- an unscaled succession jump was a real, previously era-blind source of
         // sudden large team-strength swings.
         const successionNudge = Math.round((newTalent - rivalEffTalent(r)) * 0.3 * (ERA_TEAM_VOLATILITY[decade] ?? 1.0));
-        career.leagueStrength[r.teamId] = clamp(teamGrade + successionNudge, 20, 96);
+        // Wave 5: lands on the five persistent components, never leagueStrength directly.
+        adjustTeamStrength(r.teamId, successionNudge, 0);
         const successor = {
           id: "riv_"+r.teamId+"_"+year, name: randomFullName(), teamId: r.teamId,
           talent: newTalent, age: 22, retireAge: randInt(30,40),
@@ -5307,7 +5499,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const repl = generateBenchPlayer(teamId, decade, year, teamGrade, fromSlot==="QB3" ? Math.random()<0.65 : Math.random()<0.3);
       assignQuarterbackToRoster(repl.id, teamId, fromSlot);
       const delta = randInt(-3,6);
-      career.leagueStrength[teamId] = clamp((career.leagueStrength[teamId]??60)+delta, 20, 96);
+      adjustTeamStrength(teamId, delta, 0);
       career.leagueNewsLog.push({ year, teamId, title:"Backup Wins the Starting Job", delta, flavor: flavor(oldName, promoted.name) });
     }
     if(bestChallenger && bestChallengerVal-rivalVal>=SUCCESSION_PROMOTION_GAP){
@@ -5360,7 +5552,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         assignQuarterbackToRoster(signed.id, teamId, "QB1");
       }
       const delta = randInt(-4,8);
-      career.leagueStrength[teamId] = clamp((career.leagueStrength[teamId]??60)+delta, 20, 96);
+      adjustTeamStrength(teamId, delta, 0);
       career.leagueNewsLog.push({ year, teamId, title:"Free-Agent Quarterback Signing", delta,
         flavor: poolCandidate===signed
           ? `${teamName} move on from ${oldName} and hand the job to ${signed.name}, plucked off the open market after his last team let him go.`
@@ -5705,23 +5897,24 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       else if(justSeason.rating < decadeAvgRating-8) nudge -= 2;
       nudge -= contenderDeclinePull(s)*volMult;
       nudge += rebuildPull(s)*volMult;
-      career.leagueStrength[r.teamId] = clamp(s + Math.round(nudge), 20, 96);
+      // Wave 5: the delta lands on the team's five persistent components (adjustTeamStrength),
+      // never on leagueStrength directly -- the aggregate is derived from them, not the reverse.
+      // noiseSpread=2 keeps the same per-component wobble magnitude the old independent oline/
+      // weapons noise used to have, just unified into one call instead of two disconnected ones.
+      adjustTeamStrength(r.teamId, Math.round(nudge), 2);
     });
     rollLeagueNews(career.year, decade);
     // The player's own team faces identical decline/rebuild pressure -- the counteracting force is
     // the same skill-linked nudge this always had (how far above/below neutral effOverall actually
-    // played this season), unchanged from before this pass.
+    // played this season), unchanged from before this pass. Wave 5: also routed through
+    // adjustTeamStrength now, so defense/coaching/gmGrade -- previously frozen for the player's own
+    // team outside of ORG_EVENTS -- get the same legible seasonal drift oline/weapons always did.
     const teamNoise = randInt(-2,2)*volMult;
     const teamSkillNudge = Math.round((effOverall-neutralOverall)*primeMult*0.14);
     const teamDeclinePull = Math.round(contenderDeclinePull(safeNum(career.teamStrength,60))*volMult);
     const teamRebuildPull = Math.round(rebuildPull(safeNum(career.teamStrength,60))*volMult);
-    career.teamStrength = clamp(safeNum(career.teamStrength,60) + Math.round(teamNoise) + teamSkillNudge - teamDeclinePull + teamRebuildPull, 20, 97);
-    career.leagueStrength[career.teamId] = career.teamStrength;
-    // Supporting cast drifts on its own light noise -- most of its real movement comes from the
-    // "oline"/"starleaves" ORG_EVENTS above, this just keeps it from being permanently frozen
-    // between events.
-    career.oline = clamp(safeNum(career.oline,60) + randInt(-2,2), 20, 99);
-    career.weapons = clamp(safeNum(career.weapons,60) + randInt(-2,2), 20, 99);
+    const myNudge = Math.round(teamNoise) + teamSkillNudge - teamDeclinePull + teamRebuildPull;
+    adjustTeamStrength(career.teamId, myNudge, 2);
 
     // ----- Wear and tear economy: a persistent, career-long meter (not a per-injury dice roll) --
     // see resolveInjuryChoice for the play-through-it vs. shut-it-down wear add, which is where
@@ -6343,7 +6536,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       // (unclamped) jump source that made older/roster-continuity decades just as churny as modern
       // free agency, contrary to the intent of ERA_TEAM_VOLATILITY.
       const delta = Math.round(randInt(ev.strengthDelta[0], ev.strengthDelta[1]) * volMult);
-      career.leagueStrength[t.id] = clamp((career.leagueStrength[t.id]??60)+delta, 20, 96);
+      adjustTeamStrength(t.id, delta, 0);
       career.leagueNewsLog.push({ year, teamId: t.id, title: ev.title, delta, flavor: ev.flavor(teamNameAt(t.id, year)) });
     });
   }
@@ -6466,8 +6659,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const content = document.getElementById("careerContent");
     const good = Math.random() < choice.goodChance;
     const delta = good ? randInt(choice.goodDelta[0], choice.goodDelta[1]) : randInt(choice.badDelta[0], choice.badDelta[1]);
-    career.teamStrength = clamp(career.teamStrength + delta, 20, 97);
-    career.leagueStrength[career.teamId] = career.teamStrength;
+    adjustTeamStrength(career.teamId, delta, 0);
     career.lifeEventLog.push({ year:career.year, title:ev.title, severity: good?"locker-good":"locker-bad" });
     career.transactions.push(`${career.year}: ${ev.title} — ${good?"handled it well":"handled it poorly"} (team grade ${fmtDelta(delta)}).`);
     content.innerHTML = eraWrap(decadeForYear(career.year), `
@@ -6668,12 +6860,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       strengthDelta = randInt(ev.strengthDelta[0], ev.strengthDelta[1]);
       // Most org events move the whole team; "oline"/"starleaves" specifically target the
       // Supporting Cast grades instead, since those are a distinct signal from overall team quality.
-      if(ev.target==="oline") career.oline = clamp(career.oline + strengthDelta, 20, 99);
-      else if(ev.target==="weapons") career.weapons = clamp(career.weapons + strengthDelta, 20, 99);
-      else {
-        career.teamStrength = clamp(career.teamStrength + strengthDelta, 20, 97);
-        career.leagueStrength[career.teamId] = career.teamStrength;
-      }
+      // Wave 5: a targeted single-component edit still has to recompute the derived aggregate right
+      // after (recomputeMyTeamStrength) so career.teamStrength never goes stale relative to the
+      // component that just moved it; an untargeted event nudges all five components equally
+      // (adjustTeamStrength, noiseSpread 0) so it reproduces the exact same aggregate swing as
+      // before while keeping every component legibly in sync too.
+      if(ev.target==="oline"){ career.oline = clamp(career.oline + strengthDelta, 20, 99); recomputeMyTeamStrength(); }
+      else if(ev.target==="weapons"){ career.weapons = clamp(career.weapons + strengthDelta, 20, 99); recomputeMyTeamStrength(); }
+      else adjustTeamStrength(career.teamId, strengthDelta, 0);
     }
     // GM relations: most org events either nudge the existing relationship (gmDelta) or, for a
     // literal front-office change (resetGM, i.e. "newgm"), wipe the slate — a brand-new GM has no
@@ -6822,10 +7016,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       // exactly like the other conference already is.
       while(bd.myChampionId==null) stepBracketConferenceOnce(bd, season, "my");
     }
-    // Safety net regardless of which branch ran above: guarantee the other conference is also
-    // fully resolved before finalizing (a no-op if confirmPlayoffRound's own lockstepping already
-    // finished it).
+    // Safety net regardless of which branch ran above: guarantee BOTH conferences are fully
+    // resolved before finalizing (a no-op wherever confirmPlayoffRound's own lockstepping already
+    // finished one). Found by Wave 5's own regression sweep: when the phantom team's playoffs.done
+    // was ALREADY true the instant this function runs (eliminated in an earlier round, on some
+    // earlier call/season), the `while(!playoffs.done)` loop above runs zero iterations -- meaning
+    // confirmPlayoffRound never locksteps "my" conference's OWN remaining games (e.g. a Conference
+    // Championship the phantom team wasn't part of) even though it was needed. The old version of
+    // this safety net only ever covered `otherChampionId`, silently leaving `myChampionId` (and
+    // therefore ls.playoffBracket) unresolved forever for that season. Both loops are no-ops once
+    // already resolved, so this is safe to run unconditionally regardless of which branch ran above.
     if(bd){
+      while(bd.myChampionId==null) stepBracketConferenceOnce(bd, season, "my");
       while(bd.otherChampionId==null) stepBracketConferenceOnce(bd, season, "other");
     }
     finalizeAbsenceSeasonPostseason(season);
@@ -6991,9 +7193,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(signBtn) signBtn.addEventListener("click", ()=>{
       career.transactions.push(`${career.year}: Released by the ${oldTeam}, signed by the ${teamNameAt(offerTeam.id,career.year)} on a minimum deal.`);
       reassignRivalsForTeamChange(career.teamId, offerTeam.id);
-      career.teamId = offerTeam.id; career.teamStrength = safeNum(career.leagueStrength[offerTeam.id], 60); career.leagueStrength[offerTeam.id] = career.teamStrength; career.seasonsWithTeam = 0;
-      career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
-      career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
+      const _oldTeamId = career.teamId;
+      career.teamId = offerTeam.id; career.seasonsWithTeam = 0;
+      // Wave 5: inherit the new team's real, persistent profile instead of rolling a fresh one;
+      // hand the old team back its own real profile in the same call (handOffTeamProfile).
+      handOffTeamProfile(_oldTeamId, offerTeam.id);
       career.contract = { apy: offerApy, years: 1, tier: "minimum" };
       career.badStreak = 0;
       saveActiveCareer({ phase:"decision", eventId:"waiver_signed" });
@@ -7043,11 +7247,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     document.getElementById("expAck").addEventListener("click", ()=>{
       career.transactions.push(`${career.year}: Left unprotected, selected by the expansion ${newTeamName}.`);
       reassignRivalsForTeamChange(career.teamId, newTeam.id);
+      const _oldTeamId = career.teamId;
       career.teamId = newTeam.id;
-      career.teamStrength = safeNum(career.leagueStrength[newTeam.id], 45);
-      career.leagueStrength[newTeam.id] = career.teamStrength;
-      career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
-      career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
+      // Wave 5: inherit the new (expansion) team's real, persistent profile instead of rolling a
+      // fresh one -- ensureLeagueTeamGrades (inside handOffTeamProfile) lazily initializes it on
+      // first sight, satisfying "every active franchise gets a profile" for a brand-new team too.
+      handOffTeamProfile(_oldTeamId, newTeam.id);
       career.seasonsWithTeam = 0;
       tradeCheck();
     });
@@ -7072,9 +7277,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const newTeamName = teamNameAt(team.id, career.year);
     career.transactions.push(`${career.year}: Traded from the ${oldTeam} to the ${newTeamName}.`);
     reassignRivalsForTeamChange(career.teamId, team.id);
-    career.teamId = team.id; career.teamStrength = safeNum(career.leagueStrength[team.id], 60); career.leagueStrength[team.id] = career.teamStrength; career.seasonsWithTeam = 0;
-    career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
-    career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
+    const _oldTeamId = career.teamId;
+    career.teamId = team.id; career.seasonsWithTeam = 0;
+    handOffTeamProfile(_oldTeamId, team.id);
     // Wave 1: material transaction -- checkpoint the new team assignment right away.
     saveActiveCareer({ phase:"decision", eventId:"traded" });
     const content = document.getElementById("careerContent");
@@ -7131,9 +7336,9 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const newTeamName = teamNameAt(team.id, career.year);
       career.transactions.push(`${career.year}: Requested a trade — dealt from the ${oldTeam} to the ${newTeamName}.`);
       reassignRivalsForTeamChange(career.teamId, team.id);
-      career.teamId = team.id; career.teamStrength = safeNum(career.leagueStrength[team.id], 60); career.leagueStrength[team.id] = career.teamStrength; career.seasonsWithTeam = 0;
-      career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
-      career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
+      const _oldTeamId = career.teamId;
+      career.teamId = team.id; career.seasonsWithTeam = 0;
+      handOffTeamProfile(_oldTeamId, team.id);
       // Wave 1: material transaction -- checkpoint the new team assignment right away.
       saveActiveCareer({ phase:"decision", eventId:"trade_requested_granted" });
       content.innerHTML = eraWrap(decade, `
@@ -7201,6 +7406,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return "retool";
   }
   function buildFreeAgentOffers(decade, tier, oldTeamId){
+    // Wave 5: guarantee every candidate team already has its real, persistent five-grade profile
+    // before any offer reads from it -- a defensive, idempotent no-op once resolvePlayoffs has
+    // already run this season for these teams, but load-bearing the first time a team is seen (a
+    // fresh save, or a just-joined expansion team not yet touched by any other code path this year).
+    ensureLeagueTeamGrades(career.year);
     const rank = tierRank(tier);
     const repMult = clamp(0.82 + (career.reputation/100)*0.34, 0.75, 1.25);
     const leverage = career._leverageBoost ? 1.13 : 1;
@@ -7250,11 +7460,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const role = rebuildYouthFit ? "starter" : (needRank>rank ? "starter" : needRank===rank ? "starter" : "competition");
       const tierForApy = role==="competition" ? (tier==="minimum"?"minimum":"backup") : (tier==="minimum"?"minimum":tier);
       const baseApy = veteranAPY(decade, tierForApy);
-      // Rolled once here and carried on the offer object itself, not re-rolled at signing time --
-      // what you see in the offer ("chase the bag, but you'd play behind a C-grade line") is
-      // exactly what you get if you take it, not a surprise after the fact.
-      const teamStrengthForOffer = career.leagueStrength[t.id] ?? 60;
-      const gmGradeForOffer = rollSupportingCastGrade(teamStrengthForOffer);
+      // Wave 5: read straight from the team's real, persistent five-grade profile (the exact same
+      // numbers the Team page shows) instead of rolling a fresh, independent set here -- what you
+      // see in the offer ("chase the bag, but you'd play behind a C-grade line") is exactly what
+      // you get if you take it (signFreeAgentOffer copies these same fields onto career.*), AND
+      // exactly what you'd have seen opening this same team's page from Standings/FA a moment ago.
+      const teamProfileForOffer = career.leagueTeamGrades[t.id] || { oline:60, weapons:60, defense:60, coaching:60, gmGrade:60 };
+      const gmGradeForOffer = teamProfileForOffer.gmGrade;
       // A sharp front office pays close to fair value; a bad one is erratic -- sometimes a lowball,
       // sometimes (comedically) an overpay for a player they'll regret. Independent of repMult/
       // leverage, which are about the PLAYER's own standing, not this team's competence.
@@ -7270,8 +7482,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         apy: Math.round(baseApy*repMult*leverage*comeback*awayGmMult*(0.88+Math.random()*0.3)),
         years: role==="competition" ? 1 : (tier==="elite"?4:tier==="good"?3:tier==="average"?2:1),
         patience: randInt(35,70) - (role==="competition"?10:0), pushCount:0, withdrawn:false,
-        oline: rollSupportingCastGrade(teamStrengthForOffer), weapons: rollSupportingCastGrade(teamStrengthForOffer),
-        defense: rollSupportingCastGrade(teamStrengthForOffer), coaching: rollSupportingCastGrade(teamStrengthForOffer), gmGrade: gmGradeForOffer,
+        oline: teamProfileForOffer.oline, weapons: teamProfileForOffer.weapons,
+        defense: teamProfileForOffer.defense, coaching: teamProfileForOffer.coaching, gmGrade: gmGradeForOffer,
       });
     }
     // one rare agent-driven swing, independent of how negotiations go
@@ -7377,11 +7589,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     } else {
       career.transactions.push(`${career.year}: Signed with the ${teamName} (${fmtMoney(o.apy)}/yr).`);
       reassignRivalsForTeamChange(career.teamId, o.teamId);
+      // Wave 5: hand the OLD team back its own real, departing profile (never a fresh re-roll)
+      // before overwriting career.* with the new team's grades -- the exact grades the offer card
+      // already showed (o.oline etc. now come straight from career.leagueTeamGrades[o.teamId] via
+      // buildFreeAgentOffers), so "accepting an offer gives exactly the grades that were previewed".
+      if(!career.leagueTeamGrades) career.leagueTeamGrades = {};
+      career.leagueTeamGrades[career.teamId] = { oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade };
       career.teamId = o.teamId;
-      career.teamStrength = safeNum(career.leagueStrength[o.teamId], 60);
-      career.leagueStrength[o.teamId] = career.teamStrength;
       career.oline = o.oline; career.weapons = o.weapons;
       career.defense = o.defense; career.coaching = o.coaching; career.gmGrade = o.gmGrade;
+      recomputeMyTeamStrength();
       career.seasonsWithTeam = 0;
     }
     const tier = o.role==="competition" ? "backup" : (meta.tier==="minimum"?"minimum":meta.tier);
@@ -8539,24 +8756,45 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
      (QB1/2/3), reusing the same rivalEffTalent/contract fields the rival profile card already
      shows. */
   function buildTeamTabHTML(){
-    const gradeCards = buildGradeCardsHtml({ oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade });
+    // Wave 5 (tasks #6/#7): same ranked-grade-card renderer the generic Team page uses.
+    const ranks = computeTeamGradeRanks(career.year);
+    const gradeCards = buildGradeCardsHtml(
+      { oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade },
+      { ranks, teamId: career.teamId }
+    );
 
-    const chart = (career.leagueDepthCharts||{})[career.teamId];
-    const incumbent = career.isBackup ? rivalForTeam(career.teamId) : null;
-    const depthRow = (slot, name, overall, age, tier, mine)=>`<tr${mine?' class="me"':""}><td>${slot}</td><td>${name}</td><td class="tabular">${overall}</td><td class="tabular">${age}</td><td>${svgEscape(tier)}</td></tr>`;
-    const depthRows = [];
-    depthRows.push(incumbent
-      ? depthRow("QB1", svgEscape(incumbent.name), rivalEffTalent(incumbent), incumbent.age, incumbent.contract.tier, false)
-      : depthRow("QB1", svgEscape(career.name)+" (you)", Math.round(computeEffOverall(career.age, decadeForYear(career.year))), career.age, career.contract.tier, true));
-    if(career.isBackup) depthRows.push(depthRow("QB2", svgEscape(career.name)+" (you)", Math.round(computeEffOverall(career.age, decadeForYear(career.year))), career.age, career.contract.tier, true));
-    else if(chart) depthRows.push(depthRow("QB2", svgEscape(chart.qb2.name), rivalEffTalent(chart.qb2), chart.qb2.age, chart.qb2.contract.tier, false));
-    if(chart) depthRows.push(depthRow("QB3", svgEscape(chart.qb3.name), rivalEffTalent(chart.qb3), chart.qb3.age, chart.qb3.contract.tier, false));
+    // Wave 5 (tasks #6/#7): reads the same live, canonical getTeamQuarterbacks lookup the generic
+    // Team page now uses (buildTeamPageHTML/teamPageQbRowHTML) -- never the older, less-current
+    // leagueDepthCharts snapshot, so this can't show a QB2/QB3 who's already moved on, and QB2/QB3
+    // are clickable to their own profile ([data-rival-id], picked up by #careerContent's existing
+    // delegated click listener) exactly like QB1's rival link already was elsewhere in the app.
+    const qbs = getTeamQuarterbacks(career.teamId);
+    const depthRow = (slot, qbEntry)=>{
+      if(!qbEntry) return `<tr><td>${slot}</td><td>—</td><td class="tabular">—</td><td class="tabular">—</td><td>—</td></tr>`;
+      const isUserEntry = !!qbEntry.isUser;
+      const overall = isUserEntry ? Math.round(computeEffOverall(career.age, decadeForYear(career.year))) : rivalEffTalent(qbEntry);
+      const nameHtml = isUserEntry
+        ? svgEscape(qbEntry.name)+" (you)"
+        : `<button type="button" class="rival-link" data-rival-id="${qbEntry.id}">${svgEscape(qbEntry.name)}</button>`;
+      const availHtml = qbEntry.availability ? ` <b>(${svgEscape(qbEntry.availability.label || qbEntry.availability.reason || "Unavailable")})</b>` : "";
+      return `<tr${isUserEntry?' class="me"':""}><td>${slot}</td><td>${nameHtml}${availHtml}</td><td class="tabular">${overall}</td><td class="tabular">${qbEntry.age}</td><td>${svgEscape((qbEntry.contract&&qbEntry.contract.tier)||"—")}</td></tr>`;
+    };
+    // getTeamQuarterbacks only ever fills in the user's own QB1 slot automatically (Wave 2A) --
+    // when the user is a BACKUP, their own row has no registry entry at all (career/build ARE that
+    // record), so it's inserted here exactly where the old leagueDepthCharts-based version always
+    // placed it: QB2, same simplification as before this wave.
+    const depthRows = career.isBackup
+      ? [depthRow("QB1", qbs.QB1),
+         `<tr class="me"><td>QB2</td><td>${svgEscape(career.name)} (you)</td><td class="tabular">${Math.round(computeEffOverall(career.age, decadeForYear(career.year)))}</td><td class="tabular">${career.age}</td><td>${svgEscape(career.contract.tier)}</td></tr>`,
+         depthRow("QB3", qbs.QB3)]
+      : [depthRow("QB1", qbs.QB1), depthRow("QB2", qbs.QB2), depthRow("QB3", qbs.QB3)];
 
     const schemeId = career.teamScheme ? career.teamScheme[career.teamId] : null;
     const scheme = SCHEMES.find(s=>s.id===schemeId);
     const teamGrade = Math.round(career.teamStrength);
 
-    return `<div class="calc-refnote">${svgEscape(teamNameAt(career.teamId, career.year))} — Team Grade <b>${teamGrade}</b> (${svgEscape(gradeFor(clamp(teamGrade,0,98)).flavor)}). The five grades below are each independently noisy against team grade — a good team can still have a bad line, and vice versa — and each has a real, direct effect on your own numbers, not just flavor.</div>
+    const teamRankHtml = ranks.overall[career.teamId] ? ` — #${ranks.overall[career.teamId]} of ${ranks.total}` : "";
+    return `<div class="calc-refnote">${svgEscape(teamNameAt(career.teamId, career.year))} — Team Grade <b>${teamGrade}</b> (${svgEscape(gradeFor(clamp(teamGrade,0,98)).flavor)})${teamRankHtml}. Team Grade is a weighted read of the five grades below it (O-Line/Weapons 20% each, Defense 30%, Coaching 20%, Front Office 10%) — each still moves for its own legible reasons (roster variance, coaching changes, front-office moves), and each has a real, direct effect on your own numbers, not just flavor.</div>
       <div class="team-grade-grid">${gradeCards}</div>
       <div class="section-label" style="margin-top:1.4rem;">Depth Chart</div>
       <div class="table-wrap">
@@ -10522,8 +10760,11 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
       const previewKm = document.getElementById("adminPreviewKeyMoment");
       if(repUp) repUp.addEventListener("click", ()=>{ career.reputation = clamp(career.reputation+10,0,100); renderAdminTabContent(); });
       if(repDown) repDown.addEventListener("click", ()=>{ career.reputation = clamp(career.reputation-10,0,100); renderAdminTabContent(); });
-      if(gradeUp) gradeUp.addEventListener("click", ()=>{ career.teamStrength = clamp(career.teamStrength+10,20,97); career.leagueStrength[career.teamId]=career.teamStrength; renderAdminTabContent(); });
-      if(gradeDown) gradeDown.addEventListener("click", ()=>{ career.teamStrength = clamp(career.teamStrength-10,20,97); career.leagueStrength[career.teamId]=career.teamStrength; renderAdminTabContent(); });
+      // Wave 5: routed through adjustTeamStrength -- a direct teamStrength/leagueStrength bump here
+      // would just get overwritten (silently undone) by the very next season-end drift, which now
+      // always re-derives the aggregate from the five persistent components.
+      if(gradeUp) gradeUp.addEventListener("click", ()=>{ adjustTeamStrength(career.teamId, 10, 0); renderAdminTabContent(); });
+      if(gradeDown) gradeDown.addEventListener("click", ()=>{ adjustTeamStrength(career.teamId, -10, 0); renderAdminTabContent(); });
       const gmUp = document.getElementById("adminGmUp"), gmDown = document.getElementById("adminGmDown");
       const fanUp = document.getElementById("adminFanUp"), fanDown = document.getElementById("adminFanDown");
       const popUp = document.getElementById("adminPopUp"), popDown = document.getElementById("adminPopDown");

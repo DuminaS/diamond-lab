@@ -330,6 +330,7 @@
   .tg-value{ font-family:var(--display); font-size:1.5rem; font-weight:800; color:var(--gold); margin-top:0.2rem; }
   .tg-num{ font-size:0.85rem; color:var(--ink-muted); font-weight:600; }
   .tg-impact{ font-size:0.7rem; color:var(--ink-muted); line-height:1.4; margin-top:0.35rem; }
+  .tg-rank{ font-family:var(--mono); font-size:0.62rem; letter-spacing:0.04em; color:var(--ink-muted); margin-top:0.15rem; text-transform:uppercase; }
 
   /* ===== Build stamp (dev/debug aid: confirms which build is actually live, see vite.config.js) ===== */
   #buildStamp{ position:fixed; right:0.5rem; bottom:0.3rem; z-index:400; font-size:0.65rem; color:var(--ink-muted); opacity:0.55; pointer-events:none; font-family:monospace; }

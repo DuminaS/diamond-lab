@@ -1443,6 +1443,141 @@ added this wave either -- it has no established meaning or consumer anywhere in 
 codebase, and Wave 4's own scope is specifically ties/standings; deferred to whichever later wave
 actually needs to distinguish a start from a relief appearance.
 
+### Wave 5 — Persistent five-grade team model and complete Team page
+
+**Section 12 product question, asked and answered**: whether the Team Grade/overall number should
+represent non-QB roster quality only, or total quality including whoever's playing QB there. Asked
+via a direct question; the user chose **non-QB roster quality only**. Confirmed via code reading
+this already matched the existing architecture — `blendOffenseWithTeam(effOverall, teamStrength,
+qbInfluence)` already treats `teamStrength`/`leagueStrength` as the non-QB term, blending the QB's
+own value in separately (`QB_INFLUENCE_REGULAR=0.45`/`QB_INFLUENCE_PLAYOFF=0.35`) everywhere it
+matters (`regularSeasonOffenseGrade`/`playoffOffenseGrade`/`opponentOffenseGrade`) — so this wave
+never had to touch that blend, only fix how the non-QB side itself is derived and persisted.
+
+**The core defect, confirmed**: `career.teamStrength`/`career.leagueStrength[id]` (the aggregate)
+and the five sub-grades (`oline`/`weapons`/`defense`/`coaching`/`gmGrade`) drifted every season via
+completely independent, disconnected formulas — the aggregate moved on its own skill-nudge/decline-
+pull/rebuild-pull/noise math, while `oline`/`weapons` got their own separate noise and `defense`/
+`coaching`/`gmGrade` didn't drift for the player's own team AT ALL outside ORG_EVENTS. For every
+other team, `ensureLeagueTeamGrades`'s five components were PULLED TOWARD the (independently-moving)
+aggregate each season — backwards causality from what the spec asks for: components should
+determine the aggregate, never the reverse.
+
+**Fix: `computeTeamOverall(grades)`, a real, documented, reproducible derivation.** New
+`TEAM_OVERALL_WEIGHTS = { oline:0.20, weapons:0.20, defense:0.30, coaching:0.20, gmGrade:0.10 }`
+(the spec's own recommended calibration; defense weighted highest since it's the one grade with no
+other mechanical outlet at all). New `driftFiveGrades(holder, delta, noiseSpread)` nudges all five
+components by the same `delta` (+ an optional independent per-component wobble) — since the weights
+sum to 1.0, this reproduces the *exact* aggregate movement a direct `strength += delta` used to,
+while keeping the components themselves in sync instead of stale. New `adjustTeamStrength(teamId,
+delta, noiseSpread)` is now the ONE place any team's quality ever moves: for the player's own team
+it drifts `career.*` directly and calls `recomputeMyTeamStrength()`; for anyone else it drifts
+`career.leagueTeamGrades[teamId]` and re-derives `career.leagueStrength[teamId] =
+computeTeamOverall(...)`. Rewired every site that used to write `leagueStrength`/`teamStrength`
+directly through this one function: the season-end drift block (rivals AND the player's own team,
+which now also gets legible seasonal drift on defense/coaching/gmGrade for the first time, not just
+oline/weapons), QB-succession promotions/signings (3 sites), `rollLeagueNews`'s headline swings, the
+Locker Room life event, `renderOrgEvent`'s generic (non-targeted) branch, and the admin debug panel's
+grade-up/down cheat buttons (previously a direct `teamStrength` bump that the very next season-end
+drift would have silently undone). `renderOrgEvent`'s `oline`/`weapons`-targeted branches now call
+`recomputeMyTeamStrength()` right after so the aggregate never goes stale relative to whichever
+component an event just moved. `ensureLeagueTeamGrades` is now INIT-ONLY — rolls a team's five
+components exactly once, the first time it's seen, and never pulls an existing entry toward anything
+again; it now also iterates `teamsAvailable(year)` (`TEAMS.filter(t=>t.start<=year)`) instead of
+`divisionsForYear(year)`'s per-era division tables — **a real gap this wave's own FA-offer test
+found**: an era's `DIVISIONS_PRE_1970`/`DIVISIONS_1970_2001` table doesn't necessarily list every
+team `TEAMS`/`teamsAvailable` already considers founded that year, so a team could be a legitimate
+FA/trade candidate while `divisionsForYear` silently never surfaced it to `ensureLeagueTeamGrades` —
+a strict superset, so this only ever adds coverage.
+
+**Task #2 fix, the away-team FA-offer defect**: `buildFreeAgentOffers` used to call
+`rollSupportingCastGrade(teamStrengthForOffer)` fresh for EVERY away-team offer, on every single FA
+event — meaning the same team could show two completely different sets of grades depending on
+whether you'd opened its Team page or its FA offer card a moment earlier, and the numbers you signed
+for were never actually the ones any other surface had shown for that franchise. Now reads directly
+from `career.leagueTeamGrades[t.id]` (via a defensive `ensureLeagueTeamGrades(career.year)` call at
+the top of the function, guaranteeing every candidate already has a profile regardless of whether
+`resolvePlayoffs` happened to run for it yet this season). `signFreeAgentOffer` now also snapshots
+the OLD team's real, departing grades into `career.leagueTeamGrades[oldTeamId]` before overwriting
+`career.*` with the new team's — the same fix applied to the four other team-join sites (waiver
+pickup, expansion draft, trade, player-requested trade) via a new shared `handOffTeamProfile
+(oldTeamId, newTeamId)`, all of which used to independently re-roll a brand-new five-grade set on
+every team change instead of inheriting the destination's actual persistent profile.
+
+**Migration**: a save from before this wave has `leagueStrength`/`teamStrength` values that drifted
+independently of the five components — left alone, the very next `adjustTeamStrength` call would
+silently snap the aggregate to whatever `computeTeamOverall` newly implies, an unexplained jump the
+player never asked for. New `migrateTeamOverallDerivation(careerObj)`, run on every load alongside
+`syncQbRegistryFromLegacy`/`migrateTiesDefaults`, reconciles both the player's own `teamStrength` and
+every `leagueTeamGrades` entry's `leagueStrength[id]` to `computeTeamOverall` of their own already-
+stored components — deterministic, no fresh `Math.random()`, safe to run on an already-consistent
+save (untouched up to integer rounding). `teamSeasonHistory` rows also gained a `wonChampionship`
+field (task #8, below); `migrateTiesDefaults` backfills `false` onto any pre-existing row missing it,
+same pattern as its existing `ties:0` backfill.
+
+**Task #8, the season-history/rings staleness bug**: `recordTeamSeasonHistory` snapshots `qbRings`
+the moment standings/seeding are known — well BEFORE the postseason plays out — so the eventual
+Super Bowl winner's own history row for that exact season was permanently stuck showing their
+PRE-championship ring count, and had no way to record "Champions" as a title at all (only
+`wonDivision`/`wonConference`). New `markChampionInHistory(teamId, year)`, called from
+`tryFinalizeLeaguePlayoffBracket` right after the ring itself is actually credited (to
+`career.totals.rings` for the player, or the rival's own totals via the pre-existing
+`awardRivalSuperBowlRing`), patches both `wonChampionship:true` and a fresh `qbRings` snapshot onto
+that season's already-recorded row.
+
+**Task #6, the Team page**: `getTeamQuarterbacks(teamId)` (the Wave 2A canonical registry lookup)
+now backs QB1/QB2/QB3 on BOTH `buildTeamPageHTML` (the generic page) and `buildTeamTabHTML` (the
+player's own tab) — replacing the older, less-current `career.leagueDepthCharts` snapshot, which
+could show a QB2/QB3 who'd already been traded/released/retired since that snapshot was taken. Each
+QB row is clickable (`[data-rival-id]`, picked up by `#careerContent`'s existing delegated listener,
+or explicitly wired for the `teamProfileOverlay`'s siblings) and shows overall/age/contract/
+availability where set (`rival.availability`, from Wave 3). New `computeTeamGradeRanks(year)` ranks
+every active franchise's overall AND each of its five components against every other active
+franchise — a real, mechanical league-rank (`#N of 32`-style), shown on both the generic Team page
+and the player's own Team tab via an extended `buildGradeCardsHtml(grades, rankInfo)` (task #7: one
+shared renderer, never two). The generic Team page also now shows the team's current scheme's ACTUAL
+mechanical effects (reusing `schemeAttrRows`, the exact same per-attribute table the Scheme tab
+already renders — never a second, potentially-contradictory readout) rather than just the scheme's
+name; the FA "if you sign here" projected role line already came straight from `buildFreeAgentOffers`
+own role computation (Round 33), confirmed unchanged and still correct. "Past Seasons" now lists
+"Champions" ahead of "Conf. Champs"/"Div. Champs" once `wonChampionship` is set.
+
+**Verification.** 2 new regression tests: `fa-offers-match-persistent-team-profile` (Section 8 #21/
+#22/#23 together — opens a real away-team FA offer's own Team page, confirms its five grades/rank
+match `career.leagueTeamGrades`, accepts the offer, and confirms `career.*` post-signing is
+byte-for-byte what was previewed, teamStrength is the documented weighted derivation of those exact
+numbers, and the OLD team's profile is preserved as the player's real departing grades rather than a
+fresh re-roll) and `team-page-grades-persist-and-rank` (opens another team from Standings, reloads,
+reopens, confirms identical grades/overall/ranks byte-for-byte, and independently re-derives both the
+overall number and its league rank from the displayed components/a plain sort to confirm neither is
+a second, disagreeing source). Writing these surfaced two real, unrelated-to-Wave-5 pre-existing
+bugs found along the way and fixed as part of this wave's own diagnostic process (per the project's
+"diagnose before changing" norm): (1) the `divisionsForYear` vs. `teamsAvailable` team-id coverage
+gap above, and (2) `autoResolveAbsencePlayoffRun`'s safety net only ever covered `bd.otherChampionId`
+— when the phantom team's `playoffs.done` was already `true` the instant that function ran
+(eliminated in an earlier round), `bd.myChampionId` could stay `null` forever, meaning
+`ls.playoffBracket` (and the eventual champion's ring) never resolved for that season. Both loops are
+no-ops once already resolved, so making the safety net symmetric (`myChampionId` AND
+`otherChampionId`, unconditionally) is safe. Found via `two-year-user-absence-advances-entire-league`
+(Wave 3's own test) newly failing under Wave 5's changed random-call sequence — a latent Wave 3 bug
+this wave's own RNG-sequence shift happened to surface, not something Wave 5's logic itself caused;
+confirmed by reproducing the SAME failure against a stash of pre-Wave-5 `src/main.js` with only that
+one test's seed, then confirming the fix resolves it. Full suite (28 files/tests) run 3 consecutive
+times: identical 25 pass / 1 fail every time — `pro-bowl-eligibility` (Wave 7's job, confirmed
+already failing identically on a clean pre-Wave-5 HEAD, untouched by this wave). `npm run build`
+clean, `git diff --check` clean. Committed locally, **not pushed** — push requires separate explicit
+authorization, which "Wave 5" was not.
+
+**Known limitations, stated plainly**: (1) When the player is a BACKUP competing for a starting job,
+`buildTeamPageHTML` (the generic page, reachable for the player's own team from Standings/FA) shows
+the registry's real QB2 for that team, which may not be the player themselves — `buildTeamTabHTML`
+(the player's own daily-use tab) correctly special-cases this and always shows the player at QB2,
+matching the pre-existing simplification; the generic page was left showing the literal roster
+truth instead of over-engineering a second special case for a comparatively rare, transient state.
+(2) `computeTeamGradeRanks` and `ensureLeagueTeamGrades`'s persistent profiles are per-season-year
+snapshots recomputed from live data on every call (not cached) — cheap at this league size (~32
+teams) but worth revisiting if a future wave adds many more simultaneous active franchises.
+
 ### Round 33 — Playoff Tree follow-up fixes: Continue-button gating, full-tree preview, QB-link bug, Standings tab redesign
 
 User feedback (with screenshots) on Round 32's shipped work, four items:
