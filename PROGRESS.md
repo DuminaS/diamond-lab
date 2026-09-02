@@ -1354,6 +1354,95 @@ job) still correctly fails, unchanged by this wave; `suspension-freezes-league` 
 is now actually fixed). `npm run build` clean, `git diff --check` clean. Committed locally, **not
 pushed** -- push requires separate explicit authorization, which "Wave 3" was not.
 
+### Wave 4 — Regular-season ties and standings correctness
+
+Builds on Round 33's own "QOL and full breakdown" ties work from earlier this session rather than
+redoing it -- most of that work (per-game `tie`/`ties` fields on schedules/box scores/team-history/
+`recordLine`, the real per-era `tieProbability`/`tieStayProbability` split) already satisfied several
+of this wave's own tasks. This wave audited every literal requirement against that existing work and
+fixed the genuine gaps, all in the overtime-resolution mechanism and the standings sort itself.
+
+**`overtimeRulesForYear(year, postseason)`, the required new rule table**, verified against known
+NFL rule-change years: no regular-season overtime before 1974 (a level game after 60 minutes was
+simply final); a single 15-minute sudden-death period 1974-2011; the "modified" sudden-death rule
+(each team guaranteed a possession unless the first score is a touchdown) extended to the regular
+season 2012-2016; a 10-minute period from 2017 on; postseason always sudden death, unlimited
+periods, never allowed to end level, in every era. `modifiedSuddenDeath`/`periodMinutes` are
+recorded for documentation completeness but not separately simulated possession-by-possession -- a
+documented simplification, since only the outcome (who wins, or whether it stays level) is what
+standings/history/records need to agree on.
+
+**A real, confirmed defect this exposed**: pre-1974 was never actually rule-accurate before this
+wave. `tieStayProbability`'s conditional derivation (`tieProbability(year) / 0.06`) gave 1970 a
+33%-conditional-stay-tied rate -- meaning a level-after-regulation 1960s game still ran a fictional
+coin-flip "OT" period 67% of the time, which never happened in real football (there was no extra
+period to play at all before 1974). Split `simulateGameScore` into `simulateRegulationScore` +
+`resolveOvertime` (required design #2) specifically so `resolveOvertime` could check
+`overtimeRulesForYear(...).hasOvertime` FIRST and return an unconditional tie the instant regulation
+ends level, for real, in that era -- no probability roll, no fictional period, matching history
+exactly. `simulateGameScore` itself survives as a thin backward-compatible wrapper around the two.
+
+**Recalibrated `tieProbability`'s pre-1974 value from an assumed 0.02 to a measured 0.05** (required
+design #8 -- "calibrate by era with seeded sweeps, not intuition"). Once ties are no longer
+artificially suppressed by a fictional OT most of the time, the real aggregate rate is however often
+two simulated teams naturally land level after 4 real quarters -- measured via a throwaway sweep
+script at 6 seeds x 15 seasons in the 1960s: 4.93% (30/608 real player games), essentially identical
+to the flat-resolved league's own rate at the same corrected constant (4.67%, 794/16990 games) once
+recalibrated. The 1974-2011 and 2012+ eras were re-verified by the same sweep (1980s: 0/704 my games
+vs. 0.39% league at the existing 0.3% target -- consistent at this sample size; 2020s: 0.57% my vs.
+0.56% league at the existing 0.5% target) and are unchanged.
+
+**Deterministic standings tiebreak** (required design #7), replacing the confirmed defect "standings
+sort only by winPct; exact ties inherit stable/static team order rather than football tiebreak
+logic." New `compareTeamsForStandings(rA, rB, year, scope)` implements the spec's own minimum
+fallback chain -- win percentage, head-to-head (when the two teams actually played), division record
+(division-ranking scope only), conference record, point differential, then a stable team-ID string
+compare so the final order is 100% deterministic regardless of input array order. A DOCUMENTED
+SIMPLIFICATION from the full real NFL procedure, which also considers common games, strength of
+victory/schedule, net points/net TDs in common games, and a coin toss -- not modeled here, since the
+exit criteria only ask for a real, deterministic fallback chain, not full historical procedural
+fidelity. `pointsFor`/`pointsAgainst` added to `buildScheduleResults`' `results[id]` shape to feed
+the point-differential step; head-to-head/division/conference records are derived live from
+`career.currentSeasonSchedules` rather than pre-aggregated, since every call site either runs inside
+the same `generateSeason()` call that just built it or renders whichever season is currently active
+(the only season that field is ever valid for). Replaced all 6 `sort((a,b)=>b.winPct-a.winPct)` call
+sites across `simulateLeagueStandings`, `recordTeamSeasonHistory`, `resolvePlayoffs`'s conference-
+rank lookup, and `buildStandingsTabHTML` (both its own internal sorts) with this one comparator.
+
+**Ties defaults on migration** (Section 6 migration requirement #8): a bench/rival season row built
+by `simulatePlayerSeasonStats` had no `ties` field at all until `reconcileWinLossFromGames`
+overwrote it -- for the rare case that never runs (an entity planned/tagged for zero real weeks this
+season), the row would keep no `ties` field forever. Fixed with a real `ties:0` default at
+construction time. New `migrateTiesDefaults(careerObj)`, called every load alongside
+`syncQbRegistryFromLegacy`, backfills `ties:0` onto any pre-existing totals/season/team-history row
+that predates the whole ties feature -- defense-in-depth (every ties-aware display site already
+treats a missing value as 0 via `||0`), matching the same "repair the data once, on load" pattern
+every other migration step in this file already follows.
+
+**Verification.** 4 new regression tests: `regular-season-era-can-produce-tie` (Section 8 #18 --
+1960s sweep confirms real ties for both the player's own games and flat-resolved rivals, and that a
+tied game never shows one side incorrectly reading a win), `postseason-never-produces-tie` (#19 --
+same era, checks every confirmed bracket round in BOTH conferences plus any league championship game
+never ends level), `standings-and-history-preserve-wlt` (#20 -- cross-checks every team's standings
+record against the literal sum of its own real per-game log, both sides of every game agreeing on
+tie/win, and the permanent team-history row matching), `seeding-deterministic-on-reload` (confirms
+seeded order never misorders two different-winPct teams, survives a reload byte-for-byte identical,
+and that a real winPct tie actually occurred at least once across the sweep to prove the tiebreak
+chain was genuinely exercised, not just present-but-unused). Full suite (23 files/tests) run 3
+consecutive times: identical 23 pass / 1 fail every time -- `pro-bowl-eligibility` (Wave 7's job)
+unchanged. `npm run build` clean, `git diff --check` clean. Committed locally, **not pushed** --
+push requires separate explicit authorization, which "Wave 4" was not.
+
+**Known limitation, stated plainly**: task #3's suggested `{result:"W"|"L"|"T", tied:boolean}`
+return shape was not adopted literally -- the existing `won:true|false|null` + `tie:boolean` fields
+already communicate the identical three-way state unambiguously everywhere in this codebase, and a
+wholesale rename across every game-resolution call site would have been a large, risk-heavy
+refactor for a purely cosmetic shape change the task itself only "may" (not "must") introduce.
+`starts` (a QB season-row field distinct from `games`, named in Section 5's target schema) was not
+added this wave either -- it has no established meaning or consumer anywhere in the current
+codebase, and Wave 4's own scope is specifically ties/standings; deferred to whichever later wave
+actually needs to distinguish a start from a relief appearance.
+
 ### Round 33 — Playoff Tree follow-up fixes: Continue-button gating, full-tree preview, QB-link bug, Standings tab redesign
 
 User feedback (with screenshots) on Round 32's shipped work, four items:

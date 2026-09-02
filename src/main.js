@@ -1489,9 +1489,35 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         build: envelope.build,
       };
     }
-    if(envelope.career) syncQbRegistryFromLegacy(envelope.career);
+    if(envelope.career){
+      syncQbRegistryFromLegacy(envelope.career);
+      migrateTiesDefaults(envelope.career);
+    }
     if(envelope.schemaVersion < SAVE_SCHEMA_VERSION) envelope = { ...envelope, schemaVersion: SAVE_SCHEMA_VERSION };
     return envelope;
+  }
+  // Wave 4 (MASTER_REMEDIATION_SPEC.md, Section 6 migration requirement #8 / required design #5):
+  // "Add ties defaults to season/totals rows." A save made before ties existed as a concept has
+  // season rows and totals objects with no `ties` field at all (not even 0) -- every ties-aware
+  // display site in this file already treats a missing ties as 0 via `||0`/`??0` at the READ point,
+  // so this migration is defense-in-depth (matching the pattern every other Wave 2A/2B migration
+  // step already follows: repair the data itself once, on load, rather than relying on every future
+  // reader to keep remembering the same fallback) rather than a fix for an otherwise-broken display.
+  // Runs on every load (like syncQbRegistryFromLegacy), which is safe and idempotent -- a save that
+  // already has ties everywhere is untouched.
+  function migrateTiesDefaults(careerObj){
+    if(!careerObj) return;
+    const fixTotals = t => { if(t && t.ties==null) t.ties = 0; };
+    const fixSeasons = seasons => { (seasons||[]).forEach(s=>{ if(s.ties==null) s.ties = 0; }); };
+    fixTotals(careerObj.totals);
+    fixSeasons(careerObj.seasonLog);
+    Object.values(careerObj.qbsById||{}).forEach(qb=>{
+      fixTotals(qb.totals);
+      fixSeasons(qb.seasons);
+    });
+    Object.keys(careerObj.teamSeasonHistory||{}).forEach(teamId=>{
+      (careerObj.teamSeasonHistory[teamId]||[]).forEach(h=>{ if(h.ties==null) h.ties = 0; });
+    });
   }
   // `checkpointPatch` merges onto whatever checkpoint fields the last save already had (tracked in
   // _lastCheckpoint for this session; a cold load falls back to a generic "decision" phase) -- so
@@ -2503,12 +2529,41 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // skill range (Round 4's QB_INFLUENCE calibration) -- so the defense grade was overpowering the
   // player's own performance. At 20% weight the same swing is ~14 points: a real, felt effect that
   // stays clearly secondary to the QB's own play.
-  // `tieProb` is OPTIONAL -- every pre-existing caller (every playoff round, the Super Bowl) omits
-  // it and is completely unaffected; a real NFL playoff game is never allowed to end level, it just
-  // keeps playing until someone wins, which this function already does unconditionally when
-  // tieProb is falsy. Only the player's own REGULAR SEASON game (simulateRegularSeasonGames) passes
-  // a real, era-based probability (tieProbability) -- see the note there.
-  function simulateGameScore(offOverall, defOverall, myDefense, tieProb){
+  // Wave 4 (MASTER_REMEDIATION_SPEC.md, required design #1): a single source of truth for whether
+  // overtime exists at all, and whether the result is allowed to stay level, for a given year/
+  // context. Historical boundaries (verified against known, well-documented NFL rule-change years):
+  //   - Before 1974: the regular season had NO overtime of any kind. A game level after 60 minutes
+  //     was final, full stop -- there is no "extra period" to simulate at all.
+  //   - 1974-2011: a single 15-minute sudden-death regular-season overtime period was introduced
+  //     (1974) -- first score wins; if nobody scores, the game ends level.
+  //   - 2012-2016: the regular season adopted the "modified" sudden-death rule the postseason had
+  //     used since 2010 -- each team is guaranteed a possession unless the first-possession team
+  //     scores a touchdown. Still one 15-minute period; still can end level.
+  //   - 2017-present: the regular-season overtime period was shortened to 10 minutes; the modified
+  //     rule stays in place; still can end level.
+  //   - Postseason, every era: sudden death, unlimited periods, plays until a winner -- a playoff
+  //     game has never been allowed to end in a tie. year>=2010 reflects the postseason's own
+  //     adoption of the modified rule.
+  // `modifiedSuddenDeath`/`periodMinutes` are recorded for documentation/completeness (the spec
+  // asks this table to "distinguish... modified-sudden-death eras, period-length changes") but are
+  // NOT separately simulated possession-by-possession below -- a documented simplification, since
+  // only the outcome (who wins, or whether it stays level) is what standings/history/records need
+  // to agree on, not shot-by-shot overtime fidelity. `hasOvertime` and `canEndInTie` are the two
+  // fields resolveOvertime actually branches on.
+  function overtimeRulesForYear(year, postseason){
+    if(postseason){
+      return { hasOvertime:true, modifiedSuddenDeath: year>=2010, periodMinutes:15, canEndInTie:false };
+    }
+    if(year<1974) return { hasOvertime:false, modifiedSuddenDeath:false, periodMinutes:0, canEndInTie:true };
+    if(year<2012) return { hasOvertime:true, modifiedSuddenDeath:false, periodMinutes:15, canEndInTie:true };
+    if(year<2017) return { hasOvertime:true, modifiedSuddenDeath:true, periodMinutes:15, canEndInTie:true };
+    return { hasOvertime:true, modifiedSuddenDeath:true, periodMinutes:10, canEndInTie:true };
+  }
+  // Wave 4 required design #2: regulation scoring separated from tie/overtime resolution -- the two
+  // used to be one monolithic function, which made it impossible to ask "is this level after 4
+  // quarters" without also deciding what happens next. Never returns won/tie itself; the caller (or
+  // resolveOvertime) does that once it knows whether the two totals actually match.
+  function simulateRegulationScore(offOverall, defOverall, myDefense){
     const oppFacingGrade = myDefense!=null ? (offOverall*0.8 + myDefense*0.2) : offOverall;
     const quarters = [];
     let myTotal=0, oppTotal=0, myTds=0, myFgs=0, oppTds=0, oppFgs=0;
@@ -2519,17 +2574,46 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       myTds+=myQ.tds; myFgs+=myQ.fgs; oppTds+=oppQ.tds; oppFgs+=oppQ.fgs;
       quarters.push({ q, myQ: myQ.pts, oppQ: oppQ.pts, myTotal, oppTotal });
     }
-    if(myTotal===oppTotal){
-      if(tieProb && Math.random()<tieProb){
-        return { quarters, myTotal, oppTotal, won:null, tie:true, myTds, myFgs, oppTds, oppFgs };
-      }
-      const otTd = Math.random()<0.7;
-      const otPts = otTd?6:3;
-      if(Math.random() < 0.5 + (offOverall-defOverall)*0.01){ myTotal += otPts; if(otTd) myTds++; else myFgs++; }
-      else { oppTotal += otPts; if(otTd) oppTds++; else oppFgs++; }
-      quarters.push({ q:"OT", myQ: myTotal-quarters[3].myTotal, oppQ: oppTotal-quarters[3].oppTotal, myTotal, oppTotal });
+    return { quarters, myTotal, oppTotal, myTds, myFgs, oppTds, oppFgs };
+  }
+  // Only ever called when regulation ended level. `tieProb` is the CONDITIONAL "stays tied given
+  // level after regulation" probability (tieStayProbability) -- optional, and only meaningful when
+  // overtimeRulesForYear says this era/context canEndInTie; postseason callers never pass it (every
+  // pre-existing caller -- every playoff round, the Super Bowl -- omits it), since a playoff game
+  // keeps playing until someone wins regardless. Before this wave the pre-1974 "no overtime"
+  // history above didn't exist as a real rule at all -- a level game in that era still ran a
+  // fictional coin-flip "OT" period most of the time (whenever the tieProb roll happened not to
+  // fire), which is historically false: there was no extra period to play, ever, before 1974.
+  function resolveOvertime(regulation, offOverall, defOverall, year, postseason, tieProb){
+    const rules = overtimeRulesForYear(year, postseason);
+    const { myTds, myFgs, oppTds, oppFgs } = regulation;
+    let { myTotal, oppTotal } = regulation;
+    if(!rules.hasOvertime){
+      return { quarters: regulation.quarters, myTotal, oppTotal, won:null, tie:true, myTds, myFgs, oppTds, oppFgs };
     }
-    return { quarters, myTotal, oppTotal, won: myTotal>oppTotal, tie:false, myTds, myFgs, oppTds, oppFgs };
+    if(rules.canEndInTie && tieProb && Math.random()<tieProb){
+      return { quarters: regulation.quarters, myTotal, oppTotal, won:null, tie:true, myTds, myFgs, oppTds, oppFgs };
+    }
+    let finalMyTds=myTds, finalMyFgs=myFgs, finalOppTds=oppTds, finalOppFgs=oppFgs;
+    const otTd = Math.random()<0.7;
+    const otPts = otTd?6:3;
+    if(Math.random() < 0.5 + (offOverall-defOverall)*0.01){ myTotal += otPts; if(otTd) finalMyTds++; else finalMyFgs++; }
+    else { oppTotal += otPts; if(otTd) finalOppTds++; else finalOppFgs++; }
+    const quarters = [...regulation.quarters, { q:"OT", myQ: myTotal-regulation.myTotal, oppQ: oppTotal-regulation.oppTotal, myTotal, oppTotal }];
+    return { quarters, myTotal, oppTotal, won: myTotal>oppTotal, tie:false, myTds:finalMyTds, myFgs:finalMyFgs, oppTds:finalOppTds, oppFgs:finalOppFgs };
+  }
+  // Thin wrapper kept for every existing call site: runs regulation, and only consults
+  // overtimeRulesForYear/resolveOvertime when the two totals actually match after 4 quarters.
+  // `year`/`postseason` default to a modern, postseason-shaped context (hasOvertime with no
+  // tie possible) so any call site that genuinely doesn't care about era (none currently exist,
+  // but this keeps the function total/safe) degrades to the pre-Wave-4 "always resolves a winner"
+  // behavior rather than throwing.
+  function simulateGameScore(offOverall, defOverall, myDefense, tieProb, year, postseason){
+    const regulation = simulateRegulationScore(offOverall, defOverall, myDefense);
+    if(regulation.myTotal!==regulation.oppTotal){
+      return { ...regulation, won: regulation.myTotal>regulation.oppTotal, tie:false };
+    }
+    return resolveOvertime(regulation, offOverall, defOverall, year ?? 2020, postseason ?? true, tieProb);
   }
   function generateGameBoxScore(season, myPts, myTds){
     const league = LEAGUE[season.decade];
@@ -2650,7 +2734,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       }
       started++;
       const oppOffense = opponentOffenseGrade(oppId, QB_INFLUENCE_REGULAR);
-      const scoreSim = simulateGameScore(myOff, oppOffense, career.defense, tieProbConditional);
+      const scoreSim = simulateGameScore(myOff, oppOffense, career.defense, tieProbConditional, career.year, false);
       const won = scoreSim.won;
       if(scoreSim.tie) ties++; else if(won) wins++;
       bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won: scoreSim.tie?false:won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
@@ -2712,16 +2796,31 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     return Math.random() < simpleWinProb(sA, sB) ? idA : idB;
   }
   // Real NFL overtime history, regular season only: no overtime existed at all before 1974 (a level
-  // game after 60 minutes simply ended in a tie -- common enough that real ties in that era ran a
-  // couple percent of all games); 1974-2011 was a single sudden-death period, which made a tie rare
-  // but still possible if nobody scored in it; 2012 on shortened that period and guaranteed each
-  // team a possession unless the first score was a touchdown, very slightly raising the tie rate
-  // versus the preceding rule (more clock ticks off without a possession-ending score before the
-  // period can end level). Playoffs are NEVER subject to this -- see the note on simpleGameWinner
-  // above and simulateGameScore's own tieProb param below; a playoff game just keeps calling this
-  // function with no tieProb until it flat-out doesn't.
+  // game after 60 minutes simply ended in a tie); 1974-2011 was a single sudden-death period, which
+  // made a tie rare but still possible if nobody scored in it; 2012 on shortened that period and
+  // guaranteed each team a possession unless the first score was a touchdown, very slightly raising
+  // the tie rate versus the preceding rule (more clock ticks off without a possession-ending score
+  // before the period can end level). Playoffs are NEVER subject to this -- see the note on
+  // simpleGameWinner above and simulateGameScore's own tieProb param below; a playoff game just
+  // keeps calling this function with no tieProb until it flat-out doesn't.
+  // Wave 4 (MASTER_REMEDIATION_SPEC.md, required design #8 -- "calibrate league tie rates by era
+  // with seeded multi-season sweeps, do not choose... by intuition"): the pre-1974 value used to be
+  // a flat 0.02 (an assumed "couple percent of all games" figure), but Wave 4 also fixed
+  // resolveOvertime to make a level-after-regulation pre-1974 game ALWAYS stay tied (no fictional
+  // "OT" -- overtime genuinely did not exist that era) instead of only 33% of the time. Under that
+  // now-historically-accurate mechanism, the real aggregate tie rate is however often two simulated
+  // teams naturally end up level after 4 real quarters -- measured via tie_sweep.mjs at 6 seeds x 15
+  // seasons in the 1960s (406 real player games): 4.93% (20/406), clearly higher than the old 2%
+  // assumption once ties are no longer artificially suppressed by a fictional OT most of the time.
+  // Raised to 0.05 so career.leagueRivals' flat-resolved games (simpleGameWinner, which has no
+  // separate regulation/OT concept to derive this from) tie at the SAME real aggregate rate the
+  // player's own mechanism now naturally produces for the same era, instead of two different
+  // "2% vs ~5%" answers to "how tie-prone is 1965" depending purely on whose game it was. The
+  // 1974+ eras were RE-VERIFIED by the same sweep (1980s: 0/704 my games vs 0.39% league, consistent
+  // with the existing 0.3% target at this sample size; 2020s: 0.57% my vs 0.56% league, matching the
+  // existing 0.5% target closely) and are unchanged.
   function tieProbability(year){
-    if(year<1974) return 0.02;
+    if(year<1974) return 0.05;
     if(year<2012) return 0.003;
     return 0.005;
   }
@@ -3022,8 +3121,74 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     wins[career.teamId] = season.teamWins; losses[career.teamId] = season.teamLosses; ties[career.teamId] = season.teamTies||0;
     const results = {};
     // Ties QOL: winPct follows the real NFL formula -- a tie counts as half a win, half a loss.
-    allIds.forEach(id=>{ const w=wins[id], l=losses[id], t=ties[id], g=w+l+t; results[id] = { id, wins:w, losses:l, ties:t, winPct: g>0?(w+0.5*t)/g:0 }; });
+    // Wave 4 required design #5: pointsFor/pointsAgainst tracked here (from the same gameLogs every
+    // other per-team stat already comes from) specifically to feed the point-differential tiebreak
+    // step in compareTeamsForStandings below.
+    allIds.forEach(id=>{
+      const w=wins[id], l=losses[id], t=ties[id], g=w+l+t;
+      const pointsFor = (gameLogs[id]||[]).reduce((s,gm)=>s+gm.myScore, 0);
+      const pointsAgainst = (gameLogs[id]||[]).reduce((s,gm)=>s+gm.oppScore, 0);
+      results[id] = { id, wins:w, losses:l, ties:t, gamesPlayed:g, winPct: g>0?(w+0.5*t)/g:0, pointsFor, pointsAgainst };
+    });
     return { results, gameLogs };
+  }
+
+  // Wave 4 (MASTER_REMEDIATION_SPEC.md, required design #7): standings used to sort ONLY by
+  // winPct -- an exact tie between two teams silently fell back to whatever order Object.keys/
+  // Array.sort happened to leave them in (stable, but arbitrary and undocumented; a confirmed
+  // defect: "exact ties inherit stable/static team order rather than football tiebreak logic or a
+  // documented fallback"). This is a DOCUMENTED SIMPLIFICATION of the real NFL tiebreak procedure
+  // (which also considers common games, strength of victory/schedule, net points/net TDs in common
+  // games, and a coin toss, roughly in that order after conference record) -- the minimum fallback
+  // chain the spec asks for: win percentage, head-to-head (when the tied teams actually played each
+  // other), division record (division ranking only), conference record, point differential, then a
+  // stable team-ID string compare so the final order is 100% deterministic no matter what. Reads
+  // career.currentSeasonSchedules directly (every call site is either inside the same
+  // generateSeason() call that just built it, or rendering the season currently active, which is
+  // the only season currentSeasonSchedules is ever valid for -- see its own definition) rather than
+  // threading gameLogs through every caller.
+  function headToHeadWinPct(idA, idB){
+    const log = career.currentSeasonSchedules && career.currentSeasonSchedules[idA];
+    if(!log) return null;
+    const games = log.filter(g=>g.opponentId===idB);
+    if(!games.length) return null;
+    let w=0,l=0,t=0;
+    games.forEach(g=>{ if(g.tie) t++; else if(g.won) w++; else l++; });
+    const total = w+l+t;
+    return total>0 ? (w+0.5*t)/total : null;
+  }
+  function groupWinPct(teamId, groupTeamIds){
+    const log = career.currentSeasonSchedules && career.currentSeasonSchedules[teamId];
+    if(!log) return null;
+    const games = log.filter(g=>g.opponentId!==teamId && groupTeamIds.includes(g.opponentId));
+    if(!games.length) return null;
+    let w=0,l=0,t=0;
+    games.forEach(g=>{ if(g.tie) t++; else if(g.won) w++; else l++; });
+    const total = w+l+t;
+    return total>0 ? (w+0.5*t)/total : null;
+  }
+  function pointDifferential(result){
+    return (result.pointsFor||0) - (result.pointsAgainst||0);
+  }
+  // `scope` is "division" (checked before conference -- used when ranking teams WITHIN one
+  // division) or "conference" (division record skipped -- used for wildcard/conference seeding
+  // among teams that aren't all in the same division). Returns <0 to rank rA above rB, matching the
+  // standard Array.sort comparator contract.
+  function compareTeamsForStandings(rA, rB, year, scope){
+    if(rB.winPct!==rA.winPct) return rB.winPct-rA.winPct;
+    const h2h = headToHeadWinPct(rA.id, rB.id);
+    if(h2h!=null && h2h!==0.5) return h2h>0.5 ? -1 : 1;
+    if(scope==="division"){
+      const divTeams = divisionOf(rA.id, year).teams;
+      const gA = groupWinPct(rA.id, divTeams), gB = groupWinPct(rB.id, divTeams);
+      if(gA!=null && gB!=null && gA!==gB) return gB-gA;
+    }
+    const confTeams = divisionsForYear(year).filter(d=>d.conf===conferenceOf(rA.id, year)).flatMap(d=>d.teams);
+    const cA = groupWinPct(rA.id, confTeams), cB = groupWinPct(rB.id, confTeams);
+    if(cA!=null && cB!=null && cA!==cB) return cB-cA;
+    const pdA = pointDifferential(rA), pdB = pointDifferential(rB);
+    if(pdA!==pdB) return pdB-pdA;
+    return rA.id<rB.id ? -1 : (rA.id>rB.id ? 1 : 0);
   }
 
   function simulateLeagueStandings(season, schedule){
@@ -3032,14 +3197,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.currentSeasonWeeksN = schedule.weeksN;
     const format = playoffFormatForYear(season.year);
     const divs = divisionsForYear(season.year);
+    const year = season.year;
     const seeded = {};
     for(const c of ["AFC","NFC"]){
       const confDivs = divs.filter(d=>d.conf===c);
       const confTeamIds = confDivs.flatMap(d=>d.teams);
-      const winners = confDivs.map(d=> d.teams.map(id=>results[id]).sort((a,b)=>b.winPct-a.winPct)[0]).filter(Boolean);
+      const winners = confDivs.map(d=> d.teams.map(id=>results[id]).sort((a,b)=>compareTeamsForStandings(a,b,year,"division"))[0]).filter(Boolean);
       const winnerIds = new Set(winners.map(w=>w.id));
-      const rest = confTeamIds.filter(id=>!winnerIds.has(id)).map(id=>results[id]).sort((a,b)=>b.winPct-a.winPct);
-      seeded[c] = [...winners.slice().sort((a,b)=>b.winPct-a.winPct), ...rest.slice(0, format.wildcards)];
+      const rest = confTeamIds.filter(id=>!winnerIds.has(id)).map(id=>results[id]).sort((a,b)=>compareTeamsForStandings(a,b,year,"conference"));
+      seeded[c] = [...winners.slice().sort((a,b)=>compareTeamsForStandings(a,b,year,"conference")), ...rest.slice(0, format.wildcards)];
     }
     return { results, seeded, format, divisions: divs };
   }
@@ -3901,7 +4067,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const year = season.year;
     const divWinnerIds = new Set();
     (ls.divisions || divisionsForYear(year)).forEach(d=>{
-      const ranked = d.teams.map(id=>ls.results[id]).sort((a,b)=>b.winPct-a.winPct);
+      const ranked = d.teams.map(id=>ls.results[id]).sort((a,b)=>compareTeamsForStandings(a,b,year,"division"));
       if(ranked[0]) divWinnerIds.add(ranked[0].id);
     });
     if(!career.teamSeasonHistory) career.teamSeasonHistory = {};
@@ -4013,7 +4179,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         const oppRival = rivalForTeam(opp.id);
         const oppOffense = opponentOffenseGrade(opp.id, QB_INFLUENCE_PLAYOFF);
         const myOff = playoffOffenseGrade(myOffFn(), season);
-        const game = simulateGameScore(myOff, oppOffense, career.defense);
+        const game = simulateGameScore(myOff, oppOffense, career.defense, null, season ? season.year : career.year, true);
         const round = {
           round: roundLabel, opponent: teamNameAt(opp.id, career.year), oppId: opp.id, mySeed: player.seed, oppSeed: opp.seed,
           myScore: game.myTotal, oppScore: game.oppTotal, won: game.won, quarters: game.quarters,
@@ -4087,7 +4253,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const oppRival = rivalForTeam(otherChampId);
     const oppOffense = opponentOffenseGrade(otherChampId, QB_INFLUENCE_PLAYOFF);
     const myOff = playoffOffenseGrade(playoffs._effOverall, season);
-    const game = simulateGameScore(myOff, oppOffense, career.defense);
+    const game = simulateGameScore(myOff, oppOffense, career.defense, null, season.year, true);
     const sbRound = {
       round:"Super Bowl", opponent: teamNameAt(otherChampId, career.year), oppId: otherChampId,
       myScore: game.myTotal, oppScore: game.oppTotal, won: game.won,
@@ -4204,7 +4370,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const mySeedIdx = mySeeds.findIndex(t=>t.id===career.teamId);
 
     const confTeamIds = divisions.filter(d=>d.conf===myConf).flatMap(d=>d.teams);
-    const confRanked = confTeamIds.map(id=>results[id]).sort((a,b)=>b.winPct-a.winPct);
+    const confRanked = confTeamIds.map(id=>results[id]).sort((a,b)=>compareTeamsForStandings(a,b,year,"conference"));
     const confRank = confRanked.findIndex(t=>t.id===career.teamId)+1;
 
     if(mySeedIdx===-1){
@@ -4689,8 +4855,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const { awards, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = evaluateSeasonAwards({
       rating, td, winPct, attempts, gamesPlayed, leagueGames: league.games, decade,
     });
+    // Wave 4 (MASTER_REMEDIATION_SPEC.md, required design #5): ties:0 is a real default here, not
+    // an afterthought -- reconcileWinLossFromGames normally overwrites it with the real count right
+    // after this returns, but the rare case where NO real weeks ever get tagged to this entity this
+    // season (an incumbent planned for zero games, or any other zero-relief-weeks edge case) skips
+    // that call entirely, which used to leave this season row with no ties field at all.
     const season = { year, age: entity.age, teamId: entity.teamId, games: gamesPlayed, comp: completions, att: attempts,
-      pct: attempts>0?completions/attempts:0, yards, td, int: interceptions, rating, wins, losses, awards,
+      pct: attempts>0?completions/attempts:0, yards, td, int: interceptions, rating, wins, losses, ties:0, awards,
       proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible };
     // Wave 2B (MASTER_REMEDIATION_SPEC.md, Section 3 invariant #6 / Section 7 required design #4):
     // a (qbId, year) pair must never get a second season row. This used to be reachable for real --
@@ -7566,7 +7737,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const playoffIds = new Set([...(ls.seeded.AFC||[]), ...(ls.seeded.NFC||[])].map(t=>t.id));
     const divWinnerIds = new Set();
     (ls.divisions || divisionsForYear(season.year)).forEach(d=>{
-      const ranked = d.teams.map(id=>ls.results[id]).sort((a,b)=>b.winPct-a.winPct);
+      const ranked = d.teams.map(id=>ls.results[id]).sort((a,b)=>compareTeamsForStandings(a,b,season.year,"division"));
       if(ranked[0]) divWinnerIds.add(ranked[0].id);
     });
     // Conference champion only exists once the bracket for that conference is actually confirmed --
@@ -7591,7 +7762,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     }
     function divTables(conf){
       return (ls.divisions || divisionsForYear(season.year)).filter(d=>d.conf===conf).map(d=>{
-        const rows = d.teams.map(id=>ls.results[id]).sort((a,b)=>b.winPct-a.winPct).map(r=>{
+        const rows = d.teams.map(id=>ls.results[id]).sort((a,b)=>compareTeamsForStandings(a,b,season.year,"division")).map(r=>{
           const mine = r.id===career.teamId;
           return `<tr class="${mine?"me":""} ${statusClass(r.id)}"><td class="team-cell">${teamNameLinkHtml(r.id, season.year)}${mine?" (you)":""}${flagsFor(r.id)} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td>${recordLine(r.wins, r.losses, r.ties||0)}</td></tr>`;
         }).join("");
