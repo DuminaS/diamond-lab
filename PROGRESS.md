@@ -1960,18 +1960,59 @@ rather than one broad range, which this session did not have the remaining scope
 for all ~15 of them without rushing. Left in main.js, named explicitly here as the next concrete
 Stage-1 work for a future session, rather than silently skipped.
 
-**Platform completion — investigated, explicitly deferred with an open question, not silently
-skipped.** The Android SDK (`platform-tools`, `emulator`, build-tools) IS installed on this machine
-at the default location — confirmed via direct inspection, contradicting nothing in this file's
-earlier notes, just an update since the last time this was checked. However, no AVD (emulator
-image) has EVER been created on this machine (`~/.android/avd` doesn't exist). Creating one for the
-first time downloads a system image (commonly 1-2GB) and takes meaningful time, and the actual
-verification tasks the spec asks for (resume after background/process death, safe areas, back
-button, audio lifecycle, the rewarded-ad mock flow) are fundamentally UX/visual checks that benefit
-from a human actually looking at the emulator screen, not from a terminal session scripting `adb`
-blindly. Rather than either silently skipping this or unilaterally spending significant time/disk
-downloading a system image the user didn't explicitly ask for, this was raised as an open question
-back to the user (see this wave's own handoff) instead of guessed at.
+**Platform completion — done. Asked the user whether to skip Android platform verification or set
+up a real emulator; answered "set up an AVD and verify via adb," so the full toolchain was built
+from scratch on this machine this session**: Android SDK cmdline-tools (`sdkmanager`/`avdmanager`,
+none of which existed here before — only `platform-tools`/`emulator`/build-tools did), a system
+image (`system-images;android-34;google_apis;x86_64`), an AVD (`GridironTest`, Pixel 6 profile,
+Android 14/API 34), and — because Android Studio's bundled JBR is JDK 25, which Gradle 8.14.3
+cannot run on ("Unsupported class file major version 69") — a separately-downloaded Eclipse
+Temurin JDK 21 LTS used as `JAVA_HOME` for the Gradle invocation. Built a real debug APK
+(`gradlew.bat assembleDebug`), installed it on the booted emulator, and drove the whole spec-named
+checklist via `adb` (install/launch/screenshot/tap), confirming each screenshot visually via the
+Read tool rather than trusting exit codes alone:
+- **Menu render + dev-flag gating**: app launches cleanly to the real Gridiron Lab menu; the admin
+  panel button is correctly ABSENT in this real production Android build, confirming Wave 7/8's
+  `import.meta.env.DEV` gate holds outside a dev server, not just in Playwright against `vite preview`.
+- **Combine flow**: "Start the combine" reaches a fully-rendered Combine screen (player-card grid,
+  attribute strip, both respin buttons, the "Watch Ad for Bonus Reroll" button) with no layout
+  breakage on a real device WebView.
+- **Rewarded-ad mock flow, end-to-end**: tapping "Watch Ad for Bonus Reroll" opens the ad overlay,
+  the real 30-second countdown genuinely completes ("Reward ready!"), and tapping "Claim Bonus
+  Reroll" closes the overlay and correctly applies the reward — both `RESPIN DECADE` and
+  `RESPIN OPTIONS` counters incremented (the shared-pool top-up design from the ad-reroll feature)
+  and `WATCH AD FOR BONUS REROLL` decremented from 3 to 2. Matches desktop-tested behavior exactly.
+- **Back button**: from the menu, the hardware/gesture back action exits cleanly to the home
+  launcher — default Capacitor behavior, no crash, no custom handler installed. Noted as an accepted
+  finding, not a defect: the once-per-season checkpoint design means there's never unsaved progress
+  for this to lose.
+- **Resume after backgrounding**: `KEYCODE_HOME` then relaunching the activity (without killing the
+  process) returned to the exact same in-memory Combine state — same round (1/12, "Durability"),
+  same respin counters — as expected, since the process was never killed.
+- **Resume after process death**: `am force-stop` followed by a cold relaunch produces a clean
+  restart to the menu screen with no crash, no white-screen, no stuck loader. The Combine's
+  mid-round progress does NOT survive this, which is correct, expected behavior given this project's
+  documented persistence design (`saveActiveCareer`/`loadActiveCareer` checkpoint an in-progress
+  *career* once per season — mid-Combine state was never meant to be checkpointed at all). A real
+  in-progress *career* resume was not separately exercised on-device (would require playing through
+  a full 12-round Combine plus draft night first), but `saveActiveCareer`/`loadActiveCareer`'s
+  actual logic is unchanged this wave and already covered by the existing save-migration Playwright
+  suite; Capacitor's Android WebView uses the same standard `localStorage` the desktop build does, so
+  no platform-specific divergence is expected there beyond what's separately confirmed below.
+- **Audio lifecycle**: tapping the sound-toggle button correctly flips the icon (🔊 → muted) and
+  survives a background/foreground cycle with no crash. More significantly, the muted state was
+  still correctly applied after a full `am force-stop` + cold relaunch — i.e. `SFX.setEnabled`'s
+  `localStorage.setItem("gridironlab.sound", ...)` write really does persist across process death
+  on this platform's WebView, and `initSoundToggle`'s `sync()` correctly re-reads it on next boot.
+- **Offline startup**: disabled both wifi and mobile data (`adb shell svc wifi disable` / `svc data
+  disable`), force-stopped the app, and cold-launched it again — the full menu rendered correctly
+  with no network error, no blank page, confirming the bundled Capacitor build has no runtime
+  dependency on a network fetch to boot (it's served from the app's own local scheme, not fetched).
+  Network was re-enabled afterward.
+- **Safe areas**: no explicit `WindowInsets` API check was done, but every screenshot taken this
+  session (menu, Combine, ad overlay, muted/offline states) shows content starting cleanly below the
+  status bar and never clipped at the bottom gesture-nav bar — no visual safe-area issue observed on
+  this device profile (Pixel 6, API 34).
 
 **Verification.** Build clean after every one of the 5 commits above. Full regression suite (35
 files) run 3 consecutive times on the final cumulative state: identical **35 pass / 0 fail** every
@@ -1987,11 +2028,18 @@ was not.
 ~11,200-line single IIFE containing essentially all game logic, UI rendering, and the DOM-coupled
 render/controller layer together, exactly as the spec's own rules warned against rushing. (2) The
 ~15-constant event-pool cluster and `ACHIEVEMENTS` remain unmoved (see above) — real, identified,
-actionable follow-up work, not a hidden gap. (3) Android platform verification (build, run on an
-emulator/device, resume/safe-area/back-button/audio-lifecycle/ad-flow testing) was not performed;
-an AVD has never been created on this machine, and doing so is a real time/disk cost this session
-did not spend without asking first. iOS and a real ad SDK remain deliberately deferred per the
-spec's own text, unchanged.
+actionable follow-up work, not a hidden gap. (3) Android platform verification WAS performed this
+session (see above) — menu/dev-flag-gating, Combine flow, back button, resume-after-background,
+resume-after-process-death, audio lifecycle (including cross-restart persistence), offline startup,
+and the rewarded-ad mock flow all confirmed working on a real emulator (AVD `GridironTest`, Pixel 6,
+Android 14/API 34) via a real debug APK build. Not exercised: a genuine in-progress *career*
+resume-after-process-death (would need a full Combine + draft night playthrough on-device first;
+the underlying save/load logic is unchanged this wave and already covered by the existing
+save-migration Playwright suite), and no explicit `WindowInsets` safe-area API check (only visual
+spot-checks across the screenshots taken, all clean on this device profile). iOS and a real ad SDK
+remain deliberately deferred per the spec's own text, unchanged. The AVD/JDK/SDK tooling this
+session installed lives outside the git repo (standard machine-local Android dev setup) and is not
+part of any commit.
 
 ### Round 33 — Playoff Tree follow-up fixes: Continue-button gating, full-tree preview, QB-link bug, Standings tab redesign
 
