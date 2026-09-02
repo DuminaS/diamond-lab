@@ -2584,7 +2584,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // personal stat line) -- see missedGamesBackup/genericMissedGames below for how that split is
   // decided and reported back to generateSeason().
   function simulateRegularSeasonGames({ schedule, gamesPlayed, missedGamesBackup, genericMissedGames,
-      incumbentWinRate, effOverall, comp, ypa, tdRate, intRate, attPerGame, perfMult, effRush, sackRate, age, decade }){
+      incumbentWinRate, incumbentId, incumbentName, effOverall, comp, ypa, tdRate, intRate, attPerGame, perfMult, effRush, sackRate, age, decade }){
     const mySlots = schedule.weeks
       .map((pairs, wIdx)=>{
         const pair = pairs.find(([a,b])=>a===career.teamId || b===career.teamId);
@@ -2633,11 +2633,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         let winnerScore, loserScore;
         if(isTie){ const s = approxGameScore(Math.max(career.teamStrength,oppGrade), Math.min(career.teamStrength,oppGrade)); winnerScore = loserScore = Math.round((s.winnerScore+s.loserScore)/2); }
         else ({ winnerScore, loserScore } = approxGameScore(won?career.teamStrength:oppGrade, won?oppGrade:career.teamStrength));
+        // Wave 2B: tag exactly WHO started this game -- the named incumbent (if this is one of his
+        // planned weeks) or nobody in particular (a generic missed game, e.g. injury/suspension
+        // coverage) -- so schedule cards and the box-score modal can show the real starter instead
+        // of silently assuming it was always the player. comp/att/yards/td/int stay 0 here; the
+        // incumbent's real stat line gets distributed onto exactly these tagged weeks once
+        // simulateRivalSeasons actually simulates him, later this same generateSeason() call (see
+        // applyStatLineToGames there).
         games.push({ week: slot.week, opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
           opponentGrade: Math.round(oppGrade), opponentQbId: oppRival?oppRival.id:null,
           opponentQbName: oppRival?oppRival.name:null, opponentQbOverall: oppRival?rivalEffTalent(oppRival):null,
           won: isTie?null:won, tie: isTie, myScore: isTie?winnerScore:(won?winnerScore:loserScore), oppScore: isTie?loserScore:(won?loserScore:winnerScore),
-          comp:0, att:0, yards:0, td:0, int:0, sacks:0, rushAtt:0, rushYards:0, rushTd:0, startedByBackup:true });
+          comp:0, att:0, yards:0, td:0, int:0, sacks:0, rushAtt:0, rushYards:0, rushTd:0, startedByBackup:true,
+          qbId: isIncumbent ? incumbentId : null, qbName: isIncumbent ? incumbentName : null });
         return;
       }
       started++;
@@ -2782,7 +2790,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // Recomputes a QB's real win/loss/winPct from the exact games tagged to him (see
   // applyStatLineToGames/the qbId tagging in simulateRivalSeasons), and corrects the totals that
   // simulatePlayerSeasonStats already incremented once using its own (now-superseded) estimate.
-  function reconcileWinLossFromGames(entity, season, games){
+  // Wave 2B (MASTER_REMEDIATION_SPEC.md, required design #5: "Reconcile real W-L-T first, then
+  // compute award scores. Never preserve award scores based on placeholder records."): winPct feeds
+  // directly into proBowlScore/allProScore/mvpScore (see evaluateSeasonAwards) -- before this wave,
+  // those were computed ONCE, from the placeholder winPct simulatePlayerSeasonStats rolled before
+  // any real per-game result existed, and never recomputed after the real winPct above landed. A
+  // confirmed defect (Section 4): the award RACE itself (resolveSeasonMVP/
+  // resolveSeasonAllProAndProBowl, which run after every QB's season this year is locked in) was
+  // comparing everyone's scores fairly, but the scores being compared could each individually be
+  // stale for anyone whose placeholder win/loss diverged from their real per-game record -- exactly
+  // the case for a QB with missed/relief games, which is most of the league in most seasons.
+  // `decade`/`leagueGames` are needed only for this recompute; every existing call site already has
+  // both in scope.
+  function reconcileWinLossFromGames(entity, season, games, decade, leagueGames){
     if(!games) return;
     const wins = games.filter(g=>g.won===true).length, ties = games.filter(g=>g.tie).length, losses = games.length-wins-ties;
     entity.totals.wins += (wins-season.wins); entity.totals.losses += (losses-season.losses);
@@ -2790,6 +2810,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     season.wins = wins; season.losses = losses; season.ties = ties;
     // Ties QOL: real NFL winPct formula -- a tie counts as half a win, half a loss.
     season.winPct = games.length>0 ? (wins+0.5*ties)/games.length : 0;
+    if(decade){
+      const recomputed = evaluateSeasonAwards({
+        rating: season.rating, td: season.td, winPct: season.winPct, attempts: season.att,
+        gamesPlayed: season.games, leagueGames: leagueGames, decade,
+      });
+      season.proBowlScore = recomputed.proBowlScore; season.proBowlEligible = recomputed.proBowlEligible;
+      season.allProScore = recomputed.allProScore; season.allProEligible = recomputed.allProEligible;
+      season.mvpScore = recomputed.mvpScore; season.mvpEligible = recomputed.mvpEligible;
+    }
   }
 
   // Builds a real, collision-free week-by-week schedule: every team plays at most one real game
@@ -2972,8 +3001,17 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         }
         if(w===null){ ties[a]++; ties[b]++; }
         else if(w===a){ wins[a]++; losses[b]++; } else { wins[b]++; losses[a]++; }
-        gameLogs[a].push({ week, opponentId: b, won: w===null?null:w===a, tie: w===null, myScore: w===a||w===null?winnerScore:loserScore, oppScore: w===a||w===null?loserScore:winnerScore });
-        gameLogs[b].push({ week, opponentId: a, won: w===null?null:w===b, tie: w===null, myScore: w===b||w===null?winnerScore:loserScore, oppScore: w===b||w===null?loserScore:winnerScore });
+        // Wave 2B: carry the player's own qbId/qbName tag (set by simulateRegularSeasonGames for a
+        // backup-incumbent-started week -- see there) onto the shared per-team log entry, so
+        // schedule cards/box scores can identify who actually played career.teamId's side of this
+        // game. The OPPONENT side's qbId gets filled in later by simulateRivalSeasons/
+        // simulateDepthChartSeasons (see applyStatLineToGames) -- never pre-seeded here.
+        gameLogs[a].push({ week, opponentId: b, won: w===null?null:w===a, tie: w===null, myScore: w===a||w===null?winnerScore:loserScore, oppScore: w===a||w===null?loserScore:winnerScore,
+          qbId: (a===career.teamId && myGame) ? (myGame.qbId||null) : undefined, qbName: (a===career.teamId && myGame) ? (myGame.qbName||null) : undefined,
+          startedByBackup: (a===career.teamId && myGame) ? !!myGame.startedByBackup : undefined });
+        gameLogs[b].push({ week, opponentId: a, won: w===null?null:w===b, tie: w===null, myScore: w===b||w===null?winnerScore:loserScore, oppScore: w===b||w===null?loserScore:winnerScore,
+          qbId: (b===career.teamId && myGame) ? (myGame.qbId||null) : undefined, qbName: (b===career.teamId && myGame) ? (myGame.qbName||null) : undefined,
+          startedByBackup: (b===career.teamId && myGame) ? !!myGame.startedByBackup : undefined });
       });
     });
     // Defensive safety net only, not the source of truth anymore -- with the player's own games
@@ -3266,6 +3304,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.freeAgentQbIds = career.freeAgentQbIds.filter(id=>id!==qbId);
     career.freeAgentPool = (career.freeAgentPool||[]).filter(p=>p.id!==qbId);
     career.retiredQbIds = career.retiredQbIds.filter(id=>id!==qbId);
+    // A QB1 lives in the legacy career.leagueRivals array (see assignQuarterbackToRoster's own
+    // "QB1" branch below) -- clearing only teamQbDepth above would leave him dual-tracked (still in
+    // leagueRivals from his OLD role, ALSO now in a depth-chart slot from his NEW one) the moment
+    // he's moved from QB1 to a bench slot or free agency, which is exactly the "same entity
+    // duplicated across multiple collections" Section 3 invariant #15 warns against. Also clear any
+    // STALE qb2/qb3 slot on a depth chart he used to occupy, for the same reason.
+    if(career.leagueRivals) career.leagueRivals = career.leagueRivals.filter(r=>r.id!==qbId);
+    Object.keys(career.leagueDepthCharts||{}).forEach(teamId=>{
+      const chart = career.leagueDepthCharts[teamId];
+      if(!chart) return;
+      if(chart.qb2 && chart.qb2.id===qbId) chart.qb2 = null;
+      if(chart.qb3 && chart.qb3.id===qbId) chart.qb3 = null;
+    });
   }
   // The ONE place a QB ever occupies a roster slot -- removes them from wherever they were first
   // (any team's QB1/QB2/QB3, the free-agent pool, or retired status), then assigns the new slot,
@@ -4599,6 +4650,23 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const season = { year, age: entity.age, teamId: entity.teamId, games: gamesPlayed, comp: completions, att: attempts,
       pct: attempts>0?completions/attempts:0, yards, td, int: interceptions, rating, wins, losses, awards,
       proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible };
+    // Wave 2B (MASTER_REMEDIATION_SPEC.md, Section 3 invariant #6 / Section 7 required design #4):
+    // a (qbId, year) pair must never get a second season row. This used to be reachable for real --
+    // resolveBackupSeasonSnaps simulated the player's own team's incumbent directly, and this same
+    // function ran AGAIN for that identical entity/year inside simulateRivalSeasons right after --
+    // fixed at the root by making resolveBackupSeasonSnaps pure planning (see there) instead of a
+    // second simulation, but this guard stays as the actual enforced invariant: if some future
+    // caller (or a resumed save with pre-existing corrupted data) ever asks to simulate an entity
+    // for a year it already has a row for, this is a safe no-op that returns the EXISTING row
+    // (never a silent double-count of games/totals/age) with a diagnostic warning, rather than a
+    // hard throw that could crash a real player's session over a bug in surrounding code.
+    const existing = entity.seasons.find(s=>s.year===year);
+    if(existing){
+      console.warn(`[validateLeagueState] simulatePlayerSeasonStats: ${entity.id||"(no id)"} already has a season row for ${year} -- skipping duplicate simulation.`);
+      if(!career._devWarnings) career._devWarnings = [];
+      career._devWarnings.push({ type:"duplicate-season-simulation-prevented", qbId: entity.id||null, year });
+      return existing;
+    }
     entity.seasons.push(season);
     entity.totals.games += gamesPlayed; entity.totals.comp += completions; entity.totals.att += attempts;
     entity.totals.yards += yards; entity.totals.td += td; entity.totals.int += interceptions;
@@ -4639,8 +4707,29 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         assignQuarterbackToRoster(successor.id, r.teamId, "QB1");
         return;
       }
-      const seasonResult = simulatePlayerSeasonStats(r, decade, league, year);
+      // Wave 2B: if this rival is ALSO the incumbent blocking the player at their own team this
+      // exact year, resolveBackupSeasonSnaps already planned (not simulated) how many games he
+      // gets -- pass it in as forcedGames so this is the ONE place he's ever actually simulated,
+      // instead of a second independent roll.
+      const isBackupIncumbent = career.isBackup && career._backupUsagePlan && r.id===career._backupUsagePlan.qbId;
+      const seasonResult = simulatePlayerSeasonStats(r, decade, league, year, isBackupIncumbent ? career._backupUsagePlan.games : undefined);
       developEntityTalent(r, decade);
+      if(isBackupIncumbent){
+        // The games he DIDN'T start this season went to the PLAYER (a different entity entirely,
+        // already reflected on career.currentSeasonSchedules[r.teamId] -- which IS career.teamId's
+        // own real per-game log here -- via simulateRegularSeasonGames's own startedByBackup/qbId
+        // tagging, done earlier this same generateSeason() call). That is NOT this team's actual
+        // QB2/QB3 taking relief snaps, so the normal missedGames-to-bench-relief logic below must
+        // never run for him -- distribute his real stat line only across the exact weeks already
+        // tagged with his id.
+        const teamGames = career.currentSeasonSchedules && career.currentSeasonSchedules[r.teamId];
+        const hisWeeks = (teamGames||[]).filter(g=>g.qbId===r.id);
+        if(hisWeeks.length){
+          applyStatLineToGames(hisWeeks, r.id, seasonResult.comp, seasonResult.att, seasonResult.yards, seasonResult.td, seasonResult.int);
+          reconcileWinLossFromGames(r, seasonResult, hisWeeks, decade, league.games);
+        }
+        return;
+      }
       // Whatever games the starter's OWN missed-games roll took away from him this season are real,
       // actually-played relief snaps for QB2 -- never QB3, matching real depth charts (a team's
       // third QB essentially never plays). This tags the EXACT weeks on the team's real schedule
@@ -4658,7 +4747,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           starterWeeks = teamGames.filter(g=>!reliefWeeks.includes(g));
         }
         applyStatLineToGames(starterWeeks, r.id, seasonResult.comp, seasonResult.att, seasonResult.yards, seasonResult.td, seasonResult.int);
-        reconcileWinLossFromGames(r, seasonResult, starterWeeks);
+        reconcileWinLossFromGames(r, seasonResult, starterWeeks, decade, league.games);
         if(reliefWeeks.length>0 && qb2){
           qb2._reliefGames = reliefWeeks.length;
           qb2._reliefWeeks = reliefWeeks;
@@ -4710,7 +4799,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           const reliefResult = simulatePlayerSeasonStats(p, decade, league, year, p._reliefGames);
           if(p._reliefWeeks && p._reliefWeeks.length){
             applyStatLineToGames(p._reliefWeeks, p.id, reliefResult.comp, reliefResult.att, reliefResult.yards, reliefResult.td, reliefResult.int);
-            reconcileWinLossFromGames(p, reliefResult, p._reliefWeeks);
+            reconcileWinLossFromGames(p, reliefResult, p._reliefWeeks, decade, league.games);
           }
         } else {
           p.age++;
@@ -4917,57 +5006,101 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       career.leagueNewsLog.push({ year, teamId, title:"Drafts a QB to Develop", delta:0,
         flavor:`${teamNameAt(teamId, year)} use a mid-round pick on a developmental quarterback — no pressure on the current starter yet, but the clock is quietly ticking.` });
     }
+    // Contract/entrenchment bookkeeping still ticks down every season -- it's real flavor, and it's
+    // still what the "survives, signs an extension" branch below reads to reset -- but Wave 2B
+    // (MASTER_REMEDIATION_SPEC.md, required design: "Contracts influence whether the team trades/
+    // cuts/carries an expensive player, not who is the best healthy starter on Sunday") stops using
+    // it to GATE whether a clearly-better rostered QB can actually start. This directly replaces two
+    // confirmed defects (Section 4): "an entrenched starter can remain QB1 despite a clearly better
+    // healthy rostered QB" (the old stillEntrenched-gated merit-override needed a 16-point gap AND a
+    // 28% coin flip just to unseat an entrenched starter) and "AI merit promotion examines QB2 only
+    // -- a superior QB3 cannot directly win QB1" (the old normal-path promotion check never looked
+    // at qb3 at all).
     rival.contract.years = Math.max(0, rival.contract.years-1);
     rival.entrenchedYears = Math.max(0, rival.entrenchedYears-1);
-    const stillEntrenched = rival.entrenchedYears>0 || rival.contract.years>0;
-    // Only a REAL falloff breaks entrenchment -- being merely old is not enough on its own (the
-    // user's own framing: a QB stuck on a big contract stays, full stop, unless he's truly
-    // declined). A first calibration pass also let "just old" bypass entrenchment, and left a
-    // SURVIVING starter at 0/0 contract/entrenchedYears -- immediately re-eligible again every
-    // subsequent season forever -- which produced 68 succession events across 30 teams in 11
-    // seasons in real gameplay. Corrected via a 30-team/15-year pure-math sweep before re-shipping
-    // (see PROGRESS.md); the "survives -- signs an extension" branch below is the actual fix.
+    // Only a REAL falloff sends a team looking outside -- being merely on an expensive/expiring
+    // contract is not enough on its own (the user's own original framing, preserved here for the
+    // EXTERNAL-signing decision specifically, even though it no longer gates internal promotion --
+    // see above). A first calibration pass let "just old" trigger this too, and left a SURVIVING
+    // starter at 0/0 contract/entrenchedYears immediately re-eligible again every subsequent season
+    // forever, producing 68 succession events across 30 teams in 11 seasons in real gameplay.
+    // Corrected via a 30-team/15-year pure-math sweep before first shipping (see PROGRESS.md); the
+    // "survives -- signs an extension" branch below is the actual fix.
     const declinedSharply = rivalEffTalent(rival) <= rival.talent-15;
-    const qb2 = chart.qb2;
+    // A team is also willing to look outside once the incumbent's contract AND entrenchment window
+    // both run out, independent of whether he's actually declined -- ordinary roster churn, not a
+    // performance judgment. This is a legitimate, spec-sanctioned use of contracts ("Contracts
+    // influence whether the team trades/cuts/carries an expensive player" -- Wave 2B required
+    // design): it can only ever open the door to REPLACING him with an outside veteran, it never
+    // gates whether a clearly-better ROSTERED challenger can start (that decision above is now
+    // unconditional). A first calibration sweep with this path removed entirely (declinedSharply as
+    // the only external-signing trigger) measured 0 external signings across 45 team-runs x 15
+    // seasons -- contract expiry, not decline, was always the dominant real-world trigger for a
+    // team looking outside; see succession_gap_sweep notes in PROGRESS.md.
+    const contractExpired = rival.entrenchedYears<=0 && rival.contract.years<=0;
+    const qb2 = chart.qb2, qb3 = chart.qb3;
     const teamName = teamNameAt(teamId, year);
-    // Internal promotion: the kid they've been developing (or the steady backup) wins the job.
-    // Extracted so both the normal post-entrenchment path below AND the merit-override path just
-    // beneath it share one implementation instead of duplicating the promotion mechanics.
-    function promoteQb2(flavor){
+
+    // Deterministic starter selection (required design, Wave 2B): examine BOTH qb2 and qb3, take
+    // whichever is the stronger challenger, and reorder the depth chart outright once he clears the
+    // incumbent by a real margin -- no additional random promotion roll. SUCCESSION_HYSTERESIS_
+    // MARGIN documents the zone just below the promotion gap where the incumbent is deliberately
+    // kept even though a challenger reads slightly ahead (a real starter shouldn't lose the job over
+    // a 1-2 point noise-level edge); SUCCESSION_PROMOTION_GAP is the actual trigger. Recommended
+    // initial values per the spec (2/3); calibrated via succession_gap_sweep.mjs before shipping --
+    // see PROGRESS.md for the measured event-frequency distribution this produced.
+    const SUCCESSION_HYSTERESIS_MARGIN = 2, SUCCESSION_PROMOTION_GAP = 3;
+    const rivalVal = rivalEffTalent(rival);
+    const candidates = [qb2, qb3].filter(p=>p && !p.retired);
+    const bestChallenger = candidates.length
+      ? candidates.reduce((a,b)=> rivalEffTalent(b)>rivalEffTalent(a) ? b : a)
+      : null;
+    const bestChallengerVal = bestChallenger ? rivalEffTalent(bestChallenger) : -Infinity;
+    // Promotes whichever of qb2/qb3 is passed in -- generalizes the old qb2-only promoteQb2 so a
+    // superior qb3 can win the job directly, exactly like a real team would just start its best
+    // healthy arm regardless of depth-chart seniority.
+    function promoteChallenger(challenger, flavor){
       const oldName = rival.name;
+      const fromSlot = challenger===qb3 ? "QB3" : "QB2";
       enterFreeAgentPool(rival, "lost-job");
-      // Wave 2A: registerQuarterback re-points qbsById[qb2.id] at this NEW object (the promotion
-      // still rebuilds a fresh object here, same as before this wave, to reset contract/
+      // Wave 2A: registerQuarterback re-points qbsById[challenger.id] at this NEW object (the
+      // promotion still rebuilds a fresh object here, same as before this wave, to reset contract/
       // entrenchedYears cleanly) -- without this, qbsById would keep pointing at the stale
       // pre-promotion object forever, a real duplicate-identity bug of its own.
-      const promoted = { ...qb2, contract: rollRivalContract(decade, qb2.talent), entrenchedYears: rollEntrenchedYears(qb2.talent) };
+      const promoted = { ...challenger, contract: rollRivalContract(decade, challenger.talent), entrenchedYears: rollEntrenchedYears(challenger.talent) };
       registerQuarterback(promoted);
       assignQuarterbackToRoster(promoted.id, teamId, "QB1");
-      const newQb2 = generateBenchPlayer(teamId, decade, year, career.leagueStrength[teamId] ?? 60, Math.random()<0.4);
-      assignQuarterbackToRoster(newQb2.id, teamId, "QB2");
+      const teamGrade = career.leagueStrength[teamId] ?? 60;
+      const repl = generateBenchPlayer(teamId, decade, year, teamGrade, fromSlot==="QB3" ? Math.random()<0.65 : Math.random()<0.3);
+      assignQuarterbackToRoster(repl.id, teamId, fromSlot);
       const delta = randInt(-3,6);
       career.leagueStrength[teamId] = clamp((career.leagueStrength[teamId]??60)+delta, 20, 96);
       career.leagueNewsLog.push({ year, teamId, title:"Backup Wins the Starting Job", delta, flavor: flavor(oldName, promoted.name) });
     }
-    if(stillEntrenched && !declinedSharply){
-      // Merit override: a genuinely dominant bench QB can still win the job even while the
-      // incumbent is mid-contract -- real teams don't sit a clearly-better arm for years just
-      // because of a depth-chart pecking order. Requires a MUCH bigger gap than the normal
-      // post-entrenchment promotion check below (16 vs. that check's "-5"), so this stays a rare
-      // "won it in camp" upset, not the usual way a job changes hands. Calibrated via a pure-math
-      // sweep (merit_override_sweep.mjs): at gap>=16/28% odds, a team that actually qualifies
-      // resolves within ~2-3 seasons on average, and league-wide this adds only a handful of
-      // events per 15 years -- a clear minority of the ~20-event baseline the normal succession
-      // system was itself calibrated to (see the entrenchment-miscalibration note above).
-      const MERIT_GAP_OVERRIDE = 16, MERIT_OVERRIDE_PROB = 0.28;
-      if(qb2 && !qb2.retired && rivalEffTalent(qb2)-rivalEffTalent(rival)>=MERIT_GAP_OVERRIDE && Math.random()<MERIT_OVERRIDE_PROB){
-        promoteQb2((oldName,newName)=>`${teamName} can't justify sitting ${newName} behind ${oldName} any longer — he simply won the job in camp.`);
-      }
+    if(bestChallenger && bestChallengerVal-rivalVal>=SUCCESSION_PROMOTION_GAP){
+      const isQb3 = bestChallenger===qb3;
+      promoteChallenger(bestChallenger, (oldName,newName)=> isQb3
+        ? `${teamName} skip right past the pecking order — ${newName}, the team's QB3, was simply too good to keep buried on the bench behind ${oldName}.`
+        : `${teamName} bench ${oldName} in favor of ${newName}, who'd been waiting for exactly this shot.`);
       return;
     }
-    if(qb2 && !qb2.retired && rivalEffTalent(qb2) >= rivalEffTalent(rival)-5 && Math.random()<0.22){
-      promoteQb2((oldName,newName)=>`${teamName} bench ${oldName} in favor of ${newName}, who'd been waiting for exactly this shot.`);
-    } else if(Math.random()<0.15){
+    // No internal answer clears the bar. A real bug caught by this wave's own calibration sweep
+    // (succession_gap_sweep -- see PROGRESS.md): there is nothing left to decide most seasons --
+    // the incumbent hasn't declined and his contract/entrenchment window hasn't actually run out
+    // yet -- and the ONLY thing that should happen is the decrement already applied above. An
+    // earlier draft of this wave fell straight through to the "survives, signs a fresh extension"
+    // branch below EVERY season regardless, which immediately re-rolled contract.years/
+    // entrenchedYears back up to a fresh multi-year value before the decrement could ever
+    // accumulate toward true expiry -- contractExpired could then never legitimately become true,
+    // silently zeroing out the external-signing path this same wave was trying to preserve. Return
+    // here, unchanged, whenever there's genuinely nothing to decide yet.
+    if(!(declinedSharply || contractExpired)) return;
+    // A sharp performance decline OR the incumbent's own contract/entrenchment simply running out
+    // can still send the team looking outside (ordinary roster churn is a legitimate, spec-
+    // sanctioned reason to seek external competition -- it's never what decides who's the best
+    // ROSTERED starter, which is settled unconditionally above). Same 0.15/season chance as before
+    // this wave now that either real gate is actually met.
+    if(Math.random()<0.15){
       // External signing: prefer an ACTUAL free agent already sitting in career.freeAgentPool if
       // one's a plausible fit for this team's grade -- this is what makes the pool a real
       // destination for displaced QBs (Phase 2) rather than an inert holding pen. Falls back to
@@ -5012,26 +5145,39 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
      career.isBackup: true from the moment an entrenched incumbent blocks the player at draft night
      (see the enterDraftNightBtn handler) until the player wins the starting job outright. While
      true, generateSeason() routes almost entirely through the SAME missed-games pipeline that
-     already handles injury/suspension -- resolveBackupSeasonSnaps() below just decides how many
-     games the incumbent's own (fully simulated) season leaves for the player, feeding that in as
-     career._backupMissedGames exactly like an injury or suspension would. A true "clipboard year"
-     (incumbent stays healthy and effective all season) naturally falls out of the EXISTING
-     gamesPlayed=clamp(league.games-missedGames,0,league.games) formula hitting 0 -- no separate
-     zero-stat code path needed. */
-  // Simulates the incumbent's real season (same math every other rival gets) and stashes how many
-  // games that leaves for the player -- called from the very top of generateSeason(), before the
-  // missedGames aggregation reads career._backupMissedGames.
+     already handles injury/suspension -- resolveBackupSeasonSnaps() below just PLANS how many
+     games that leaves for the player, feeding that in as career._backupMissedGames exactly like an
+     injury or suspension would. A true "clipboard year" (incumbent stays healthy and effective all
+     season) naturally falls out of the EXISTING gamesPlayed=clamp(league.games-missedGames,0,
+     league.games) formula hitting 0 -- no separate zero-stat code path needed.
+     Wave 2B (MASTER_REMEDIATION_SPEC.md, required design #1): this function used to fully simulate
+     the incumbent's season right here (simulatePlayerSeasonStats), appending a season row and
+     mutating his age/totals -- then simulateRivalSeasons() simulated the SAME entity again later in
+     the SAME generateSeason() call, since he's just an ordinary QB1 entry in career.leagueRivals as
+     far as that pass is concerned. Two season rows, two age increments, doubled totals -- a
+     confirmed defect (see backup-incumbent-double-simulation.spec.js). Fixed at the root: this
+     function now only PLANS usage (rolls how many games he'll play, using the identical
+     missed-games distribution simulatePlayerSeasonStats always uses) and never simulates or
+     mutates him. simulateRivalSeasons is the ONE place his season is ever actually run this year --
+     see career._backupUsagePlan, read there via forcedGames so it isn't independently re-rolled. */
   function resolveBackupSeasonSnaps(decade, league){
     const incumbent = rivalForTeam(career.teamId);
-    if(!incumbent){ career._backupMissedGames = 0; return; } // he retired with nobody left to track -- treat as an open competition, handled by the end-of-season roll
-    const incumbentSeason = simulatePlayerSeasonStats(incumbent, decade, league, career.year);
-    // Games HE played are, by definition, games the player did not -- a single source of truth
-    // instead of a separate "coach benches for poor play" roll that could double-count games.
-    career._backupMissedGames = incumbentSeason.games;
-    career._backupIncumbentWins = incumbentSeason.wins;
-    career._backupIncumbentLosses = incumbentSeason.losses;
+    if(!incumbent){ career._backupMissedGames = 0; career._backupUsagePlan = null; return; } // he retired with nobody left to track -- treat as an open competition, handled by the end-of-season roll
+    const incumbentMissed = Math.random()<0.30 ? randInt(1, 9) : 0;
+    const incumbentGames = clamp(league.games - incumbentMissed, 0, league.games);
+    // Games HE'S PLANNED to play are, by definition, games the player will not -- a single source
+    // of truth instead of a separate "coach benches for poor play" roll that could double-count
+    // games.
+    career._backupMissedGames = incumbentGames;
+    career._backupUsagePlan = { qbId: incumbent.id, games: incumbentGames };
     career._backupIncumbentName = incumbent.name;
-    career._backupIncumbentSeasonSnapshot = { yards: incumbentSeason.yards, td: incumbentSeason.td, int: incumbentSeason.int, rating: incumbentSeason.rating };
+    // Win/loss and stat-line snapshot fields are filled in AFTER simulateRivalSeasons actually runs
+    // him for real, later this same generateSeason() call -- see the patch step right after that
+    // call. Until then these stay at whatever they were reset to below (zero/null), which is fine:
+    // nothing reads them before that point.
+    career._backupIncumbentWins = 0;
+    career._backupIncumbentLosses = 0;
+    career._backupIncumbentSeasonSnapshot = null;
   }
   // Called once per season, after the season is otherwise fully resolved -- decides whether the
   // player keeps competing for the job or wins it outright. A forced resolution after 3 bench
@@ -5049,6 +5195,28 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     if(wonJob){
       career.isBackup = false;
       career.transactions.push(`${career.year}: Wins the starting job.`);
+      // Wave 2B (MASTER_REMEDIATION_SPEC.md, required design: "the incumbent cannot remain a
+      // parallel AI starter"): he used to just sit there with career.teamId's QB1 slot still
+      // pointing at him, retired:false, while the player ALSO now occupies that same team --
+      // two active starters, the confirmed two-active-starters-after-backup-win defect. Move him
+      // to whichever bench slot he actually upgrades, or free agency if he doesn't upgrade either
+      // one -- the same displaced-QB pattern every other roster move in this file already uses
+      // (move the outgoing occupant before assigning the incoming one).
+      if(incumbent && !incumbent.retired){
+        const depth = getTeamQuarterbacks(career.teamId);
+        const qb2Val = depth.QB2 ? rivalEffTalent(depth.QB2) : -Infinity;
+        const qb3Val = depth.QB3 ? rivalEffTalent(depth.QB3) : -Infinity;
+        const incumbentVal = rivalEffTalent(incumbent);
+        if(!depth.QB2 || incumbentVal>qb2Val){
+          if(depth.QB2) enterFreeAgentPool(depth.QB2, "displaced-by-incumbent");
+          assignQuarterbackToRoster(incumbent.id, career.teamId, "QB2");
+        } else if(!depth.QB3 || incumbentVal>qb3Val){
+          if(depth.QB3) enterFreeAgentPool(depth.QB3, "displaced-by-incumbent");
+          assignQuarterbackToRoster(incumbent.id, career.teamId, "QB3");
+        } else {
+          enterFreeAgentPool(incumbent, "lost-job-to-user");
+        }
+      }
     }
     return wonJob;
   }
@@ -5187,15 +5355,23 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // the team's season doesn't stop when this QB is hurt — a generic backup covers the missed
     // games, playing off team quality alone (not this player's skill), so "team record" and "your
     // record as the starter" can and often do differ. Games missed specifically because a NAMED
-    // incumbent started ahead of you (missedGamesBackup) use HIS real simulated win rate instead of
-    // the generic roll -- resolveBackupSeasonSnaps already ran his actual season, so his own W/L
-    // gives a real rate rather than a flat team-strength-only guess.
+    // incumbent started ahead of you (missedGamesBackup) are meant to use HIS real simulated win
+    // rate -- but Wave 2B (MASTER_REMEDIATION_SPEC.md) eliminated the early, duplicate simulation
+    // that used to produce that number here (see resolveBackupSeasonSnaps): he's now simulated
+    // exactly once, later this same generateSeason() call, inside simulateRivalSeasons -- which is
+    // AFTER this point needs his win rate. backupIncumbentWins/Losses are therefore always 0 now,
+    // so this always falls through to the team-strength-based estimate below -- a deliberate,
+    // documented trade-off (a little less precision on this one flavor number) for actually fixing
+    // the double-simulation. His REAL per-game stat line still lands on the correct tagged weeks
+    // once simulateRivalSeasons runs (see the patch step right after that call).
     const genericMissedGames = missedGamesInjury + missedGamesSuspension;
     const incumbentTotalGames = backupIncumbentWins + backupIncumbentLosses;
     const incumbentWinRate = incumbentTotalGames>0 ? backupIncumbentWins/incumbentTotalGames
       : clamp(0.5 + (career.teamStrength-65)*0.01, 0.12, 0.88);
     const regSeason = simulateRegularSeasonGames({
       schedule, gamesPlayed, missedGamesBackup, genericMissedGames, incumbentWinRate,
+      incumbentId: career._backupUsagePlan ? career._backupUsagePlan.qbId : null,
+      incumbentName: backupIncumbentName,
       effOverall, comp, ypa, tdRate, intRate, attPerGame, perfMult, effRush, sackRate,
       age: career.age, decade,
     });
@@ -5251,6 +5427,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.seasonLog.push(season);
     spawnNewFranchiseRivals(career.year);
     simulateRivalSeasons(decade, league, career.year);
+    // Wave 2B: now that simulateRivalSeasons has actually simulated the incumbent for real (the
+    // ONE simulation pass he gets this year -- see resolveBackupSeasonSnaps/the isBackupIncumbent
+    // branch there), patch this season's recap snapshot with his REAL final numbers. Before this
+    // wave these came from a separate, now-eliminated early simulation; season.incumbentName was
+    // already set correctly at push time (resolveBackupSeasonSnaps still sets that from planning),
+    // only the stat-line snapshot needed to wait for the real simulation to finish.
+    if(career._backupUsagePlan && career._backupUsagePlan.qbId){
+      const incumbentAfter = getQuarterbackById(career._backupUsagePlan.qbId);
+      const incumbentSeasonRow = incumbentAfter && incumbentAfter.seasons.find(s=>s.year===career.year);
+      if(incumbentSeasonRow){
+        season.incumbentSeasonSnapshot = { yards: incumbentSeasonRow.yards, td: incumbentSeasonRow.td, int: incumbentSeasonRow.int, rating: incumbentSeasonRow.rating };
+      }
+    }
     simulateDepthChartSeasons(decade, league, career.year);
     TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateSuccession(t.id, decade, career.year));
     // Phase 2 of the QB-entity redesign: real bench mobility (trade/waive) and free-agent-pool
@@ -7125,8 +7314,13 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const mine = id===season.teamId, oppMine = g.opponentId===season.teamId;
       // Ties QOL: g.won is null for a tie -- aWon/bWon are both explicitly false in that case (not
       // "!aWon", which would incorrectly read a tie's null as "the other side won").
-      matchups.push({ aId: id, aScore: g.myScore, aWon: g.won===true, bWon: g.won===false, tie: !!g.tie, aQb: mine?null:resolveScheduleQb(g.qbId),
-        bId: g.opponentId, bScore: g.oppScore, bQb: oppMine?null:resolveScheduleQb(oppEntry && oppEntry.qbId) });
+      // Wave 2B: g.qbId is always resolved now, on EITHER side, rather than hardcoded null for
+      // "mine" -- normally career.teamId's own entries have no qbId (nobody but the player played,
+      // nothing to show), but a week the incumbent started while the player was a backup DOES carry
+      // one (see simulateRegularSeasonGames/buildScheduleResults), and that's exactly the case
+      // "exact-week schedule cards identify the QB who actually played" needs surfaced here.
+      matchups.push({ aId: id, aScore: g.myScore, aWon: g.won===true, bWon: g.won===false, tie: !!g.tie, aQb: resolveScheduleQb(g.qbId),
+        bId: g.opponentId, bScore: g.oppScore, bQb: resolveScheduleQb(oppEntry && oppEntry.qbId) });
     });
     return matchups;
   }
@@ -7143,7 +7337,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     let realRound = null;
     if(m.aId===career.teamId || m.bId===career.teamId){
       const myWeekEntry = (season.gameLog||[]).find(g=>g.week===week);
-      if(myWeekEntry) realRound = { box: { comp: myWeekEntry.comp, att: myWeekEntry.att, yards: myWeekEntry.yards, td: myWeekEntry.td, int: myWeekEntry.int } };
+      if(myWeekEntry){
+        realRound = { box: { comp: myWeekEntry.comp, att: myWeekEntry.att, yards: myWeekEntry.yards, td: myWeekEntry.td, int: myWeekEntry.int } };
+        // Wave 2B: a week the named incumbent started (career.isBackup) carries his qbId/qbName --
+        // the box-score modal's "mine" QB line must show HIM, not silently assume the player played.
+        if(myWeekEntry.qbId){ realRound.qbId = myWeekEntry.qbId; realRound.qbName = myWeekEntry.qbName; }
+      }
     }
     return { aId: m.aId, bId: m.bId, aScore: m.aScore, bScore: m.bScore, winnerId, realRound };
   }
@@ -7433,9 +7632,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         // (generateGameBoxScore, called when the round itself was created) -- use it directly
         // rather than a placeholder; a flat-side "mine" is impossible (the player is never a
         // participant in a flat-resolved matchup), so this branch only ever fires for real rounds.
+        // Wave 2B: a REGULAR-SEASON week the named incumbent started (career.isBackup) instead
+        // carries realRound.qbId/qbName (see scheduleMatchToBracketMatch) -- playoffs never route
+        // through the backup mechanic at all, so this can only ever be non-null for a schedule-tab
+        // match, never a real playoff round.
         const box = match.realRound && match.realRound.box;
         const line = box ? `${box.comp}/${box.att}, ${box.yards} yds, ${box.td} TD, ${box.int} INT` : "";
-        return `<div class="bracket-qb-line"><b>${svgEscape(career.name)}</b>${line ? ` — ${line}` : ""}</div>`;
+        const startedByOther = match.realRound && match.realRound.qbId;
+        const label = startedByOther ? svgEscape(match.realRound.qbName || "Backup") : svgEscape(career.name);
+        return `<div class="bracket-qb-line"><b>${label}</b>${line ? ` — ${line}` : ""}</div>`;
       }
       const qb = rivalForTeam(teamId);
       const line = qb ? estimateSingleGameStatLine(qb) : null;

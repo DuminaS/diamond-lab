@@ -1128,6 +1128,131 @@ after the user wins the backup job" bug, and Pro-Bowl-eligibility filtering are 
 holding a roster slot is trackable by id and doesn't lose history when displaced, not that the
 starter-selection/award logic itself is correct yet.
 
+### Wave 2B — One seasonal simulation per QB and correct starter selection
+
+Fixes the two most severe defects the whole remediation spec opened with, plus three smaller
+correctness gaps in the same simulation-timing family, all in `generateSeason`'s backup/succession/
+award machinery.
+
+**The double-simulation bug (root cause, fixed at the source).** `resolveBackupSeasonSnaps` used to
+fully simulate the incumbent's season directly (`simulatePlayerSeasonStats`), appending a season
+row and mutating his age/totals, right before `simulateRivalSeasons` simulated the SAME entity again
+later in the same `generateSeason()` call (he's an ordinary `teamQbDepth` QB1 as far as that pass is
+concerned, deliberately not excluded — PROGRESS.md Round 7: "so he can retire naturally and open the
+job"). Fixed by making `resolveBackupSeasonSnaps` pure planning: it rolls how many games the
+incumbent will play (`career._backupUsagePlan`, using the exact same missed-games distribution
+`simulatePlayerSeasonStats` always used) without simulating or mutating him at all.
+`simulateRivalSeasons` reads that plan and passes it in as `forcedGames` — the ONE place he's ever
+actually simulated this year. His games-not-played this season went to the PLAYER, not to this
+team's real QB2/QB3 — a distinct code path from the normal missedGames-to-bench-relief logic, which
+must never fire for him. A real, honest trade-off documented in code: the incumbent's win-rate used
+to flavor the player's own missed-weeks (`incumbentWinRate`) came from that now-eliminated early
+simulation; it now always falls back to the pre-existing team-strength estimate instead, since his
+real per-game outcomes aren't known until later in the same call — his real STAT LINE still lands on
+his real tagged weeks once the one real simulation completes (patched onto `season.
+incumbentSeasonSnapshot` right after `simulateRivalSeasons` returns).
+
+**The two-active-starters bug.** `resolveBackupCompetition` used to only flip `career.isBackup =
+false` when the player won the job — the incumbent stayed sitting in `teamQbDepth[career.teamId]
+.QB1`, `retired:false`, a phantom parallel starter at the same team the player now also occupies.
+Fixed using the Wave 2A ownership helpers: the incumbent is now moved into whichever of QB2/QB3 he
+actually upgrades (displacing that occupant to free agency first, same "move the departing QB
+before assigning the new one" pattern every other roster move in this file uses), or free agency
+outright if he doesn't upgrade either bench slot.
+
+**A real Wave 2A gap this exposed and fixed along the way**: `_clearQbFromAllRosterSlots` (the
+shared internals every ownership helper calls before assigning a new slot) only ever cleared the
+canonical `teamQbDepth` pointers — it never removed a QB from the LEGACY `career.leagueRivals` array
+or a stale `leagueDepthCharts` slot he used to occupy. This was invisible in Wave 2A because nothing
+there ever moved an EXISTING QB1 into a bench role — the very first time Wave 2B did exactly that
+(demoting the incumbent above), he ended up dual-tracked: correctly a QB2 in `teamQbDepth`, but
+STILL sitting in `career.leagueRivals` from his old QB1 role. Fixed by having
+`_clearQbFromAllRosterSlots` also strip the id from `leagueRivals` and any stale `leagueDepthCharts`
+qb2/qb3 slot — caught by `two-active-starters-after-backup-win.spec.js` itself still failing after
+the "fix" above, tracing to this shared helper rather than anything Wave-2B-specific.
+
+**Deterministic starter selection, examining QB2 AND QB3.** `evaluateSuccession`'s promotion checks
+used to only ever look at `qb2` (a superior `qb3` could never win the job directly — confirmed
+defect) and required entrenchment/contract to have expired before a normal-strength challenger could
+even be considered (a 16-point gap + 28% coin flip was needed to overcome an active contract at all).
+Replaced with the required design: take whichever of `qb2`/`qb3` is the stronger challenger
+(`SUCCESSION_HYSTERESIS_MARGIN = 2`, `SUCCESSION_PROMOTION_GAP = 3`, both the spec's own recommended
+initial values), and reorder the depth chart deterministically — no promotion roll — the instant he
+clears the incumbent's effective value by the gap. Contracts/entrenchment no longer gate this at
+all, per the required design ("contracts influence whether the team trades/cuts/carries an expensive
+player, not who is the best healthy starter"); they still legitimately gate the SEPARATE decision of
+whether to look for an external veteran once no internal answer exists (a real decline, or the
+incumbent's own contract+entrenchment window genuinely running out — ordinary roster churn, not a
+performance judgment either way).
+
+**A real bug caught by this wave's own calibration sweep** (`succession_gap_sweep`, required by
+Section 3 rule 11 before shipping a new threshold): an early draft of the "no internal challenger
+clears the bar" branch fell straight through to "survives, signs a fresh extension" EVERY season
+regardless of whether the current contract had actually expired — immediately re-rolling
+`contract.years`/`entrenchedYears` back up to a fresh multi-year value before the season-start
+decrement could ever accumulate toward true 0/0. This meant `contractExpired` could never
+legitimately become true, silently zeroing out the external-signing path (measured: 0 external
+signings across 45 team-seeded-runs × 15-20 seasons before the fix). Fixed by returning immediately
+whenever there's genuinely nothing to decide yet (no decline, contract not expired) instead of
+falling through to a re-roll. Re-swept after the fix: 5 seeds × 20 seasons, 168 internal promotions
++ 20 external signings across 2,900 team-seasons (5.83%/0.69%) — combined ~5.4% per team-season,
+matching the OLD system's own original calibration target (~20 events per 450 team-seasons ≈ 4.4%,
+from the Round 16 entrenchment sweep) closely enough that this is a genuine like-for-like pacing
+result, not a frequency regression, despite replacing the whole selection mechanism.
+
+**Award scores now use the reconciled record, never a placeholder.** `simulatePlayerSeasonStats`
+computed `proBowlScore`/`allProScore`/`mvpScore` from a PLACEHOLDER win/loss (a plain probability
+roll, needed only because awards eligibility requires SOME winPct before the caller knows which of
+the team's real games this entity actually played) — `reconcileWinLossFromGames` corrected the real
+win/loss/winPct from the actual per-game log right after, but never recomputed the award scores
+that depended on the now-stale winPct (confirmed defect: "callers overwrite W-L from actual games
+without recomputing award scores"). Fixed: `reconcileWinLossFromGames` now takes `decade`/
+`leagueGames` and recomputes all three scores/eligibility flags via `evaluateSeasonAwards` using the
+corrected winPct, for every one of its 3 call sites (the incumbent's own real weeks, a normal
+rival's real weeks, a bench QB's relief weeks). The actual award RACE (`resolveSeasonMVP`/
+`resolveSeasonAllProAndProBowl`) already ran after every QB's season was fully locked in — the bug
+was specifically that the INPUTS being compared could individually be stale for anyone whose
+placeholder win/loss diverged from their real one, which is most of the league in most seasons.
+
+**Idempotency guard.** `simulatePlayerSeasonStats` now checks for an existing `(qbId, year)` season
+row before appending a new one — Section 3 invariant #6. Chose a safe no-op (returns the existing
+row, logs a `console.warn` + `career._devWarnings` entry) over a hard throw: this project ships as
+one production bundle with no clean dev/prod runtime split, and throwing inside the core simulation
+loop risks crashing a real player's session over a bug in surrounding code the guard didn't
+anticipate. The double-simulation fix above means this should never actually fire in practice now;
+it's a permanent defense-in-depth invariant, not a patch over a remaining live bug.
+
+**Exact-week schedule/box-score attribution.** A week the incumbent started (`startedByBackup:true`
+on `career.currentSeasonSchedules[career.teamId]`) used to carry no identity at all —
+`weekMatchupTeamLineHTML`'s "mine" branch hardcoded `null`, and the box-score modal's `qbLineHTML`
+hardcoded `career.name` unconditionally — so every schedule card and box score looked like the
+player played every game, even ones he didn't (confirmed defect: "exact-week schedule cards
+[should] identify the QB who actually played"). `simulateRegularSeasonGames` now tags `qbId`/
+`qbName` on an incumbent-started week's game entry; `buildScheduleResults` carries BOTH that AND
+`startedByBackup` onto the shared per-team log entry (a real bug caught immediately after the first
+pass: carrying `qbId`/`qbName` but forgetting `startedByBackup` left every regression-test filter
+silently empty even though the underlying data was already correct); `buildWeekMatchups` now always
+resolves `g.qbId` on EITHER side instead of hardcoding `null` for "mine"; `scheduleMatchToBracketMatch`
+carries the same tag into the box-score modal's `realRound`. Playoffs are unaffected — the backup
+mechanic never applies there, so the modal's playoff branch keeps assuming the player personally
+played, correctly.
+
+**Verification.** 3 new regression tests (`best-of-qb1-qb2-qb3-starts`, forces a dramatic QB1/QB2/
+QB3 talent gap and confirms deterministic promotion; `exact-week-schedule-identifies-real-starter`,
+retries up to 8 forced backup seasons to reliably clear the incumbent's own 30% missed-games roll
+and confirms the tagged week carries his name), plus updates to `backup-incumbent-double-simulation`
+and `two-active-starters-after-backup-win`'s own lookups (registry-based via `qbsById` now, since
+the incumbent may legitimately no longer sit in `leagueRivals` once these fixes correctly move him —
+a real, intentional side effect of this wave, not a test regression). No dedicated new test for the
+award-recompute fix specifically — verified via code-path tracing and a manual diagnostic instead;
+reproducing that exact internal timing bug from outside the simulation without exposing additional
+internals was judged not worth a new exposed surface for this wave, a stated limitation rather than
+a silently skipped requirement. Full suite (16 files / 17 tests) run 3 consecutive times: identical
+15 pass / 2 fail every time — `pro-bowl-eligibility` (Wave 7's job) and `suspension-freezes-league`
+(Wave 3's job) still correctly fail, unchanged by this wave; every other test, including all 5 from
+Wave 2A, still passes. `npm run build` clean, `git diff --check` clean. Committed locally, **not
+pushed** — push requires separate explicit authorization, which "start Wave 2B" was not.
+
 ### Round 33 — Playoff Tree follow-up fixes: Continue-button gating, full-tree preview, QB-link bug, Standings tab redesign
 
 User feedback (with screenshots) on Round 32's shipped work, four items:

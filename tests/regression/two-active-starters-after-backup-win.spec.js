@@ -1,10 +1,12 @@
-// Confirmed live against HEAD (67b425c): resolveBackupCompetition() only flips
-// career.isBackup=false when the player wins the job -- it never retires, demotes, or reassigns
-// the incumbent still sitting in career.leagueRivals at the SAME teamId. reassignRivalsForTeamChange
-// (the fix for the analogous "two starters, one team" bug on a TRADE/sign) is never called here,
-// because the player's teamId never changes when they win a backup competition on their own team.
-// This asserts Section 3 invariant #5 (no two active QB1 records point to the same team) the
-// instant the player wins the job.
+// Wave 2B (MASTER_REMEDIATION_SPEC.md) fixed the confirmed defect this test targets: before that
+// wave, resolveBackupCompetition() only flipped career.isBackup=false when the player won the job
+// -- it never retired, demoted, or reassigned the incumbent still sitting in career.leagueRivals at
+// the SAME teamId (reassignRivalsForTeamChange, the fix for the analogous "two starters, one team"
+// bug on a trade/sign, is never called here, since the player's teamId never changes when they win
+// a backup competition on their own team). Fixed by moving the incumbent to whichever bench slot he
+// actually upgrades (or free agency if neither) the moment the player wins the job, via the Wave 2A
+// ownership helpers. This asserts Section 3 invariant #5 (no two active QB1 records point to the
+// same team) the instant the player wins the job -- a permanent regression guard.
 import { test, expect } from "@playwright/test";
 import { startCareer, advanceOneSeason, readActiveCareer, writeActiveCareer } from "../helpers/careerFlow.mjs";
 import { installSeededRandom } from "../helpers/seededRandom.mjs";
