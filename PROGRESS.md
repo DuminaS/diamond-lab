@@ -944,6 +944,106 @@ that line to the front of the returned string instead. Verified via Playwright: 
 real seasons (so more than one transaction exists) and confirmed "— present day" renders as the
 FIRST line in the feed, not the last.
 
+### MASTER_REMEDIATION_SPEC.md — a new governing process, starting with Wave 0 and Wave 1
+
+The user pasted a full 13-section engineering remediation specification (now committed at the repo
+root, `MASTER_REMEDIATION_SPEC.md`) that supersedes the ad-hoc "ship it, test with a disposable
+Playwright script, publish" rhythm every round above and below this entry used. It's now the
+authoritative contract for all further work: numbered waves (0-9) worked in order, one focused
+commit per wave, **never push without explicit separate authorization** (a hard, repeated rule —
+committing locally is not the same as being told to push), a committed regression test demonstrating
+the OLD failure before changing behavior wherever reproducible, and a real automated suite living
+under `tests/` (not scratchpad scripts) that `npm test` actually runs. This is a genuine break from
+the "diagnose with a throwaway script, verify with a disposable Playwright pass, delete both" pattern
+every round before this one followed — that pattern is still fine for one-off diagnosis, but it can
+no longer stand in for "the test suite" once a wave ships.
+
+**Wave 0 — durable test/diagnostic foundation (no game-logic changes).** Added `@playwright/test`
+(`^1.62.1`) as a real committed test framework alongside the pre-existing raw `playwright` package,
+`playwright.config.js` (zero retries by design — "a flaky pass must never be mistaken for a real
+one"), `tests/helpers/seededRandom.mjs` (installs a mulberry32 `Math.random()` override via
+`page.addInitScript()` BEFORE the app's own IIFE ever runs — no player-visible test mode, no
+production code touched), and `tests/helpers/careerFlow.mjs` (the shared, committed click-sequence
+helpers every regression test builds on: `startCareer`, `clickThroughToSeasonCard`,
+`ensureBracketFinalized`, `advanceOneSeason`/`advanceSeasons`, `readActiveCareer`/`writeActiveCareer`).
+8 regression tests under `tests/regression/` demonstrate the specific defects Section 3 of the spec
+calls out: two QB systems worth of double-simulation and stale-incumbent bugs
+(`backup-incumbent-double-simulation.spec.js`, `two-active-starters-after-backup-win.spec.js`), a
+retired bench QB vanishing from the All-Time table (`bench-qb-survives-in-all-time.spec.js`),
+Pro Bowl slots awarded to ineligible seasons (`pro-bowl-eligibility.spec.js`), the league freezing
+solid during a suspension (`suspension-freezes-league.spec.js`), and a real XSS hole in the free-text
+name field (`xss-name-payload.spec.js`) — 6 of the 8 correctly FAIL, proving real, live bugs (their
+fixes are later waves' job, not Wave 0's); `schedule-completeness.spec.js` and
+`playoff-resume-ring-idempotency.spec.js` correctly PASS as legitimate regression guards. Confirmed
+deterministic across 3 consecutive full-suite runs (identical pass/fail set every time).
+
+Three real bugs were caught and fixed IN THE TEST HELPERS themselves before they'd give reliable
+signal: `advanceOneSeason` originally stopped right after clicking Continue, before walking the
+life-event/waiver/trade/injury interstitial that always follows — silently never calling
+`generateSeason()` for the new year at all, which produced a false PASS on the backup-incumbent test
+(rewritten into a two-phase walk that keeps going until `career.year` genuinely changes); two
+separate off-by-one year assertions (`backup-incumbent-double-simulation.spec.js`,
+`suspension-freezes-league.spec.js`) originally checked the ALREADY-simulated year instead of the
+one actually produced by the season-advance under test; and `ensureBracketFinalized` needs its own
+generous try-budget on every call, never a small per-iteration budget with an early `break` on
+failure, since a single season's bracket can legitimately need many "Simulate Next Round" sub-clicks
+to finalize (Round 32/33's Continue-button gating). `package.json`'s `test`/`test:smoke`/
+`test:regression` scripts now build first, then run Playwright against `tests/`; `.gitignore` picked
+up Playwright's own output dirs. Committed locally (`da34dd9`), **not pushed** — Section 10 handoff
+delivered per the spec's own required format, work paused for explicit approval before Wave 1.
+
+**Wave 1 — Security and save integrity.** Two independent halves, both now verified:
+
+*Versioned save envelope + checkpoint continuity.* `gridironlab.activeCareer` used to be a bare
+`{career, build, savedAt}` blob written once per season. It's now `{schemaVersion, savedAt,
+checkpoint:{phase, year, eventId, playoffRoundIndex}, career, build}` (`SAVE_SCHEMA_VERSION = 1`).
+`migrateSaveEnvelope(raw)` treats any save with no `schemaVersion` as pre-Wave-1 and wraps it in a
+synthetic `{phase:"decision", ...}` checkpoint rather than trying to reconstruct exactly where in the
+flow it was — resume's own behavior (re-render the last logged season's card) already handles any of
+those cases identically, so the checkpoint only needs to be PRESENT, not precise, for an old save.
+An already-versioned save passes through unchanged (there's no v2 yet — that's Wave 2A's canonical
+`qbsById` restructuring, deliberately out of scope here). `saveActiveCareer(checkpointPatch)` now
+merges a patch onto a session-local `_lastCheckpoint` (carried forward across a reload by
+`resumeActiveCareer`) instead of writing one static shape, and gets called at ~10 new points beyond
+the pre-existing once-per-season checkpoint: right after `confirmPlayoffRound` for EVERY round (not
+just the season boundary), right after the whole bracket resolves (both from the player's own reveal
+finishing last and from a manual "Simulate Next Round" click finishing the flat side last), and after
+every material decision the spec calls out by name — FA signing, both trade paths, a waiver signing,
+each year of a suspension or injury-leave served. `finalizePlayoffOutcome(season)` gained a leading
+`if(season.postseasonFinalized) return; season.postseasonFinalized = true;` guard so a ring/award/
+reputation bump can never double-apply now that a reload can land mid-postseason far more often than
+the old once-per-season save ever risked. New `tests/regression/save-migration.spec.js` writes a
+synthetic pre-Wave-1 bare save, confirms it still resumes, that the resumed career is genuinely
+playable (advances a real season afterward, not just readable), and that the very next save the
+session makes is upgraded to the current envelope shape.
+
+*XSS: player-controlled free text was reaching `innerHTML` unescaped.* `career.name`/`career.college`/
+`career.hometown.city`/`career.hometown.state` come straight from real free-text `<input>` fields on
+the career-setup screen. A direct grep for `${career.name}`-style interpolation found and fixed 7
+sites (draft night eyebrow, the season card's `sb-name`, the header ticker, the draft retrospective
+narrative, the HOF hero eyebrow) by wrapping each in the project's existing `svgEscape()` helper —
+but the Wave 0 `xss-name-payload.spec.js` test STILL failed after all 7 were fixed. Root-caused via a
+manual diagnostic stepping through each screen transition and checking `window.__xssFired` at each
+one: the payload was firing on the DRAFT NIGHT screen specifically, inside `#dnFlavorText` (a
+different DOM node than the one an earlier diagnostic had checked, which is why it looked clean).
+`draftNightFlavor(slot, grade)` aliased `career.name`/`career.college` into local `name`/`college`
+constants and interpolated THOSE unescaped — invisible to a grep for `${career.name}` directly, since
+the actual template strings only ever mention `${name}`/`${college}`. Fixed by escaping at the alias
+assignment (`const name = svgEscape(career.name), college = svgEscape(career.college);`). This
+prompted a full second sweep specifically for the alias pattern (`= career.name` assignments, not
+just direct interpolation): `buildHofNarrative` turned out to already alias-and-escape correctly
+(`safeName`/`safeCollege`, set the same way this fix now does); `recordGlobalFirstUnlock`,
+`computeSeasonAwardRows`, and the Trophy Room's `trophyEntry`/card-export path (`buildCardFaceSVG`'s
+`entry.name`/`entry.college` route through `cardCenteredText`, which already escapes internally) all
+confirmed safe at their own render sites. No further unescaped site remains. Rebuilt and re-ran the
+full regression suite 3 consecutive times: `xss-name-payload` and the new `save-migration` test both
+now pass, `schedule-completeness` and `playoff-resume-ring-idempotency` still pass, and the 5 bugs
+that are later waves' job (`backup-incumbent-double-simulation`, `two-active-starters-after-backup-win`,
+`bench-qb-survives-in-all-time`, `pro-bowl-eligibility`, `suspension-freezes-league`) still correctly
+fail, unchanged by anything in this wave — confirming Wave 1 fixed exactly what it targeted and
+nothing else. `npm run build` clean, `git diff --check` clean. Committed locally, **not pushed** —
+push requires separate explicit authorization per the spec, which "start Wave 1" was not.
+
 ### Round 33 — Playoff Tree follow-up fixes: Continue-button gating, full-tree preview, QB-link bug, Standings tab redesign
 
 User feedback (with screenshots) on Round 32's shipped work, four items:

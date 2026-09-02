@@ -1451,17 +1451,57 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // choice pending, no animation half-played. `build` is saved alongside `career` because it's a
   // separate top-level variable that developAttributes mutates over time -- career.originalBuild
   // is only the frozen draft-day snapshot, not the current attributes.
-  function saveActiveCareer(){
+  // Wave 1 (MASTER_REMEDIATION_SPEC.md): a versioned save envelope wrapping the same {career,build}
+  // shape that always lived at the top level here -- {schemaVersion, savedAt, checkpoint, career,
+  // build}. `checkpoint` records WHERE in the career-advance flow the save happened (phase/year/
+  // playoffRoundIndex), for diagnostics and for future waves that need to resume more precisely
+  // than "re-render the last logged season's card" -- that resume behavior itself is unchanged
+  // this wave. SAVE_SCHEMA_VERSION is 1 -- schemaVersion 2 (the qbsById canonical QB registry) is
+  // Wave 2A's job, not this one; nothing here restructures career's own internals.
+  const SAVE_SCHEMA_VERSION = 1;
+  const ACTIVE_CAREER_KEY = "gridironlab.activeCareer";
+  let _lastCheckpoint = null;
+  // Pure -- never mutates `raw`. A pre-Wave-1 save has no schemaVersion at all (just
+  // {career,build,savedAt}); wrap it into the v1 envelope with a safe, generic checkpoint rather
+  // than guessing which exact phase it was mid-flow (resume's own logic -- re-rendering the last
+  // logged season's card -- already handles any of those cases identically today, so nothing here
+  // needs to be precise, only present). An already-enveloped save passes through unchanged --
+  // there is no v2 to migrate to yet.
+  function migrateSaveEnvelope(raw){
+    if(!raw) return null;
+    if(raw.schemaVersion==null){
+      return {
+        schemaVersion: 1,
+        savedAt: raw.savedAt || Date.now(),
+        checkpoint: { phase:"decision", year: raw.career ? raw.career.year : null, eventId:null, playoffRoundIndex:null },
+        career: raw.career,
+        build: raw.build,
+      };
+    }
+    return raw;
+  }
+  // `checkpointPatch` merges onto whatever checkpoint fields the last save already had (tracked in
+  // _lastCheckpoint for this session; a cold load falls back to a generic "decision" phase) -- so
+  // any NEW call site (Wave 1 adds several -- see the calls after confirmPlayoffRound,
+  // tryFinalizeLeaguePlayoffBracket, finalizePlayoffOutcome, and every material transaction) only
+  // needs to state what actually changed, not reconstruct the whole checkpoint from scratch.
+  function saveActiveCareer(checkpointPatch){
     if(!store || !career) return;
-    try{ store.setItem("gridironlab.activeCareer", JSON.stringify({ career, build, savedAt: Date.now() })); }catch(e){}
+    try{
+      const base = _lastCheckpoint || { phase:"regular_season", year: career.year, eventId:null, playoffRoundIndex:null };
+      const checkpoint = { ...base, year: career.year, ...(checkpointPatch||{}) };
+      _lastCheckpoint = checkpoint;
+      store.setItem(ACTIVE_CAREER_KEY, JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(), checkpoint, career, build }));
+    }catch(e){}
   }
   function loadActiveCareer(){
     if(!store) return null;
-    try{ const raw = store.getItem("gridironlab.activeCareer"); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
+    try{ const raw = store.getItem(ACTIVE_CAREER_KEY); return raw ? migrateSaveEnvelope(JSON.parse(raw)) : null; }catch(e){ return null; }
   }
   function clearActiveCareer(){
     if(!store) return;
-    try{ store.removeItem("gridironlab.activeCareer"); }catch(e){}
+    _lastCheckpoint = null;
+    try{ store.removeItem(ACTIVE_CAREER_KEY); }catch(e){}
   }
   function renderActiveCareerStrip(){
     const el = document.getElementById("activeCareerStrip");
@@ -1478,6 +1518,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   function resumeActiveCareer(saved, lastSeason){
     career = saved.career;
     build = saved.build;
+    // Carry the resumed save's own checkpoint forward as the base for the NEXT saveActiveCareer()
+    // call in this session, rather than starting from a fresh default -- keeps the checkpoint
+    // trail continuous across a reload instead of silently resetting it.
+    _lastCheckpoint = saved.checkpoint || null;
     showScreen("career");
     updateHeaderCareerTicker();
     renderSeasonCard(lastSeason);
@@ -2281,7 +2325,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     card.innerHTML = `
       <div class="dn-badge cycling" id="dnBadge" style="background:linear-gradient(135deg, var(--surface-raised), var(--surface-raised));"></div>
       <div class="dn-eyebrow">${draftYear} NFL Draft · ${decade}</div>
-      <div class="dn-eyebrow" style="margin-top:0.2rem;">${career.name} · ${career.college} · ${career.hometown.city}, ${career.hometown.state}</div>
+      <div class="dn-eyebrow" style="margin-top:0.2rem;">${svgEscape(career.name)} · ${svgEscape(career.college)} · ${svgEscape(career.hometown.city)}, ${svgEscape(career.hometown.state)}</div>
       <div class="dn-team cycling" id="dnTeamText">On the clock…</div>
       <div class="dn-pick" id="dnPickText" style="visibility:hidden;">${pickLabel}</div>
       <div class="dn-flavor" id="dnFlavorText" style="visibility:hidden;">${draftNightFlavor(slot, lastCombine.grade)}</div>`;
@@ -2316,7 +2360,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   }
 
   function draftNightFlavor(slot, grade){
-    const name = career.name, college = career.college;
+    const name = svgEscape(career.name), college = svgEscape(career.college);
     if(slot.round===1 && slot.pickLo===1) return `The cameras find ${name} in the green room. Scouts loved the ${college} tape — ${grade.flavor.toLowerCase()} — and someone just bet a franchise on it.`;
     if(slot.round===1) return `A first-round grade out of ${college}, a late slide, and a locker room that expects ${name} to start soon.`;
     if(slot.round===0) return `No call on draft weekend for the ${college} product. ${name} signs a make-good deal and a shot at a training camp roster spot.`;
@@ -5985,6 +6029,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const content = document.getElementById("careerContent");
     career.suspensionSeasonsRemaining--;
     const remaining = career.suspensionSeasonsRemaining;
+    // Wave 1: checkpoint each year of a suspension actually served -- a real "material decision"
+    // point (per the spec) that used to only ever get captured by the once-per-season save, which
+    // this exact interstitial is never inside of (advanceCareer returns here before generateSeason
+    // is ever reached for a suspended year).
+    saveActiveCareer({ phase:"decision", eventId:"suspension_year" });
     content.innerHTML = eraWrap(decadeForYear(career.year), `
         <div class="ev-eyebrow">${career.year} · League Suspension</div>
         <h3>Still serving the ban.</h3>
@@ -5999,6 +6048,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.injuryLeaveSeasonsRemaining--;
     const remaining = career.injuryLeaveSeasonsRemaining;
     const teamName = teamNameAt(career.teamId, career.year);
+    saveActiveCareer({ phase:"decision", eventId:"injury_leave_year" });
     content.innerHTML = eraWrap(decadeForYear(career.year), `
         <div class="ev-eyebrow">${career.year} · Injured Reserve</div>
         <h3>Still rehabbing.</h3>
@@ -6093,6 +6143,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
       career.contract = { apy: offerApy, years: 1, tier: "minimum" };
       career.badStreak = 0;
+      saveActiveCareer({ phase:"decision", eventId:"waiver_signed" });
       checkInjuryThenPlay();
     });
     document.getElementById("waRetire").addEventListener("click", ()=>{
@@ -6171,6 +6222,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     career.teamId = team.id; career.teamStrength = safeNum(career.leagueStrength[team.id], 60); career.leagueStrength[team.id] = career.teamStrength; career.seasonsWithTeam = 0;
     career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
     career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
+    // Wave 1: material transaction -- checkpoint the new team assignment right away.
+    saveActiveCareer({ phase:"decision", eventId:"traded" });
     const content = document.getElementById("careerContent");
     content.innerHTML = eraWrap(decadeForYear(career.year), `
         <div class="ev-eyebrow">Trade · ${career.year}</div>
@@ -6228,6 +6281,8 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       career.teamId = team.id; career.teamStrength = safeNum(career.leagueStrength[team.id], 60); career.leagueStrength[team.id] = career.teamStrength; career.seasonsWithTeam = 0;
       career.oline = rollSupportingCastGrade(career.teamStrength); career.weapons = rollSupportingCastGrade(career.teamStrength);
       career.defense = rollSupportingCastGrade(career.teamStrength); career.coaching = rollSupportingCastGrade(career.teamStrength); career.gmGrade = rollSupportingCastGrade(career.teamStrength);
+      // Wave 1: material transaction -- checkpoint the new team assignment right away.
+      saveActiveCareer({ phase:"decision", eventId:"trade_requested_granted" });
       content.innerHTML = eraWrap(decade, `
         <div class="ev-eyebrow">${career.year} · Trade Request</div>
         <h3>Request granted — dealt to the ${newTeamName}.</h3>
@@ -6478,6 +6533,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     }
     const tier = o.role==="competition" ? "backup" : (meta.tier==="minimum"?"minimum":meta.tier);
     career.contract = { apy: o.apy, years: o.years, tier };
+    // Wave 1: a signing is exactly the kind of material, hard-to-redo decision the spec calls out
+    // by name -- checkpoint it immediately, before whatever comes next (an injury check, then the
+    // season itself) has a chance to get interrupted.
+    saveActiveCareer({ phase:"decision", eventId:"fa_signed" });
     checkInjuryThenPlay();
   }
 
@@ -7962,7 +8021,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       <div class="season-card">
         <div class="summary-bar">
           <div class="sb-left">
-            <div class="sb-name">${career.name}</div>
+            <div class="sb-name">${svgEscape(career.name)}</div>
             <div class="sb-year">${season.year}</div>
             <div class="sb-sub">Age ${season.age} · ${season.decade}</div>
           </div>
@@ -8470,6 +8529,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       // bracket actually move forward. This is what generates the next round (or the Super Bowl)
       // for the very first time; nothing about how far this run goes existed before this call.
       confirmPlayoffRound(season.playoffs, season);
+      // Wave 1: checkpoint right here -- a completed playoff round is exactly the "clean boundary"
+      // the existing once-per-season save already relied on (nothing mid-animation, no pending
+      // choice), just happening far more often now. Reloading after this point must show the round
+      // as already decided, never re-roll it -- season.playoffs.rounds already holds the final,
+      // Key-Moment-adjusted result, so there is nothing left for a resume to recompute.
+      saveActiveCareer({ phase:"playoffs", playoffRoundIndex: roundIdx });
       if(roundIdx+1 < rounds.length){ appendRoundBox(roundIdx+1); renderControlsFor(roundIdx+1); }
       else {
         // whole run is done -- see the Playoff Tree tab for the full bracket view (Round 29
@@ -8497,6 +8562,11 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
           actions.classList.remove("pending-reveal");
           actions.querySelectorAll("button").forEach(b=> b.disabled=false);
         }
+        // Wave 1: save immediately after the ring/awards/reputation bumps from a real title (or
+        // the elimination itself) actually land -- see finalizePlayoffOutcome's own
+        // season.postseasonFinalized guard for what stops this from ever double-applying even if
+        // this code path were somehow re-entered.
+        saveActiveCareer({ phase: season.leagueStandings.playoffBracket ? "decision" : "playoffs" });
       }
     }
 
@@ -8589,6 +8659,14 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // resolved things; this is where that becomes real, and where the DOM (badge row, front-office
   // widget, career trends/log tabs, header ticker) gets patched to finally reflect it.
   function finalizePlayoffOutcome(season){
+    // Wave 1 (MASTER_REMEDIATION_SPEC.md, Section 3 invariant #7 / #14): this is the ONE place a
+    // ring, a championship award, and the reputation/GM/fan/popularity bumps that come with it are
+    // ever granted -- a stable idempotency flag stops it from ever applying twice for the same
+    // season, which matters now that saves happen far more often mid-postseason (see the two new
+    // saveActiveCareer() calls around this function's own call site in finalizeRound) than the old
+    // once-per-season checkpoint ever risked.
+    if(season.postseasonFinalized) return;
+    season.postseasonFinalized = true;
     const playoffs = season.playoffs;
     // Pre-merger seasons (before Super Bowl I, played after the 1966 season) had no unified
     // championship game in real life -- the AFL and NFL each crowned their own champion via
@@ -8729,7 +8807,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const el = document.getElementById("headerRight");
     if(!career){ el.textContent = "No builds logged yet"; return; }
     el.innerHTML = `<div class="career-ticker">
-        <span><b>${career.name}</b></span>
+        <span><b>${svgEscape(career.name)}</b></span>
         <span>Age <b>${career.age}</b></span>
         <span class="tk-team">${teamNameAt(career.teamId, career.year)}</span>
         <span>Earned <b>${fmtMoney(career.totals.earnings)}</b></span>
@@ -8837,11 +8915,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const last = career.seasonLog[seasons-1];
     const paras = [];
 
+    const safeName = svgEscape(career.name), safeCollege = svgEscape(career.college);
     const originLine = career.slot.round===0
-      ? `Nobody called ${career.name}'s name on draft weekend in ${career.draftYear}. Out of ${career.college}, he signed with the ${teamNameAt(career.draftTeamId, career.draftYear)} as an undrafted free agent and had to fight for a locker.`
+      ? `Nobody called ${safeName}'s name on draft weekend in ${career.draftYear}. Out of ${safeCollege}, he signed with the ${teamNameAt(career.draftTeamId, career.draftYear)} as an undrafted free agent and had to fight for a locker.`
       : career.slot.round===1
-        ? `The ${teamNameAt(career.draftTeamId, career.draftYear)} spent a first-round pick on ${career.name} in the ${career.draftYear} draft, betting a franchise on the arm scouts had raved about since ${career.college}.`
-        : `A ${career.slot.label.toLowerCase()} selection in ${career.draftYear} out of ${career.college}, ${career.name} arrived in the league with modest expectations and a chip on his shoulder.`;
+        ? `The ${teamNameAt(career.draftTeamId, career.draftYear)} spent a first-round pick on ${safeName} in the ${career.draftYear} draft, betting a franchise on the arm scouts had raved about since ${safeCollege}.`
+        : `A ${career.slot.label.toLowerCase()} selection in ${career.draftYear} out of ${safeCollege}, ${safeName} arrived in the league with modest expectations and a chip on his shoulder.`;
     paras.push(originLine);
 
     const peakLine = `The tape people still cite is <b>${peak.year}</b>: ${peak.td} touchdowns, a ${peak.rating} passer rating, and a ${recordLine(peak.wins, peak.losses, peak.ties||0)} record with the ${peak.teamName}${peak.awards.length?` that earned him ${peak.awards.join(" and ")}`:""}. It's the year that told the league who he really was.`;
@@ -8964,7 +9043,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       banned:"banned from the league", injury:"career-ending injury", retired:"retired on his own terms" };
     const exitTag = EXIT_TAGS[career.exitReason] || "retired on his own terms";
     hero.innerHTML = `
-      <div class="hh-eyebrow">${career.name} · out of ${career.college} · ${career.hometown.city}, ${career.hometown.state}</div>
+      <div class="hh-eyebrow">${svgEscape(career.name)} · out of ${svgEscape(career.college)} · ${svgEscape(career.hometown.city)}, ${svgEscape(career.hometown.state)}</div>
       <div class="hh-verdict">${verdict.tier}</div>
       <div class="hh-sub">${career.seasonLog.length}-season career · ${career.draftYear}–${career.year} · ${exitTag}<br>${verdict.note}</div>`;
 
@@ -9793,6 +9872,10 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
         actions.querySelectorAll("button").forEach(b=> b.disabled=false);
       }
     }
+    // Wave 1: each "Simulate Next Round" click can complete a real playoff round (or the whole
+    // league-wide bracket) just as much as the player's own reveal finishing does -- checkpoint it
+    // the same way finalizeRound does, since this can happen across many separate sessions.
+    saveActiveCareer({ phase: (myDone && season.leagueStandings.playoffBracket) ? "decision" : "playoffs" });
   }
   // Spacebar shortcut for "Simulate Next Round" -- scoped to only fire while the Season tab (the
   // Playoff Tree now lives inside it, not its own dash-tab) is the currently active panel.
