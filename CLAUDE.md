@@ -4,6 +4,19 @@ This file is auto-loaded by Claude Code every time it starts in this folder. It'
 context; `PROGRESS.md` in this same folder is the full round-by-round development log — read that
 when you need the detailed "why" behind a specific mechanic, formula, or bug fix.
 
+## Current local status — 2026-09-02
+
+The remediation waves and Android verification are complete. Balance implementation Wave 1 (honest
+Combine-vs-Football-OVR ratings, draft order tied to team quality, retuned development, dynasty-
+feedback removal) and Wave 2 partial (performance-over-expectation development, a player-chosen
+offseason program, team chemistry) are now implemented locally; read the two newest sections at the
+top of `PROGRESS.md` before changing career difficulty or development math. AI/rival QBs still don't
+get the performance-over-expectation mechanic Wave 2 gave the player -- that's a known, stated gap,
+not an oversight. Rating and development math has begun moving out of the IIFE into pure production
+modules under `src/sim/`. Run `npm run balance:audit` for the seeded distribution report and
+`npm test` for the balance guards, production build, and full browser suite. Do not restore the old
+QB-to-all-five-team-grades feedback or the self-amplifying breakout/devSpeed loop.
+
 ## What this is
 
 A QB-career simulator ("Gridiron Lab") — build a quarterback, take him through the Combine, then

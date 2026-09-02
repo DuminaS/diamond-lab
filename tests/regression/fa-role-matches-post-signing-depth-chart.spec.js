@@ -14,7 +14,7 @@ import { test, expect } from "@playwright/test";
 import { startCareer, advanceOneSeason, readActiveCareer, writeActiveCareer } from "../helpers/careerFlow.mjs";
 import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
-async function forceFreeAgencyAndCapture(page, seed, decadeIndex, seasonsFirst) {
+async function forceFreeAgencyAndCapture(page, seed, decadeIndex, seasonsFirst, incumbentTalent) {
   await installSeededRandom(page, seed);
   await startCareer(page, { decadeIndex });
   for (let i = 0; i < seasonsFirst; i++) {
@@ -24,6 +24,17 @@ async function forceFreeAgencyAndCapture(page, seed, decadeIndex, seasonsFirst) 
   }
   const saved = await readActiveCareer(page);
   if (!saved) return null;
+  // Make the role branch deterministic instead of hoping a particular RNG stream happens to
+  // generate the needed incumbent population. A 20-talent league clearly offers starter jobs;
+  // a 65-talent league still clears the FA fit threshold but blocks this prospect from QB1.
+  Object.entries(saved.career.teamQbDepth || {}).forEach(([teamId, depth]) => {
+    if (teamId === saved.career.teamId || !depth?.QB1) return;
+    const incumbent = saved.career.qbsById && saved.career.qbsById[depth.QB1];
+    if (!incumbent) return;
+    incumbent.talent = incumbentTalent;
+    incumbent._originalTalent = incumbentTalent;
+    incumbent.age = 27;
+  });
   saved.career.contract.years = 0;
   await writeActiveCareer(page, saved);
   await page.reload();
@@ -68,23 +79,23 @@ async function forceFreeAgencyAndCapture(page, seed, decadeIndex, seasonsFirst) 
 
 test("fa-role-matches-post-signing-depth-chart", async ({ page }) => {
   test.setTimeout(240_000);
-  // A few different (seed, decadeIndex, seasonsFirst) combinations -- early in a career, the
-  // player's own effOverall is more likely to trail an established incumbent somewhere in the
-  // league, giving a real chance of seeing BOTH a "starter" and a "competition" offer across this
-  // sweep without forcing either artificially.
+  // Explicit incumbent fixtures exercise both branches. Random development changes must not be
+  // able to silently remove one branch from this regression test's coverage.
   const attempts = [
-    { seed: 13579, decadeIndex: 1, seasonsFirst: 0 },
-    { seed: 24681, decadeIndex: 2, seasonsFirst: 0 },
-    { seed: 97531, decadeIndex: 3, seasonsFirst: 1 },
-    { seed: 86420, decadeIndex: 4, seasonsFirst: 0 },
+    { seed: 13579, decadeIndex: 1, seasonsFirst: 0, incumbentTalent: 20, expectedRole: "starter" },
+    { seed: 24681, decadeIndex: 2, seasonsFirst: 0, incumbentTalent: 65, expectedRole: "competition" },
   ];
 
   let sawStarter = false, sawCompetition = false;
   for (const attempt of attempts) {
-    const result = await forceFreeAgencyAndCapture(page, attempt.seed, attempt.decadeIndex, attempt.seasonsFirst);
+    const result = await forceFreeAgencyAndCapture(page, attempt.seed, attempt.decadeIndex, attempt.seasonsFirst, attempt.incumbentTalent);
     if (!result) continue;
     const awayOffers = result.offers.filter(o => o.teamId);
-    for (const o of awayOffers) {
+    const matchingOffers = awayOffers.filter(o => attempt.expectedRole === "competition"
+      ? o.roleLabel?.includes("Camp competition")
+      : !o.roleLabel?.includes("Camp competition"));
+    expect(matchingOffers.length, `expected a deterministic ${attempt.expectedRole} offer`).toBeGreaterThan(0);
+    for (const o of matchingOffers) {
       const isCompetition = o.roleLabel && o.roleLabel.includes("Camp competition");
       if (isCompetition) sawCompetition = true; else sawStarter = true;
 

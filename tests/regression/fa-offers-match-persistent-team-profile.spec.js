@@ -45,6 +45,9 @@ test("fa-offers-match-persistent-team-profile", async ({ page }) => {
   // run" pattern already used by this project's other save-mutation regression tests) rather than
   // relying on a contract happening to expire within a bounded number of seeded seasons.
   beforeSign.career.contract.years = 0;
+  // The previous season may have consumed an injury event and left this one-shot guard true.
+  // Clear it so the Math.random override below reliably pauses on the intended injury branch.
+  beforeSign.career._injuryResolved = false;
   await writeActiveCareer(page, beforeSign);
   await page.reload();
   const resumeBtn = page.locator("#resumeCareerBtn");

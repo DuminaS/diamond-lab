@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "Gridiron Lab - QB career simulator",
   "scripts": {
-    "test": "npm run build && playwright test",
+    "test": "npm run test:balance && npm run build && playwright test",
+    "test:balance": "node --test tests/balance/*.node.mjs",
+    "balance:audit": "node scripts/balance-audit.mjs",
     "test:smoke": "npm run build && playwright test tests/smoke",
     "test:regression": "npm run build && playwright test tests/regression",
     "dev": "vite",

@@ -13,16 +13,10 @@ import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("regular-season-era-can-produce-tie", async ({ page }) => {
   test.setTimeout(180_000);
-  // Wave 7 (MASTER_REMEDIATION_SPEC.md): reseeded from 24680 to 97531. simulateGameScore's
-  // resistance calculation changed this wave (myFacingGrade now reads the opponent's real
-  // persistent defense grade instead of their offense -- see opponentDefenseGrade/task #2), which
-  // shifts the exact score distribution enough to change which seeds land a tie within a bounded
-  // window. Root-caused via a disposable per-seed sweep: seed 24680's career happens to end early
-  // under the new code (~46 total games across what should be ~15 seasons' worth), and zero ties in
-  // that few games is unsurprising at a real ~3.8% rate, not a broken mechanism -- a wider 6-seed
-  // sweep still measures ~3.8% my-games/~5.1% league-games tie rates, consistent with Wave 4's own
-  // baseline. 97531 reliably produces several player ties within 15 seasons under the current code.
-  await installSeededRandom(page, 97531);
+  // Balance Wave 1 changes the number of random draws during draft/development, so the old fixture
+  // no longer reaches a player tie inside its bounded career. Seed 86420 was re-verified against
+  // the current production build and produces both player and league ties without changing odds.
+  await installSeededRandom(page, 86420);
   await startCareer(page, { decadeIndex: 1 }); // 1960s -- pre-1974, no regular-season overtime
 
   let foundMyTie = false, foundLeagueTie = false;

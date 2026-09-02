@@ -2,6 +2,183 @@
 
 Single-file HTML/CSS/JS QB-career simulator. Dev copy: `/tmp/gridiron/index.html` in the Cowork session workspace (not persisted between sessions — this doc is the durable record). Published artifact: https://claude.ai/code/artifact/c9dc631e-5094-47ef-95c8-908641aadc67 ("Gridiron Lab", 🏈).
 
+## 2026-09-02 — Balance implementation Wave 1: progression, honest ratings, draft order, team feedback
+
+Playtest trigger: displayed 76-or-lower prospects were routinely reaching 95–99 overall, winning
+five MVPs and as many as eight championships. The requirement was explicitly NOT to prohibit those
+careers, but to stop making them ordinary and make long-tail greatness depend on exceptional rolls
+and future player skill systems.
+
+### Reproducible baseline and permanent guardrails
+
+- Added pure production modules `src/sim/ratings.js` and `src/sim/development.js`. The UI imports
+  their calculations; `scripts/balance-audit.mjs` imports those exact same calculations rather than
+  maintaining a disposable copy.
+- Added `npm run balance:audit` and `npm run test:balance`. The main `npm test` command now runs the
+  balance tests before the production build and browser regressions.
+- The committed audit samples real best-of-four Classic prospects from the real QB pool, applies
+  decade normalization, computes both displayed Combine Grade and football-weighted OVR, and then
+  runs the production development model through age 40 under a seeded RNG.
+- A 100,000-career post-change audit measured: Classic grade p10/50/90 = 68/71/74; true starting
+  football OVR p10/50/90 = 71.4/75.1/79.0. Displayed 75–76 prospects start at median 78.9 football
+  OVR, peak at median 87.2/p90 89.8/p99 91.9, and reach raw 90+ in 8.47% of runs. Scheme and temporary
+  effects can still push the live effective number further; no hard 89/90 ceiling was introduced.
+- A flat 76 now peaks at median 84.6 and p90 86.2 instead of reaching a median ~89 with roughly 39%
+  at 90+. The new test fails if median/p90 progression drifts back into automatic-superstar range.
+
+### Honest prospect rating and draft destination
+
+- Combine Grade still measures all-twelve-attribute completeness (`average - 0.55×stddev`, plus the
+  existing floor bonus). Results now also show `Football OVR`, using the exact weighted rating the
+  career engine uses. This closes the semantic defect where a displayed 75–76 specialist could
+  secretly be an 80+ football player without the UI saying so.
+- Draft slot now uses Football OVR, not the completeness grade. Both numbers and the actual overall
+  pick are persisted on new careers as `prospectGrade`, `draftOverall`, and `overallPick`; old saves
+  need none of these to continue.
+- Draft destination is correlated with draft order. Each round maps early picks toward weak teams
+  and late picks toward strong teams, with ±2 strength-rank jitter for traded picks/imperfect order.
+  UDFAs can still sign anywhere. Top-ten prospects can no longer randomly land on a 90-grade roster
+  merely because draft team and draft order were generated independently.
+
+### Development retune and player/AI parity
+
+- Full-season experience is now 1.0× rather than 1.2×; coaching spans 0.90–1.10 instead of
+  0.85–1.15; stability/turmoil are 1.08/0.85 instead of 1.15/0.75.
+- Opening development rates changed from physical/accuracy/mental 1.6/2.2/2.6 to 1.0/1.45/1.75,
+  with full age curves in `src/sim/development.js`. Ordinary gain is limited to `11×devSpeed` above
+  the original attribute rather than `14×devSpeed`.
+- Breakthrough frequency is age-aware and much lower. A normal young player begins at 1.5% per
+  season; a second breakthrough survives at a 15% follow-up gate. Breakouts affect three attributes
+  by +3–6 with an `original+18` limit, down from 3–5 attributes by +4–9 and `original+30`.
+- Breakouts and busts no longer mutate `devSpeed`. This removes the old positive feedback where a
+  favorable dev roll increased normal growth, breakout chance, breakout direction, and then its own
+  future value. Old saves with self-amplified values outside 0.6–1.4 normalize safely on next use.
+- AI QBs retain their compact talent scalar, but its yearly drift is now the exact 10% physical /
+  52% accuracy / 38% mental weighted average of the player's production curves, with the same
+  dev-speed range, coaching range, caps, swing odds, and non-self-amplifying behavior.
+
+### Dynasty feedback removed
+
+- Deleted the QB-rating-to-team nudge that applied one delta to O-line, weapons, defense, coaching,
+  and GM every offseason. Award-winning AI QBs no longer produce the equivalent five-grade lift
+  either. Quarterback quality still affects game outcomes, but cannot manufacture a better defense
+  or front office. Team drift now comes from regression/rebuild pressure, roster noise, and explicit
+  league/organization events. Contract-cap and targeted recruitment effects remain future work.
+
+### Verification and fixture corrections
+
+- `npm test`: 6/6 balance tests and 37/37 Playwright tests pass; production Vite/PWA build passes.
+- The new browser integration test proves Combine results expose Football OVR, persist both rating
+  meanings into the career, and route a top-ten pick into the weak half of the active league.
+- Intentional RNG-stream changes required reseeding the pre-1974 tie coverage. FA role coverage now
+  creates explicit strong/weak incumbent fixtures instead of hoping four seeds happen to cover both
+  branches. The FA-profile test now explicitly clears the one-season injury guard before forcing an
+  injury pause. The touchdown/score invariant correctly uses the six points a touchdown itself is
+  worth because a walk-off overtime TD is stored without a PAT; the old ×7 assertion could falsely
+  reject a legitimate 20-point, three-TD game.
+
+### Next balance waves
+
+1. Performance-over-expectation and player-controlled development focus/action budget.
+2. Contextual regular-season and playoff decision system; remove permanent one-answer tendency map.
+3. Contracts/cap pressure, coordinator carousel, independent roster component life cycles.
+4. Award scoring based partly on wins above expectation rather than raw win percentage.
+5. Structured event ledger and declarative expansion from the current 39 achievements toward 250.
+
+## 2026-09-02 — Balance implementation Wave 2 (partial): performance-over-expectation, offseason program choice
+
+Continuation of Wave 1, same session. Scope actually completed is item 1 of Wave 1's "next balance
+waves" list only (performance-over-expectation development + a player-chosen offseason program).
+Items 2-5 (contextual play-calling EV, contracts/cap/coordinator carousel, win-above-expectation
+awards, the 250-achievement ledger) are **not started** — noted here so this isn't mistaken for a
+completed wave.
+
+### What shipped
+
+- `evaluatePerformanceOverExpectation` (`src/sim/development.js`) compares a season's REAL production
+  against that exact build's own attribute-derived expected rates (the same `comp`/`ypa`/`tdRate`/
+  `intRate` `generateSeason()` already computes pre-variance) -- not a league average, not a flat
+  target. A sub-20-attempt season is judged as a neutral no-op ("No meaningful sample"), never a
+  penalty or a free ride.
+- `nextBreakthroughMomentum` accumulates a 0-100 momentum meter from repeated over/under-performance;
+  `earnedBreakthroughChance` gates a rare (<=7.5%/season) "earned breakthrough" behind age<=31,
+  momentum>=45, performanceIndex>=0.50, at most 3 per career, and unavailable on the Recovery program.
+  A hit raises that attribute's ceiling (`devCeilingBonus`, capped +30) rather than granting a normal
+  breakout's flat bump -- a structurally different, rarer, harder-gated path than the ordinary boom/
+  bust roll, exactly the "extraordinary condition" the original brief asked for instead of another
+  copy of the same mechanic.
+- A new offseason interstitial (`beginOffseason`, shown before `nextSeason()` from the season card's
+  Continue/Play On button and from a trade acceptance/denial) makes the player pick ONE of six
+  programs (`DEVELOPMENT_PLANS` in `src/sim/development.js`: Balanced, Mechanics Lab, Film Room,
+  Athletic Camp, Chemistry Camp, Recovery & Rehab) that reweights which attribute groups grow/decline,
+  shifts injury risk and wear, and moves `career.teamChemistry` (a small, explicit, non-roster-grade
+  in-game edge on completion%/YPA -- see `teamChemistryEdge()` -- deliberately NOT another path back
+  into the five persistent team grades Wave 1 just decoupled from QB rating). Key Moment outcomes
+  (good/meh/bad) now also nudge `breakthroughMomentum` directly, a small, visible reward for actually
+  playing well in the interactive part of the game that already exists, without rewriting any score.
+- Migration: `SAVE_SCHEMA_VERSION` 2->3, `migrateDevelopmentAgency` backfills `developmentPlan`
+  (defaults to "balanced"), `teamChemistry` (50), `breakthroughMomentum` (0),
+  `_earnedBreakthroughCount` (0), `devCeilingBonus` ({}), and `_developmentPlanAppliedYear` (current
+  year, so an old save never gets a surprise retroactive wear/chemistry change on next load).
+
+### Found and fixed while reviewing this wave's own (uncommitted) work
+
+Two real gaps surfaced during review, both fixed and reverified before anything was committed:
+
+1. **The balance audit never actually exercised the mechanic it was built to validate.**
+   `scripts/balance-audit.mjs`'s `simulateDevelopment` called `advanceDevelopmentSeason` without ever
+   passing a `performance`/`performanceIndex` context value. `evaluatePerformanceOverExpectation`
+   defaults an empty input to `{ index: 0 }` ("met expectations exactly"), which means
+   `earnedBreakthroughChance` (gated on `performanceIndex>=0.50`) could **never** fire in a single one
+   of the audit's simulated careers -- the reported "displayed 75-76 peak 90+: 8.47%" number was real,
+   but it was measuring a world where the earned-breakthrough path the wave just built literally could
+   not exist. Fixed by giving `simulateDevelopment` a pluggable `performanceIndexFor(random, age)`
+   generator: ordinary runs now use a symmetric, mean-zero three-uniform bell curve (realistic
+   variance around expectation, matching the shape used elsewhere in this codebase for the same
+   purpose), and a new `displayed75To76SustainedElitePerformance` audit section replays the same
+   75-76 grade-band prospects under `performanceIndex` pinned to 1 every season for a whole career --
+   an impossible-in-practice best case, used specifically to measure the model's ceiling (does 99 stay
+   reachable in principle without becoming routine?), not a realistic distribution. Re-measured with
+   realistic variance now active: displayed 75-76 peak 90+ moved only 6.76%->8.53% (the earned path
+   barely engages under ordinary symmetric noise, as intended -- it needs SUSTAINED over-performance,
+   which random noise alone rarely produces), while the sustained-elite ceiling test shows peak 90+ at
+   37.2%, peak 95+ at 0.61%, and reach-99 at 0.00% across ~5,500 samples -- consistent with (an even
+   tighter bound than) the brief's own "reach 99 under 0.1%" target, though a true rate anywhere from
+   0% to roughly 0.07% is statistically indistinguishable at this sample size; a future session should
+   widen this specific measurement (more samples, and/or a "deliberately re-target the same high-
+   weight keys every breakthrough" variant closer to how an actual optimizing player would play,
+   rather than the audit's uniformly-random key selection) before treating 99 as meaningfully reachable
+   in practice. Added two new tests (`tests/balance/balance-model.node.mjs`) covering both shapes.
+2. **`beginOffseason` broke the multi-season suspension/injury-leave absence flow.** Both the
+   season-card Continue/Play On button and the trade-accept/trade-deny acknowledgments now open the
+   new program-choice screen unconditionally before calling `nextSeason()` -- including for a player
+   about to enter a suspension or injury-leave absence that `advanceCareer()` would otherwise route
+   straight into `renderSuspensionYear()`/`renderInjuryLeaveYear()`. Concretely broke
+   `expansion-catchup-initializes-missed-start-year.spec.js` (confirmed by an independent full-suite
+   run: 36/37, not the 37/37 this wave's own summary claimed) and was also a real product
+   inconsistency, not just a test gap -- a released/sidelined player picking "Chemistry Camp" with a
+   team he isn't on makes no narrative sense. Fixed by bypassing straight to `nextSeason()` whenever
+   `career.suspensionSeasonsRemaining>0 || career.injuryLeaveSeasonsRemaining>0`, mirroring the
+   existing retirement-age bypass right above it. Reverified: 37/37 Playwright, 8/8 balance tests.
+
+### Verification
+
+`npm test`: 8/8 balance tests (6 original + the 2 new performance-index tests above), production
+build clean, **37/37 Playwright** (independently reverified after the two fixes above, not just
+trusted from the in-progress summary this wave started from).
+
+### Explicitly not done this wave (stated plainly, not silently dropped)
+
+AI/rival QBs still do **not** get the performance-over-expectation or earned-breakthrough mechanic --
+`developEntityTalent` is unchanged from Wave 1 (same age curve/dev-speed range/coaching multiplier as
+the player, but no performance-index input at all). Item 4 of the original brief ("one shared
+development model for the player and AI... output distribution must match") is therefore still only
+partially satisfied: the ORDINARY drift is unified (Wave 1), but the new performance-driven upside
+this wave adds is player-only for now. Contextual play-calling EV (replacing the permanent Key Moment
+answer key), contracts/cap pressure, the coordinator carousel, wear-affects-availability redesign,
+win-above-expectation award scoring, and the declarative achievement ledger are all still entirely
+unstarted, per the "Next balance waves" list above.
+
 ## Testing methodology (established pattern, reuse every round)
 - jsdom in `/tmp/gtest`, debug hooks (`window.__debug`) injected only into throwaway copies (`index.debugN.html`), never the real file. Latest debug build: `index.debug24.html` (Round 4, item 3).
 - `grep -c "__debug" index.html` must return 0 on the real file before every publish.

@@ -5,6 +5,18 @@ import { QBS } from "./data/qbs.js";
 import { SCHEMES } from "./data/schemes.js";
 import { shuffle, pick, clamp, randInt, lerp, svgEscape, fmtPct, safeNum, fmtMoney, fmtDelta, recordLine } from "./utils/index.js";
 import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js";
+import { FOOTBALL_OVERALL_WEIGHTS as OVERALL_WEIGHTS, chooseDraftTeam, evaluateProspect } from "./sim/ratings.js";
+import {
+  DEVELOPMENT_PLAN_LIST,
+  advanceDevelopmentSeason,
+  applyOffseasonPlanResources,
+  developmentBaseForOverall,
+  developmentCoachingMultiplier,
+  developmentPlanFor,
+  developmentSpeedTag as devSpeedTag,
+  developmentSwingChance,
+  rollDevelopmentSpeed as rollDevSpeed,
+} from "./sim/development.js";
 
 (function(){
   "use strict";
@@ -276,7 +288,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
      a career -- real development, not just re-expression of the same fixed number.
      Driven by three things, deliberately NOT by how well a season actually went (no rich-get-richer
      snowball where a hot season accelerates growth):
-       1. Age + attribute group, via DEVELOPMENT_CURVES below -- mental attributes (DEC/ANT/CLU)
+       1. Age + attribute group, via the shared DEVELOPMENT_CURVES module -- mental attributes (DEC/ANT/CLU)
           grow the longest and decline the least, matching how football IQ/experience actually age;
           accuracy/technical (SHA/DAC/TCH/PKT/REL) grows hard early on real reps and coaching, then
           erodes mildly late; physical (ARM/MOB/IMP) gets a small early bump from strength/
@@ -293,18 +305,6 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
      DUR is deliberately excluded, same as everywhere else it's treated specially -- see the note by
      ERA_ATTR_MULT: it's a fixed personal toughness trait, only ever moved by a permanent injury hit
      or the offseasontrain event boost, never by ordinary development. */
-  const DEVELOPMENT_CURVES = {
-    physical: [[22,1.6],[25,1.0],[27,0],[30,-0.4],[33,-1.2],[36,-2.2],[39,-3.2],[42,-4.0]],
-    accuracy: [[22,2.2],[25,1.8],[28,0.9],[31,0],[34,-0.5],[37,-1.3],[40,-2.2]],
-    mental:   [[22,2.6],[25,2.2],[28,1.4],[31,0.6],[34,0],[37,-0.2],[40,-0.5],[43,-0.8]],
-  };
-  // Three-uniform average instead of Math.random() alone -- a cheap, dependency-free way to get a
-  // mild bell curve (centered on 1.0, "Standard Development") instead of a flat spread where
-  // "Slow Burn" and "Ascending Fast" would be exactly as common as everyone in between.
-  function rollDevSpeed(){
-    const r = (Math.random()+Math.random()+Math.random())/3;
-    return clamp(0.6 + r*0.8, 0.6, 1.4);
-  }
   // A rival/bench QB's real, persistent pass-volume identity -- rolled once (lazily, same pattern
   // as devSpeed/durability) rather than re-rolled every season, since not every real NFL team runs
   // a high-volume passing scheme. Bell-shaped in [-1,1], skewed slightly toward run-first (most
@@ -315,128 +315,90 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     const r = (Math.random()+Math.random()+Math.random())/3*2-1;
     return clamp(r - 0.15, -1, 1);
   }
-  // Round 4: devSpeed is no longer fixed for the whole career (see developAttributes' "career-arc
-  // swing" section below) -- a breakout or bust-spiral event can push it well outside its original
-  // 0.6-1.4 roll range, so the tag table extends further in both directions to name those states.
-  function devSpeedTag(speed){
-    if(speed<0.45) return "Stalled Out";
-    if(speed<0.75) return "Slow Burn";
-    if(speed<0.9) return "Steady Riser";
-    if(speed<1.1) return "Standard Development";
-    if(speed<1.25) return "Quick Study";
-    if(speed<1.45) return "Ascending Fast";
-    return "Breakout Star";
-  }
-  // Round 4: how likely THIS player is to have a career-arc swing (breakout or bust-spiral) in a
-  // given season. Deliberately keyed off the CURRENT devSpeed (not the original roll) so the
-  // volatility itself travels with a player as their arc shifts -- a "Standard Development" guy who
-  // breaks out into "Breakout Star" territory becomes more volatile going forward, not less, same as
-  // a real boom-or-bust prospect who's already shown he can swing hard. Centered low (a "Standard"
-  // player sees one only rarely) and rises the further devSpeed sits from the 1.0 center in EITHER
-  // direction -- that's what makes the extreme archetypes ("Slow Burn"/"Ascending Fast" and beyond)
-  // genuinely boom-or-bust instead of just faster/slower versions of the same smooth curve.
-  function devVolatility(speed){
-    return clamp(0.035 + Math.abs(speed-1.0)*0.18, 0.035, 0.22);
-  }
   // Applies this season's development to `build` in place, based on the season just played (so a
   // season's OWN production always uses the pre-development attribute values -- growth from a
   // season's reps pays off starting next season, same as career.age++ in nextSeason()). Called at
   // the end of generateSeason, after that season's stats/awards are already locked in.
   function developAttributes(season, decade, league){
     if(!career.devSpeed) return; // guards old/replayed states with no devSpeed roll
-    if(!career.devCarry) career.devCarry = {};
-    if(!career.originalBuild) career.originalBuild = {...build};
-    const share = league.games>0 ? season.games/league.games : 0;
-    const experienceFactor = clamp(0.35 + share*0.85, 0.35, 1.2);
-    // Organizational stability/turmoil (already tracked for roster-risk purposes -- see
-    // waiverCheck) doubles as a development modifier here too: a stable coaching staff actually
-    // helps a young player develop; a front-office shake-up disrupts it, for the one season it hits.
-    const orgMult = career._orgStability ? 1.15 : career._orgTurmoil ? 0.75 : 1;
-    // Persistent team-quality dial (Round 9), distinct from the transient org-event flags above --
-    // a genuinely good coaching staff develops talent faster every season, not just the one year an
-    // ORG_EVENT fires; a bad one is a permanent drag. Independent multiplier, stacks with orgMult.
-    const coachingMult = clamp(0.85 + ((career.coaching ?? 60)/100)*0.3, 0.85, 1.15);
-    const changed = [];
-    ATTR_KEYS.forEach(k=>{
-      if(k==="DUR") return;
-      const group = ATTR_BY_KEY[k].group;
-      const base = curveVal(DEVELOPMENT_CURVES[group] || DEVELOPMENT_CURVES.mental, career.age);
-      const variance = 0.85 + Math.random()*0.3;
-      let delta = base * career.devSpeed * experienceFactor * orgMult * coachingMult * variance;
-      career.devCarry[k] = (career.devCarry[k]||0) + delta;
-      const whole = Math.trunc(career.devCarry[k]);
-      if(whole===0) return;
-      career.devCarry[k] -= whole;
-      const original = career.originalBuild[k];
-      const maxGain = Math.round(14*career.devSpeed);
-      const maxLoss = 22;
-      const lo = clamp(original-maxLoss, 10, 99), hi = clamp(original+maxGain, 10, 99);
-      const before = build[k];
-      build[k] = clamp(build[k]+whole, lo, hi);
-      if(build[k]!==before) changed.push({ key:k, delta: build[k]-before });
+    const result = advanceDevelopmentSeason({
+      build,
+      originalBuild: career.originalBuild || build,
+      carry: career.devCarry || {},
+      ceilingBonus: career.devCeilingBonus || {},
+      devSpeed: career.devSpeed,
+      breakoutCount: career._breakoutCount,
+      bustCount: career._bustCount,
+      earnedBreakthroughCount: career._earnedBreakthroughCount,
+      breakthroughMomentum: career.breakthroughMomentum,
+    }, {
+      age: career.age,
+      gamesPlayed: season.games,
+      leagueGames: league.games,
+      coaching: career.coaching,
+      orgStability: !!career._orgStability,
+      orgTurmoil: !!career._orgTurmoil,
+      planId: career.developmentPlan,
+      performance: {
+        actual: {
+          attempts: season.att,
+          completions: season.comp,
+          yards: season.yards,
+          touchdowns: season.td,
+          interceptions: season.int,
+        },
+        expected: season.developmentExpectation,
+        leagueGames: league.games,
+      },
     });
-    // ----- Round 4: career-arc swings (boom-or-bust development overhaul) -----
-    // Replaces the old single-attribute +2/-1 breakout/regression nudge with a real, rarer,
-    // multi-attribute career-defining event that also PERMANENTLY shifts career.devSpeed itself --
-    // so a breakout doesn't just pop one season's numbers, it resets the player's whole trajectory
-    // upward (every future season's smooth curve-based drift above uses the new, higher devSpeed),
-    // and a bust-spiral resets it downward, naturally producing real plateaued/stalled careers once
-    // devSpeed is dragged low enough that maxGain (Math.round(14*career.devSpeed) above) collapses
-    // toward zero -- no separate "is this player a bust" flag needed, it falls out of the same dial.
-    // Chance of a swing this season comes from devVolatility(current devSpeed) -- coaching
-    // stability/turmoil still nudges it, same spirit as the old chances did. Direction (breakout vs
-    // bust) is weighted by the CURRENT devSpeed (already-ascending players lean toward more
-    // breakouts, already-declining ones lean toward more busts) but is never a sure thing either way
-    // -- that unpredictability is the whole point of "boom or bust."
-    const eligible = ATTR_KEYS.filter(k=>k!=="DUR" && build[k]<99);
-    const swingChance = clamp(devVolatility(career.devSpeed) + (career._orgStability?0.02:0) - (career._orgTurmoil?0.015:0), 0.02, 0.28);
-    if(eligible.length>=2 && Math.random()<swingChance){
-      const breakoutProb = clamp(0.5 + (career.devSpeed-1.0)*0.5, 0.15, 0.85);
-      const isBreakout = Math.random()<breakoutProb;
-      const swingEvents = [];
-      if(isBreakout && (career._breakoutCount||0)<2){
-        // A real breakout: 3-5 attributes jump together, past the normal season-to-season ceiling.
-        const n = clamp(3+Math.floor(Math.random()*3), 1, eligible.length);
-        const picks = shuffle(eligible).slice(0,n);
-        picks.forEach(k=>{
-          const original = career.originalBuild[k];
-          const hi = clamp(original+30, 10, 99);
-          const before = build[k];
-          build[k] = clamp(build[k]+ (4+Math.floor(Math.random()*6)), 10, hi);
-          if(build[k]!==before){ changed.push({ key:k, delta: build[k]-before, breakout:true }); swingEvents.push(k); }
-        });
-        if(swingEvents.length){
-          career._breakoutCount = (career._breakoutCount||0)+1;
-          career.devSpeed = clamp(career.devSpeed + 0.15 + Math.random()*0.1, 0.25, 1.8);
-          season.devArcEvent = { type:"breakout", keys: swingEvents.slice() };
-          const labels = swingEvents.map(k=> (ATTR_BY_KEY[k]||{}).label || k);
-          career.transactions.push(`${season.year}: Breakout season — ${labels.join(", ")} all took a real step forward. He looks like a different player.`);
-        }
-      } else if(!isBreakout){
-        // A bust-spiral: 2-4 attributes drop together, past the normal season-to-season floor.
-        const n = clamp(2+Math.floor(Math.random()*3), 1, eligible.length);
-        const picks = shuffle(eligible).slice(0,n);
-        picks.forEach(k=>{
-          const original = career.originalBuild[k];
-          const lo = clamp(original-30, 10, 99);
-          const before = build[k];
-          build[k] = clamp(build[k] - (3+Math.floor(Math.random()*5)), lo, 99);
-          if(build[k]!==before){ changed.push({ key:k, delta: build[k]-before, regression:true }); swingEvents.push(k); }
-        });
-        if(swingEvents.length){
-          career._bustCount = (career._bustCount||0)+1;
-          career.devSpeed = clamp(career.devSpeed - 0.15 - Math.random()*0.1, 0.25, 1.8);
-          season.devArcEvent = { type:"bust", keys: swingEvents.slice() };
-          const labels = swingEvents.map(k=> (ATTR_BY_KEY[k]||{}).label || k);
-          career.transactions.push(`${season.year}: A concerning stretch — ${labels.join(", ")} all slipped noticeably. Scouts are starting to ask questions.`);
-        }
+
+    build = result.build;
+    career.originalBuild = result.originalBuild;
+    career.devCarry = result.carry;
+    career.devCeilingBonus = result.ceilingBonus;
+    career.devSpeed = result.devSpeed;
+    career._breakoutCount = result.breakoutCount;
+    career._bustCount = result.bustCount;
+    career._earnedBreakthroughCount = result.earnedBreakthroughCount;
+    career.breakthroughMomentum = result.breakthroughMomentum;
+    season.attrChanges = result.changes;
+    season.developmentPlanId = result.planId;
+    season.developmentReport = {
+      performance: result.performance,
+      performanceMultiplier: result.performanceMultiplier,
+      momentumBefore: result.momentumBefore,
+      momentumAfter: result.breakthroughMomentum,
+      earnedBreakthroughChance: result.earnedBreakthroughChance,
+    };
+
+    if(result.arcEvent){
+      season.devArcEvent = result.arcEvent;
+      const labels = result.arcEvent.keys.map(k=> (ATTR_BY_KEY[k]||{}).label || k);
+      if(result.arcEvent.type==="earned-breakthrough"){
+        career.transactions.push(`${season.year}: Earned breakthrough -- sustained overperformance turns ${labels.join(", ")} into a new level of his game.`);
+      } else if(result.arcEvent.type==="breakout"){
+        career.transactions.push(`${season.year}: Breakout season — ${labels.join(", ")} all took a real step forward. He looks like a different player.`);
+      } else {
+        career.transactions.push(`${season.year}: A concerning stretch — ${labels.join(", ")} all slipped noticeably. Scouts are starting to ask questions.`);
       }
     }
-    // Stashed on the season itself so the Attributes tab can show THIS season's movement
-    // specifically (see buildAttributesTabHTML's "This Season's Development" section) instead of
-    // only ever showing the cumulative draft-day-to-now comparison -- `changed` was previously
-    // computed and then thrown away the moment this function returned.
-    season.attrChanges = changed;
+  }
+
+  function prepareDevelopmentPlanForSeason(){
+    const plan = developmentPlanFor(career.developmentPlan);
+    if(career._developmentPlanAppliedYear===career.year) return plan;
+    const resources = applyOffseasonPlanResources({
+      wear: career.wearAndTear,
+      chemistry: career.teamChemistry,
+    }, plan.id);
+    career.wearAndTear = resources.wear;
+    career.teamChemistry = resources.chemistry;
+    career._developmentPlanAppliedYear = career.year;
+    return plan;
+  }
+
+  function teamChemistryEdge(){
+    return clamp((career.teamChemistry ?? 50) - 50, -50, 50);
   }
 
   function decadeForYear(year){
@@ -706,6 +668,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     ensureLeagueTeamGrades(career.year);
     const np = (career.leagueTeamGrades && career.leagueTeamGrades[newTeamId]) || { oline:60, weapons:60, defense:60, coaching:60, gmGrade:60 };
     career.oline = np.oline; career.weapons = np.weapons; career.defense = np.defense; career.coaching = np.coaching; career.gmGrade = np.gmGrade;
+    career.teamChemistry = 45;
     recomputeMyTeamStrength();
   }
   function castLetterGrade(value){
@@ -1449,7 +1412,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
   // Wave 2A: bumped to schemaVersion 2 -- the canonical qbsById/teamQbDepth/freeAgentQbIds/
   // retiredQbIds registry (Section 5's target schema). See syncQbRegistryFromLegacy for what
   // building it actually involves.
-  const SAVE_SCHEMA_VERSION = 2;
+  const SAVE_SCHEMA_VERSION = 3;
   const ACTIVE_CAREER_KEY = "gridironlab.activeCareer";
   let _lastCheckpoint = null;
   // Pure -- never mutates `raw` in place (spreads into new objects instead), and never rolls fresh
@@ -1482,6 +1445,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
       syncQbRegistryFromLegacy(envelope.career);
       migrateTiesDefaults(envelope.career);
       migrateTeamOverallDerivation(envelope.career);
+      migrateDevelopmentAgency(envelope.career);
     }
     if(envelope.schemaVersion < SAVE_SCHEMA_VERSION) envelope = { ...envelope, schemaVersion: SAVE_SCHEMA_VERSION };
     return envelope;
@@ -1912,14 +1876,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     return {grade:"F", flavor:"Cut Day"};
   }
   function computeCombineScore(picks){
-    const values = picks.map(p=>p.value);
-    const avg = values.reduce((a,b)=>a+b,0)/values.length;
-    const variance = values.reduce((a,b)=>a+Math.pow(b-avg,2),0)/values.length;
-    const std = Math.sqrt(variance);
-    const balancePenalty = std*0.55;
-    const floorBonus = Math.min(...values)>=85 ? 2 : 0;
-    const raw = avg - balancePenalty + floorBonus;
-    return { score: Math.round(clamp(raw,0,98)), avg: Math.round(avg*10)/10, std: Math.round(std*10)/10, balancePenalty: Math.round(balancePenalty*10)/10, floorBonus };
+    return evaluateProspect(picks);
   }
 
   let build = null; // {key: value, ...} — the finished prospect
@@ -1937,6 +1894,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     document.getElementById("resultGrade").innerHTML = `<b>${g.grade}</b>`;
     document.getElementById("resultFlavor").textContent = g.flavor;
     document.getElementById("resultBreakdown").innerHTML = `
+      Football OVR <b class="tabular">${result.footballOverall}</b><br>
       Average <b class="tabular">${result.avg}</b><br>
       Balance penalty <b class="tabular">-${result.balancePenalty}</b><br>
       Floor bonus <b class="tabular">+${result.floorBonus}</b>`;
@@ -2280,15 +2238,18 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     const league = LEAGUE[decade];
     const decadeStart = parseInt(decade,10);
     const draftYear = randInt(decadeStart, decadeStart+9);
-    const slot = draftSlotFor(lastCombine.result.score);
+    // Draft value follows the same weighted football rating the career engine
+    // actually uses. Combine grade remains a separate measure of completeness.
+    const slot = draftSlotFor(lastCombine.result.footballOverall);
     const teamsPool = teamsAvailable(draftYear);
-    const team = pick(teamsPool);
-    const teamName = teamNameAt(team.id, draftYear);
-    const pickLabel = slot.round===0 ? "Signed as an undrafted free agent" : `${slot.label}, Pick ${randInt(slot.pickLo, slot.pickHi)} overall`;
-    const rookieApy = rookieAPY(decade, slot.round);
-
+    const overallPick = slot.round===0 ? null : randInt(slot.pickLo, slot.pickHi);
     const leagueStrength = {};
     TEAMS.forEach(t=>{ leagueStrength[t.id] = randInt(30,90); });
+    const team = chooseDraftTeam(teamsPool, leagueStrength, slot, overallPick);
+    const teamName = teamNameAt(team.id, draftYear);
+    const pickLabel = slot.round===0 ? "Signed as an undrafted free agent" : `${slot.label}, Pick ${overallPick} overall`;
+    const rookieApy = rookieAPY(decade, slot.round);
+
     const teamScheme = {};
     TEAMS.forEach(t=>{ teamScheme[t.id] = pick(SCHEMES).id; });
 
@@ -2301,7 +2262,9 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     identity.name = playerName; identity.college = playerCollege; identity.hometown = playerHometown;
 
     career = {
-      decade, league, draftYear, slot,
+      decade, league, draftYear, slot, overallPick,
+      prospectGrade: lastCombine.result.score,
+      draftOverall: lastCombine.result.footballOverall,
       name: playerName,
       college: playerCollege,
       hometown: playerHometown,
@@ -2351,6 +2314,12 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
       leagueNewsLog: [],
       devSpeed: rollDevSpeed(),
       devCarry: {},
+      devCeilingBonus: {},
+      breakthroughMomentum: 0,
+      _earnedBreakthroughCount: 0,
+      developmentPlan: "balanced",
+      teamChemistry: 50,
+      _developmentPlanAppliedYear: draftYear,
       originalBuild: {...build},
       // Wave 2A (MASTER_REMEDIATION_SPEC.md): the canonical, ID-based QB registry -- see the
       // "Canonical QB registry" block above rivalForTeam for what owns these and how they stay in
@@ -2468,7 +2437,6 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     for(const k in weights){ sum += eff[k]*weights[k]; wsum += weights[k]; }
     return sum/wsum;
   }
-  const OVERALL_WEIGHTS = {SHA:0.16,TCH:0.12,DAC:0.12,PKT:0.12,ANT:0.14,DEC:0.14,CLU:0.10,ARM:0.06,REL:0.02,MOB:0.01,IMP:0.01};
   function eraEffective(age, decade){ return eraAdjust(currentEffective(age), decade); }
   // Scheme-adjusted effective attributes: era adjustment first (when/how the game is played),
   // then the current team's coaching scheme on top (what THIS playbook rewards). Used for actual
@@ -3335,14 +3303,16 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
   function regularSeasonOffenseGrade(effOverall, age, decade){
     const clu = eraEffective(age, decade).CLU;
     const clutchEdge = (clu-65)*0.03;
-    return blendOffenseWithTeam(effOverall, career.teamStrength, QB_INFLUENCE_REGULAR) + clutchEdge;
+    const chemistryBonus = teamChemistryEdge()*0.04;
+    return blendOffenseWithTeam(effOverall, career.teamStrength, QB_INFLUENCE_REGULAR) + clutchEdge + chemistryBonus;
   }
   function playoffOffenseGrade(effOverall, season){
     const age = season ? season.age : career.age;
     const decade = season ? season.decade : decadeForYear(career.year);
     const clu = eraEffective(age, decade).CLU;
     const clutchEdge = (clu-65)*0.09;
-    return blendOffenseWithTeam(effOverall, career.teamStrength, QB_INFLUENCE_PLAYOFF) + clutchEdge;
+    const chemistryBonus = teamChemistryEdge()*0.04;
+    return blendOffenseWithTeam(effOverall, career.teamStrength, QB_INFLUENCE_PLAYOFF) + clutchEdge + chemistryBonus;
   }
 
   // ----- Opponent side of the blend: every OTHER team already has its own persistent starting QB
@@ -5198,61 +5168,57 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     });
   }
 
-  /* ----- Phase 3 of the QB-entity redesign: universal boom/bust talent development while young,
-     tapering to a harsher, era/durability-scaled decline past prime -- applies to every entity
-     (starters AND bench), mirroring the player's own career.devSpeed/developAttributes system at a
-     single-scalar (entity.talent) scale instead of a 12-attribute build. Boom/bust activity itself
-     stops once "young" ends -- past that, only a small ordinary plateau drift happens for a few
-     years, then real decline. entity.devSpeed/durability are rolled once, lazily, on first read
-     here (not at every creation site) so an existing save missing them just gets them the first
-     time this runs -- same self-heal-on-read spirit as this session's other new-field additions. */
-  const TALENT_DEV_YOUNG_CUTOFF = 27, TALENT_DEV_DECLINE_START = 32;
-  // Calibrated via talent_dev_sweep.mjs before shipping: young-phase (22->27) drift on a
-  // representative talent=60 prospect lands a median +8.4, with a real (13.7%) minority swinging
-  // 15+ points either way -- most players develop as expected, a genuine few boom or bust.
-  // Decline-phase (32->40) severity was swept across durability x era combinations, confirming a
-  // real, harsher gradient for low-durability players in rougher eras (e.g. 1960s/dur=20 falls
-  // ~15.6 points by 40 vs. 2020s/dur=90's ~3.8) without anyone collapsing to the floor outright.
+  /* ----- AI development uses the same age curve and development-speed range as the player.
+     Rival and bench QBs still use one scalar instead of twelve attributes, but its drift is the
+     exact football-overall-weighted average of those attribute groups. This prevents either side
+     from receiving a categorically more generous career model. Fields are initialized lazily so
+     existing saves migrate on read without a destructive save-version reset. ----- */
   function developEntityTalent(entity, decade){
     if(entity.devSpeed==null) entity.devSpeed = rollDevSpeed();
     if(entity.durability==null) entity.durability = clamp(Math.round((Math.random()+Math.random()+Math.random())/3*79)+20, 20, 99);
-    if(entity.age<=TALENT_DEV_YOUNG_CUTOFF){
-      // Zero-centered ordinary drift, NOT a guaranteed gain every season -- an earlier version used
-      // `clamp(2.4-(age-22)*0.4, 0, 2.4)`, which floors at 0 and can only ever add talent on an
-      // ordinary (non-swing) season. A league-wide sweep (qb_inflation_sweep.js) showed this
-      // systematically inflates the WHOLE league's average talent over a long career (every
-      // cohort's "ordinary" seasons only ever push up), measurably increasing how many rivals reach
-      // 5000+ yard seasons versus a no-development baseline. Real development is genuinely mixed --
-      // most players hover near their rolled talent with real variance both ways; `devSpeed` alone
-      // (not age) determines whether a given prospect leans up or down on average, matching how the
-      // rare breakout/bust-spiral swing below already treats devSpeed as the sole directional
-      // signal.
-      const lean = (entity.devSpeed-1.0)*2.2;
-      const variance = (Math.random()-0.5)*3.2;
-      entity.talent = clamp(entity.talent + lean + variance, 15, 99);
-      // Rare career-defining swing, capped at 2 (matches the player's own _breakoutCount<2 cap) --
-      // also permanently shifts devSpeed itself, so a breakout compounds into more/faster growth
-      // for his remaining young seasons, and a bust-spiral compounds the opposite way.
-      const swingChance = clamp(0.035 + Math.abs(entity.devSpeed-1.0)*0.15, 0.035, 0.2);
-      if((entity._breakoutCount||0)<2 && Math.random()<swingChance){
-        const isBreakout = Math.random()<clamp(0.5+(entity.devSpeed-1.0)*0.5, 0.15, 0.85);
-        const magnitude = 8+randInt(0,10);
-        entity.talent = clamp(entity.talent + (isBreakout?magnitude:-magnitude), 15, 99);
-        entity.devSpeed = clamp(entity.devSpeed + (isBreakout?1:-1)*(0.15+Math.random()*0.1), 0.25, 1.8);
-        entity._breakoutCount = (entity._breakoutCount||0)+1;
-      }
-    } else if(entity.age<TALENT_DEV_DECLINE_START){
-      // Quiet plateau: still a little ordinary drift either way, but no more career-defining
-      // swings -- matches the user's own framing ("can still develop and regress but the idea of
-      // booming or busting sorta stops").
-      entity.talent = clamp(entity.talent + randInt(-1,1), 15, 99);
-    } else {
-      const eraMult = (ERA_ATTR_MULT[decade]||{}).injury || 1;
-      const durFactor = (99-entity.durability)/99;
-      const declineRate = 0.4 + durFactor*1.0;
-      const variance = 0.85 + Math.random()*0.3;
-      entity.talent = clamp(entity.talent - declineRate*eraMult*variance, 15, 99);
+    if(entity._originalTalent==null) entity._originalTalent = entity.talent;
+    if(entity._devCarry==null) entity._devCarry = 0;
+    entity.devSpeed = clamp(entity.devSpeed, 0.6, 1.4);
+
+    // The scalar gets the exact physical/accuracy/mental weighted average of the
+    // player's development curves. This keeps AI and player progression on the
+    // same scale while preserving the lighter-weight AI representation.
+    const teamGrades = career.leagueTeamGrades && career.leagueTeamGrades[entity.teamId];
+    const coachingMult = developmentCoachingMultiplier(teamGrades ? teamGrades.coaching : 60);
+    const variance = 0.85 + Math.random()*0.3;
+    entity._devCarry += developmentBaseForOverall(entity.age) * entity.devSpeed * coachingMult * variance;
+    const whole = Math.trunc(entity._devCarry);
+    if(whole!==0){
+      entity._devCarry -= whole;
+      const lo = clamp(entity._originalTalent-18, 15, 99);
+      const hi = clamp(entity._originalTalent+Math.round(11*entity.devSpeed), 15, 99);
+      entity.talent = clamp(entity.talent+whole, lo, hi);
     }
+
+    const swingChance = developmentSwingChance(entity.devSpeed, entity.age, "normal");
+    if(Math.random()<swingChance){
+      const isBreakout = Math.random()<clamp(0.5+(entity.devSpeed-1)*0.25, 0.30, 0.70);
+      const breakoutAllowed = (entity._breakoutCount||0)<2 && (!(entity._breakoutCount||0) || Math.random()<0.15);
+      if(isBreakout && breakoutAllowed){
+        entity.talent = clamp(entity.talent + randInt(1,2), 15, clamp(entity._originalTalent+18,15,99));
+        entity._breakoutCount = (entity._breakoutCount||0)+1;
+      } else if(!isBreakout && (entity._bustCount||0)<2){
+        entity.talent = clamp(entity.talent - randInt(1,2), clamp(entity._originalTalent-24,15,99), 99);
+        entity._bustCount = (entity._bustCount||0)+1;
+      }
+    }
+  }
+  // Balance Wave 2: old saves enter the agency system at a neutral baseline.
+  // Mark the current year as already prepared so loading an existing season
+  // never applies a surprise wear/chemistry change retroactively.
+  function migrateDevelopmentAgency(careerObj){
+    if(!careerObj) return;
+    if(!DEVELOPMENT_PLAN_LIST.some(plan=>plan.id===careerObj.developmentPlan)) careerObj.developmentPlan = "balanced";
+    if(careerObj.teamChemistry==null) careerObj.teamChemistry = 50;
+    if(careerObj.breakthroughMomentum==null) careerObj.breakthroughMomentum = 0;
+    if(careerObj._earnedBreakthroughCount==null) careerObj._earnedBreakthroughCount = 0;
+    if(!careerObj.devCeilingBonus) careerObj.devCeilingBonus = {};
+    if(careerObj._developmentPlanAppliedYear==null) careerObj._developmentPlanAppliedYear = careerObj.year;
   }
 
   /* ----- Phase 2 of the QB-entity redesign: real bench mobility and a free-agent pool. A bench
@@ -5613,6 +5579,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
   function generateSeason(){
     const decade = decadeForYear(career.year);
     const league = LEAGUE[decade];
+    const developmentPlan = prepareDevelopmentPlanForSeason();
     // Built once, right at the top, before anyone's games (the player's own included) are
     // simulated -- see buildSeasonSchedule. Every other team's shared results (buildScheduleResults,
     // called later via resolvePlayoffs) reuses this exact same schedule rather than generating a
@@ -5729,8 +5696,9 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     // arm into a good one, so this stays a modest post-hoc addition rather than folded into the
     // main dComp/dYpa blend above.
     const weaponsNudge = (safeNum(career.weapons,60)-65);
-    const comp = clamp(league.comp + dComp*(dComp>=0?cal.comp.up:cal.comp.down) + weaponsNudge*0.0006, cal.comp.lo, cal.comp.hi);
-    const ypa = clamp(league.ypa + dYpa*(dYpa>=0?cal.ypa.up:cal.ypa.down) + weaponsNudge*0.008, cal.ypa.lo, cal.ypa.hi);
+    const chemistryNudge = teamChemistryEdge();
+    const comp = clamp(league.comp + dComp*(dComp>=0?cal.comp.up:cal.comp.down) + weaponsNudge*0.0006 + chemistryNudge*0.00035, cal.comp.lo, cal.comp.hi);
+    const ypa = clamp(league.ypa + dYpa*(dYpa>=0?cal.ypa.up:cal.ypa.down) + weaponsNudge*0.008 + chemistryNudge*0.006, cal.ypa.lo, cal.ypa.hi);
     const tdRate = clamp(league.tdRate + dTd*(dTd>=0?cal.td.up:cal.td.down), cal.td.lo, cal.td.hi);
     const intRate = clamp(league.intRate - dInt*(dInt>=0?cal.int.up:cal.int.down), cal.int.lo, cal.int.hi);
     let attPerGame = clamp((league.attPerGame - (eff.MOB-neutral.MOB)*0.05 + dOverall*0.06 + randInt(-2,2)) * roleShare, 4, 48);
@@ -5802,6 +5770,14 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
       incumbentSeasonSnapshot: backupIncumbentSeasonSnapshot,
       teamOverall: career.teamStrength,
       overall: Math.round(effOverall),
+      teamChemistry: career.teamChemistry ?? 50,
+      developmentPlanId: developmentPlan.id,
+      developmentExpectation: {
+        completionPct: clamp(comp*perfMult, 0, 1),
+        yardsPerAttempt: Math.max(0, ypa*perfMult),
+        touchdownRate: tdRate,
+        interceptionRate: clamp(intRate*(2-perfMult), 0, 1),
+      },
       awards, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible,
       contractApy: career.contract.apy, contractTier: career.contract.tier,
     };
@@ -5843,22 +5819,16 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     const { proBowl, allPro } = resolveSeasonAllProAndProBowl(season, career.year);
 
     // ----- Team quality for NEXT season: legible causes first, small residual noise last. -----
-    // Every other team's grade now moves because of something that actually happened to their own
-    // rival QB this season (an award-winning year lifts them, a rough statistical season drags on
-    // them -- succession/retirement is handled separately, right where it happens, in
-    // simulateRivalSeasons), plus the same superteam decline pull everyone faces, plus a MUCH
-    // smaller noise term than the old flat +/-8 random walk (most of a team's movement should now
-    // be explainable, not just dice). rollLeagueNews layers headline-driven swings for a handful of
-    // teams a season on top of this, same idea ORG_EVENTS already gives the player's own team.
-    const decadeAvgRating = leagueAvgRatingForDecade(decade);
+    // Team quality moves through roster churn, regression/rebuild pressure, and explicit league
+    // news. A quarterback's individual rating or awards no longer improve all five organization
+    // grades at once; that feedback loop used to turn one strong QB season into better defense,
+    // coaching, and front-office grades, then feed those advantages back into the next season.
     const volMult = ERA_TEAM_VOLATILITY[decade] ?? 1.0;
     career.leagueRivals.forEach(r=>{
       const justSeason = r.seasons.length ? r.seasons[r.seasons.length-1] : null;
       if(!justSeason || justSeason.year!==career.year) return; // retired/succeeded this same year -- handled at the point of succession instead
       const s = career.leagueStrength[r.teamId] ?? 60;
       let nudge = randInt(-2,2)*volMult;
-      if(justSeason.awards && justSeason.awards.length) nudge += justSeason.awards.length*1.5;
-      else if(justSeason.rating < decadeAvgRating-8) nudge -= 2;
       nudge -= contenderDeclinePull(s)*volMult;
       nudge += rebuildPull(s)*volMult;
       // Wave 5: the delta lands on the team's five persistent components (adjustTeamStrength),
@@ -5868,16 +5838,13 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
       adjustTeamStrength(r.teamId, Math.round(nudge), 2);
     });
     rollLeagueNews(career.year, decade);
-    // The player's own team faces identical decline/rebuild pressure -- the counteracting force is
-    // the same skill-linked nudge this always had (how far above/below neutral effOverall actually
-    // played this season), unchanged from before this pass. Wave 5: also routed through
-    // adjustTeamStrength now, so defense/coaching/gmGrade -- previously frozen for the player's own
-    // team outside of ORG_EVENTS -- get the same legible seasonal drift oline/weapons always did.
+    // The player's team uses the same roster-only drift. Player skill still changes game outcomes
+    // directly, but cannot manufacture a stronger defense, coach, or GM merely by posting a high
+    // overall. Contract/cap and targeted recruitment can add explicit roster effects later.
     const teamNoise = randInt(-2,2)*volMult;
-    const teamSkillNudge = Math.round((effOverall-neutralOverall)*primeMult*0.14);
     const teamDeclinePull = Math.round(contenderDeclinePull(safeNum(career.teamStrength,60))*volMult);
     const teamRebuildPull = Math.round(rebuildPull(safeNum(career.teamStrength,60))*volMult);
-    const myNudge = Math.round(teamNoise) + teamSkillNudge - teamDeclinePull + teamRebuildPull;
+    const myNudge = Math.round(teamNoise) - teamDeclinePull + teamRebuildPull;
     adjustTeamStrength(career.teamId, myNudge, 2);
 
     // ----- Wear and tear economy: a persistent, career-long meter (not a per-injury dice roll) --
@@ -7311,7 +7278,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
         <p>The front office honors it. The ${oldTeam} find a willing partner, and a new locker room opens up. Same contract, new colors.</p>
         <div class="event-choices"><button class="choice-btn" id="reqTradeAck"><div class="cb-title">Report to your new team</div></button></div>
       `);
-      document.getElementById("reqTradeAck").addEventListener("click", nextSeason);
+      document.getElementById("reqTradeAck").addEventListener("click", beginOffseason);
       return;
     }
 
@@ -7323,7 +7290,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
       <p>They hear him out and say no. He's still part of the plan — for now — but it's an awkward conversation to have had in that building.</p>
       <div class="event-choices"><button class="choice-btn" id="reqTradeDeniedAck"><div class="cb-title">Continue</div></button></div>
     `);
-    document.getElementById("reqTradeDeniedAck").addEventListener("click", nextSeason);
+    document.getElementById("reqTradeDeniedAck").addEventListener("click", beginOffseason);
   }
 
   function freeAgencyCheck(){
@@ -7717,6 +7684,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
       career.teamId = o.teamId;
       career.oline = o.oline; career.weapons = o.weapons;
       career.defense = o.defense; career.coaching = o.coaching; career.gmGrade = o.gmGrade;
+      career.teamChemistry = 45;
       recomputeMyTeamStrength();
       career.seasonsWithTeam = 0;
     }
@@ -7770,12 +7738,13 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
   function checkInjuryThenPlay(){
     const decade = decadeForYear(career.year);
     const league = LEAGUE[decade];
+    const developmentPlan = prepareDevelopmentPlanForSeason();
     const dur = eraEffective(career.age, decade).DUR;
     const injMult = (ERA_ATTR_MULT[decade]||{}).injury || 1;
     // A bad O-line means more hits taken, not just more sacks -- durability is still the dominant
     // term (this is a real but secondary risk factor, the "play behind a bad line" downside).
     const olineRisk = 1 - (safeNum(career.oline,60)-65)*0.003;
-    const injuryChance = clamp((0.26 - (dur-60)*0.006) * injMult * olineRisk, 0.05, 0.55);
+    const injuryChance = clamp((0.26 - (dur-60)*0.006) * injMult * olineRisk * developmentPlan.injuryRisk, 0.035, 0.65);
     if(!career._injuryResolved && Math.random()<injuryChance){
       // the week is rolled once, here, and threaded through to resolveInjuryChoice so the
       // "games missed" total it reports can never exceed how many games are actually left on
@@ -8942,19 +8911,31 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     // normal per-attribute list, since it's a career-defining moment (and a devSpeed shift), not
     // just a bigger version of the ordinary drift below it.
     const arc = season.devArcEvent;
+    const earnedArc = arc && arc.type==="earned-breakthrough";
     const arcBannerHtml = arc ? `<div class="season-arc-banner ${arc.type}">
-        <div class="season-arc-icon">${arc.type==="breakout" ? "🔥" : "📉"}</div>
+        <div class="season-arc-icon">${earnedArc ? "★" : arc.type==="breakout" ? "🔥" : "📉"}</div>
         <div class="season-arc-text">
-          <div class="season-arc-title">${arc.type==="breakout" ? "Breakout Season" : "Development Stalled"}</div>
-          <div class="season-arc-sub">${arc.type==="breakout"
-            ? "Something clicked — this player's development trajectory just shifted upward."
-            : "A real setback — this player's development trajectory just shifted downward."}</div>
+          <div class="season-arc-title">${earnedArc ? "Earned Breakthrough" : arc.type==="breakout" ? "Breakout Season" : "Development Stalled"}</div>
+          <div class="season-arc-sub">${earnedArc
+            ? "Repeatedly beating his own expectation unlocked a new ceiling in the program he chose."
+            : arc.type==="breakout"
+              ? "Something clicked — several skills took an uncommon step forward."
+              : "A real setback — several skills slipped at once."}</div>
         </div>
+      </div>` : "";
+    const report = season.developmentReport;
+    const plan = developmentPlanFor(season.developmentPlanId);
+    const keyMomentDelta = Number(season.keyMomentDevelopmentDelta || 0);
+    const finalMomentum = clamp(Number(report ? report.momentumAfter : career.breakthroughMomentum || 0) + keyMomentDelta, 0, 100);
+    const performanceHtml = report ? `<div class="development-context">
+        <div><b>${svgEscape(plan.label)}</b> · ${svgEscape(report.performance.label)}</div>
+        <div class="development-context-sub">Performance index <b class="tabular">${report.performance.index>=0?"+":""}${report.performance.index.toFixed(2)}</b> · ordinary growth ×<b class="tabular">${report.performanceMultiplier.toFixed(2)}</b> · breakthrough momentum <b class="tabular">${finalMomentum}/100</b>${keyMomentDelta ? ` (key moments ${fmtDelta(keyMomentDelta)})` : ""}</div>
       </div>` : "";
     const changes = season.attrChanges.filter(c=>c.delta!==0);
     if(!changes.length){
       return `<div class="season-progress">
           ${arcBannerHtml}
+          ${performanceHtml}
           <div class="season-progress-head">This Season's Development</div>
           <div class="season-progress-empty">No meaningful movement this season — steady as she goes.</div>
         </div>`;
@@ -8963,14 +8944,15 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     const items = changes.map(c=>{
       const label = (ATTR_BY_KEY[c.key]||{}).label || c.key;
       const cls = c.delta>0 ? "up" : "down";
-      const tag = c.breakout ? " · breakout" : c.regression ? " · regression" : "";
-      return `<div class="season-progress-item ${cls}${c.breakout?" notable":""}${c.regression?" notable":""}">
+      const tag = c.earnedBreakthrough ? " · earned breakthrough" : c.breakout ? " · breakout" : c.regression ? " · regression" : "";
+      return `<div class="season-progress-item ${cls}${c.breakout||c.earnedBreakthrough?" notable":""}${c.regression?" notable":""}">
           <span class="spi-label">${svgEscape(label)}</span>
           <span class="spi-delta">${c.delta>0?"+":""}${c.delta}</span>${tag?`<span class="spi-tag">${tag}</span>`:""}
         </div>`;
     }).join("");
     return `<div class="season-progress">
         ${arcBannerHtml}
+        ${performanceHtml}
         <div class="season-progress-head">This Season's Development <span class="award-count">${changes.length}</span></div>
         <div class="season-progress-list">${items}</div>
       </div>`;
@@ -9010,7 +8992,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
       ${seasonProgressHtml}
       <div class="calc-metric">
         <div class="calc-metric-head"><span class="calc-metric-name">Overall (right now)</span><span class="calc-metric-result">${overallNow}</span></div>
-        <div class="calc-refnote">Development trait: <b>${svgEscape(devSpeedTag(devSpeed))}</b> — every attribute except Durability drifts a little each season based on age, how much you've actually played, and this hidden trait. It isn't fixed forever: a breakout or bust-spiral season can shift it for the rest of your career. Net change since draft day: <b>${totalDelta>0?"+":""}${totalDelta}</b> across all eleven developable attributes. "Effective" is what's actually driving this season's production: your current raw rating aged for ${career.age}, reweighted for the ${decade}${scheme?` under a ${svgEscape(scheme.name)} scheme`:""}.</div>
+        <div class="calc-refnote">Development trait: <b>${svgEscape(devSpeedTag(devSpeed))}</b>. Ordinary growth now combines age, real playing time, coaching, the offseason program you selected, and performance against this build's own expected production. Meeting an elite player's expectation is neutral; repeatedly beating it builds breakthrough momentum. Random breakouts never accelerate themselves, while an earned breakthrough is the rare route that can permanently raise an attribute ceiling. Net change since draft day: <b>${totalDelta>0?"+":""}${totalDelta}</b> across all eleven developable attributes. "Effective" is the raw rating after age, era, temporary effects, and ${scheme?`the ${svgEscape(scheme.name)} scheme`:"scheme"} are applied.</div>
       </div>
       ${blocks}
     `;
@@ -9055,6 +9037,9 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     const durTag = build.DUR>=80 ? "Iron man" : build.DUR>=55 ? "Average wear" : "Fragile";
     const wear = career.wearAndTear||0;
     const wearTag = wear>=85 ? "Running on Fumes" : wear>=65 ? "Breaking Down" : wear>=45 ? "Battle-Tested" : wear>=25 ? "Some Mileage" : "Fresh";
+    const chemistry = career.teamChemistry ?? 50;
+    const chemistryTag = chemistry>=80 ? "Telepathic" : chemistry>=65 ? "In sync" : chemistry>=45 ? "Functional" : "Disconnected";
+    const developmentPlan = developmentPlanFor(career.developmentPlan);
     const wearSub = wear>=45
       ? `Playing through injuries instead of resting them is what built this up — above 45, every season carries a real chance of a permanent physical decline.`
       : `Stays low by resting injuries instead of playing through them. Keep it that way to protect his physical attributes long-term.`;
@@ -9063,6 +9048,11 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
         ${fanMeterRow("Fan Support", career.fanSupport, fanTag)}
         ${fanMeterRow("League Popularity", career.leaguePopularity, popTag)}
         ${fanMeterRow("Wear & Tear", wear, `${wearTag} — ${wearSub}`)}
+        ${fanMeterRow("Team Chemistry", chemistry, `${chemistryTag} — a small timing and team-offense edge, not a permanent roster-grade increase.`)}
+        <div class="fo-row">
+          <div class="fo-row-head"><span class="fo-row-label">Current Development Program</span><span class="fo-row-value tabular">${svgEscape(developmentPlan.label)}</span></div>
+          <div class="fo-row-sub">${svgEscape(developmentPlan.summary)}</div>
+        </div>
         <div class="fo-row">
           <div class="fo-row-head"><span class="fo-row-label">Career Outlook</span><span class="fo-row-value tabular">${durTag}</span></div>
           <div class="fo-row-sub">Durability ${build.DUR} — the body should hold up through roughly age ${ageCap}${yearsLeft>0 ? ` (about ${yearsLeft} more season${yearsLeft===1?"":"s"} at current age, injuries permitting)` : " — this could be the last one"}.</div>
@@ -9354,14 +9344,14 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
       ? `<button class="btn btn-ghost" id="reqTradeBtn">Request a trade <span class="tabular" style="opacity:0.6;">(${3-(career._tradeRequestsUsed||0)} left)</span></button>` : "";
     if(career.age+1>=29){
       actions.innerHTML = `
-        <button class="btn btn-primary" id="playOnBtn">Play another season</button>
+        <button class="btn btn-primary" id="playOnBtn">Plan offseason &amp; play</button>
         ${tradeBtnHtml}
         <button class="btn btn-ghost" id="retireBtn">Retire</button>`;
-      document.getElementById("playOnBtn").addEventListener("click", nextSeason);
+      document.getElementById("playOnBtn").addEventListener("click", beginOffseason);
       document.getElementById("retireBtn").addEventListener("click", ()=>{ career.exitReason="retired"; finishCareer(); });
     } else {
-      actions.innerHTML = `<button class="btn btn-primary" id="continueBtn">Continue career</button>${tradeBtnHtml}<button class="btn btn-ghost" id="fastForwardBtn">Fast-Forward ⏩</button>`;
-      document.getElementById("continueBtn").addEventListener("click", nextSeason);
+      actions.innerHTML = `<button class="btn btn-primary" id="continueBtn">Plan offseason &amp; continue</button>${tradeBtnHtml}<button class="btn btn-ghost" id="fastForwardBtn">Fast-Forward ⏩</button>`;
+      document.getElementById("continueBtn").addEventListener("click", beginOffseason);
       document.getElementById("fastForwardBtn").addEventListener("click", startFastForward);
     }
     const reqTradeBtn = document.getElementById("reqTradeBtn");
@@ -9636,6 +9626,15 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
       const flippedResult = round.won !== wonBeforeSwing;
       const repDelta = quality==="good" ? randInt(2,5) : quality==="meh" ? randInt(-2,1) : -randInt(2,5);
       career.reputation = clamp(career.reputation + repDelta, 0, 100);
+      // Key Moments are the player's direct execution input into development.
+      // They happen after the season's ordinary development roll, so they bank
+      // momentum for a future earned breakthrough rather than rewriting ratings
+      // in the middle of a playoff game.
+      const requestedDevelopmentDelta = quality==="good" ? 4 : quality==="bad" ? -4 : 0;
+      const momentumBefore = career.breakthroughMomentum || 0;
+      career.breakthroughMomentum = clamp(momentumBefore + requestedDevelopmentDelta, 0, 100);
+      const developmentDelta = career.breakthroughMomentum - momentumBefore;
+      season.keyMomentDevelopmentDelta = Number(season.keyMomentDevelopmentDelta || 0) + developmentDelta;
       const verbPhrase = quality==="good" ? "Delivered" : quality==="meh" ? "Settled for a lesser read" : "Came up short";
       career.transactions.push(`${season.year}: ${verbPhrase} in a key moment vs. the ${round.opponent} (${roundDisplayLabel(round.round, season.year)}).`);
       overlay.querySelectorAll(".km-option").forEach(btn=>{
@@ -9657,7 +9656,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
       const effectEl = document.createElement("div");
       effectEl.className = "km-effect";
       const scoreBit = swing.dMy ? `Your score ${fmtDelta(swing.dMy)}${swing.scoreType?` (${swing.scoreType})`:""}` : (swing.dOpp ? `Their score ${fmtDelta(swing.dOpp)}${swing.scoreType?` (${swing.scoreType})`:""}` : "No score change — the margin was already too tight to move.");
-      effectEl.textContent = `Effect: ${scoreBit} · Reputation ${fmtDelta(repDelta)}.`;
+      effectEl.textContent = `Effect: ${scoreBit} · Reputation ${fmtDelta(repDelta)} · Breakthrough momentum ${developmentDelta===0?"unchanged":fmtDelta(developmentDelta)}.`;
       let flipEl = null;
       if(flippedResult){
         flipEl = document.createElement("div");
@@ -9677,6 +9676,8 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
         // visible immediately, not just once the round finishes revealing.
         const finalEl = document.querySelector(`[data-round-idx="${roundIdx}"] .pr-box-final b, [data-round-idx="${roundIdx}"] .sb-final b`);
         if(finalEl) finalEl.textContent = `${round.myScore}-${round.oppScore}`;
+        const attributesPanel = document.getElementById("tabpanel-attributes");
+        if(attributesPanel) attributesPanel.innerHTML = buildAttributesTabHTML(season);
         onResolved();
       });
       const card = overlay.querySelector(".km-card");
@@ -9950,6 +9951,74 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     const logPanel = document.getElementById("tabpanel-log");
     if(logPanel) logPanel.innerHTML = buildEventLogFeedHTML();
     updateHeaderCareerTicker();
+  }
+
+  function signedPercent(value){
+    const rounded = Math.round((value-1)*100);
+    return `${rounded>=0?"+":""}${rounded}%`;
+  }
+
+  function offseasonPlanMeta(plan){
+    const groupLabel = { physical:"Physical", accuracy:"Accuracy", mental:"Mental" };
+    const growth = Object.entries(plan.growth)
+      .filter(([,value])=>value!==1)
+      .map(([group,value])=>`${groupLabel[group]} growth ${signedPercent(value)}`);
+    if(!growth.length) growth.push("All growth at base rate");
+    const decline = Object.entries(plan.decline)
+      .filter(([,value])=>value!==1)
+      .map(([group,value])=>`${groupLabel[group]} decline ${signedPercent(value)}`);
+    const riskDelta = Math.round((plan.injuryRisk-1)*100);
+    return [
+      ...growth,
+      ...decline,
+      `Injury risk ${riskDelta===0?"unchanged":fmtDelta(riskDelta)+"%"}`,
+      `Wear ${plan.wearDelta===0?"unchanged":fmtDelta(plan.wearDelta)}`,
+      `Chemistry ${fmtDelta(plan.chemistryDelta)}`,
+      plan.id==="recovery" ? "Earned breakthrough unavailable" : "Can convert sustained momentum into a focused breakthrough",
+    ];
+  }
+
+  function beginOffseason(){
+    if(career.age+1>=durabilityAgeCap()){ nextSeason(); return; }
+    // A player already serving a multi-season suspension or injury-leave absence isn't on a
+    // roster and isn't training with a team -- advanceCareer() (called via nextSeason() below)
+    // routes straight into renderSuspensionYear()/renderInjuryLeaveYear() for these years anyway,
+    // so there's no season to apply a chosen program TO. Asking for one here would be incoherent
+    // (e.g. "Chemistry Camp" while released) and would also skip past the absence-year screen
+    // entirely, since this runs before advanceCareer()'s own suspension/injury-leave check does.
+    if(career.suspensionSeasonsRemaining>0 || career.injuryLeaveSeasonsRemaining>0){ nextSeason(); return; }
+    window.scrollTo(0, 0);
+    const content = document.getElementById("careerContent");
+    const lastSeason = career.seasonLog[career.seasonLog.length-1];
+    const lastReport = lastSeason && lastSeason.developmentReport;
+    const performanceLabel = lastReport ? lastReport.performance.label : "No performance grade recorded";
+    const momentum = Math.round(career.breakthroughMomentum || 0);
+    const choices = DEVELOPMENT_PLAN_LIST.map(plan=>`
+      <button class="choice-btn offseason-plan-choice" type="button" data-development-plan="${plan.id}" id="developmentPlan-${plan.id}">
+        <div class="cb-title">${svgEscape(plan.icon)} · ${svgEscape(plan.label)}</div>
+        <div class="cb-sub">${svgEscape(plan.summary)}</div>
+        <div class="offseason-plan-meta">${offseasonPlanMeta(plan).map(item=>`<span>${svgEscape(item)}</span>`).join("")}</div>
+      </button>`).join("");
+    content.innerHTML = eraWrap(decadeForYear(career.year+1), `
+      <div class="ev-eyebrow">${career.year+1} Offseason · One program, one budget</div>
+      <h3>Choose what gets the work.</h3>
+      <p>You cannot maximize everything. This program applies to the season ahead and redirects development after that season is played. Performance is judged against what this exact build was expected to produce — stars do not receive free growth for merely playing like stars.</p>
+      <div class="offseason-status">
+        <div class="offseason-status-item"><span class="offseason-status-label">Last season</span><span class="offseason-status-value">${svgEscape(performanceLabel)}</span></div>
+        <div class="offseason-status-item"><span class="offseason-status-label">Breakthrough momentum</span><span class="offseason-status-value">${momentum}/100</span></div>
+        <div class="offseason-status-item"><span class="offseason-status-label">Body / chemistry</span><span class="offseason-status-value">${Math.round(career.wearAndTear||0)} wear · ${Math.round(career.teamChemistry??50)} chem</span></div>
+      </div>
+      <div class="event-choices">${choices}</div>
+    `);
+    content.querySelectorAll("[data-development-plan]").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        const plan = developmentPlanFor(btn.dataset.developmentPlan);
+        career.developmentPlan = plan.id;
+        career.transactions.push(`${career.year+1}: Offseason program -- ${plan.label}.`);
+        saveActiveCareer({ phase:"decision", eventId:"offseason_plan_selected" });
+        nextSeason();
+      });
+    });
   }
 
   function nextSeason(){
@@ -10565,8 +10634,9 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     const dTd = (((effTd-neutralTd)*primeMult)*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
     const dInt = (((effInt-neutralInt)*primeMult)*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
     const weaponsNudge = (safeNum(career.weapons,60)-65);
-    const comp = clamp(league.comp + dComp*(dComp>=0?cal.comp.up:cal.comp.down) + weaponsNudge*0.0006, cal.comp.lo, cal.comp.hi);
-    const ypa = clamp(league.ypa + dYpa*(dYpa>=0?cal.ypa.up:cal.ypa.down) + weaponsNudge*0.008, cal.ypa.lo, cal.ypa.hi);
+    const chemistryNudge = teamChemistryEdge();
+    const comp = clamp(league.comp + dComp*(dComp>=0?cal.comp.up:cal.comp.down) + weaponsNudge*0.0006 + chemistryNudge*0.00035, cal.comp.lo, cal.comp.hi);
+    const ypa = clamp(league.ypa + dYpa*(dYpa>=0?cal.ypa.up:cal.ypa.down) + weaponsNudge*0.008 + chemistryNudge*0.006, cal.ypa.lo, cal.ypa.hi);
     const tdRate = clamp(league.tdRate + dTd*(dTd>=0?cal.td.up:cal.td.down), cal.td.lo, cal.td.hi);
     const intRate = clamp(league.intRate - dInt*(dInt>=0?cal.int.up:cal.int.down), cal.int.lo, cal.int.hi);
     const sackRate = clamp(0.075 - (eff.PKT-neutral.PKT)*0.0012 - (safeNum(career.oline,60)-65)*0.0006, 0.015, 0.16);
@@ -10622,7 +10692,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
       decade, league, schemeId, scheme, eff, neutral, primeMult, W, cal,
       effAcc, neutralAcc, effYpa, neutralYpa, effTd, neutralTd, effInt, neutralInt,
       effOverall, neutralOverall, effRush,
-      comp, ypa, tdRate, intRate, sackRate, expSacks, roleShare, roleShareRange, attPerGame,
+      comp, ypa, tdRate, intRate, sackRate, expSacks, roleShare, roleShareRange, attPerGame, chemistryNudge,
       expGames, expAttempts, expComp, expYards, expTd, expInt, expRating,
       rushAttPerGame, rushYpc, rushTdRate, expRushAtt, expRushYards, expRushTd,
       winProb, myOff, leagueAvgRating, ratingEdge, gamesPlayedShare,
@@ -10707,7 +10777,7 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
     const totalDelta = ATTR_KEYS.filter(k=>k!=="DUR").reduce((s,k)=> s+(build[k]-(original[k] ?? build[k])), 0);
     const devCard = `<div class="calc-group">
         <div class="calc-group-head">Career Development</div>
-        <div class="calc-refnote">Development trait: <b>${svgEscape(devSpeedTag(devSpeed))}</b> (devSpeed ×${devSpeed.toFixed(2)}, rolled once at the Combine — hidden from you at the time, revealed here — but not locked in: a breakout or bust-spiral season shifts it for the rest of your career, so this number and its tag can move over time). Every attribute except Durability drifts a little each season based on age, how much this build actually played that year, and this trait — mental attributes (Anticipation, Decision Making, Clutch) grow the longest and hold up best late; physical attributes (Arm, Mobility, Improvisation) peak early and fade the soonest, same as real QB aging. Net change since draft day: <b>${totalDelta>0?"+":""}${totalDelta}</b> points across all eleven developable attributes.</div>
+        <div class="calc-refnote">Development trait: <b>${svgEscape(devSpeedTag(devSpeed))}</b> (devSpeed ×${devSpeed.toFixed(2)}, rolled once at the Combine — hidden from you at the time, revealed here, and persistent across the career). Every attribute except Durability drifts a little each season based on age, how much this build actually played that year, and this trait — mental attributes (Anticipation, Decision Making, Clutch) grow the longest and hold up best late; physical attributes (Arm, Mobility, Improvisation) peak early and fade the soonest, same as real QB aging. Breakouts and busts create exceptional seasons without rewriting the player's future development rate. Net change since draft day: <b>${totalDelta>0?"+":""}${totalDelta}</b> points across all eleven developable attributes.</div>
         <div class="admin-table-wrap"><table class="calc-ref-table"><thead><tr><th>Attribute</th><th>Draft Day</th><th>Now</th><th>Δ</th></tr></thead><tbody>${devRows}</tbody></table></div>
       </div>`;
 

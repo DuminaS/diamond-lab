@@ -7,11 +7,10 @@
 // count (scoreSim.myTds), allocating a small, documented share to a QB rush.
 //
 // The per-game TD/FG breakdown itself isn't persisted on a saved game-log entry (only the final
-// score is), so this verifies the same invariant in its observable form: this engine scores a TD as
-// exactly 7 points (6 + PAT, no 2-point conversions modeled -- see scoreForQuarter), so
-// (td + rushTd) touchdowns can never account for more than (td + rushTd) * 7 points -- which can
-// never exceed the team's own final score. A violation here is only possible if td/rushTd were
-// still being rolled independently of the real scoreboard.
+// score is), so this verifies the same invariant in its observable form. A touchdown is always at
+// least 6 points; regulation adds the PAT while a walk-off overtime TD is stored as 6. Therefore
+// passing+rushing touchdowns multiplied by 6 can never exceed the team's final score. Using 7 here
+// incorrectly flags a legitimate 20-point result containing two regulation TDs and one OT TD.
 import { test, expect } from "@playwright/test";
 import { startCareer, advanceSeasons, readActiveCareer } from "../helpers/careerFlow.mjs";
 import { installSeededRandom } from "../helpers/seededRandom.mjs";
@@ -30,7 +29,7 @@ test("scoreboard-and-qb-touchdowns-reconcile", async ({ page }) => {
       if (g.startedByBackup) return; // no personal stat line attached to a missed-game entry
       if (g.tie === true && g.myScore === 0) return; // scoreless tie -- nothing to check
       checkedGames++;
-      const tdPoints = ((g.td || 0) + (g.rushTd || 0)) * 7;
+      const tdPoints = ((g.td || 0) + (g.rushTd || 0)) * 6;
       if (tdPoints > g.myScore) {
         violations.push({ year: season.year, week: g.week, td: g.td, rushTd: g.rushTd, myScore: g.myScore, tdPoints });
       }
