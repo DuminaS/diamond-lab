@@ -3,6 +3,7 @@ import { openDialog, closeDialog } from "./ui/dialog.js";
 import { TEAMS, TEAM_COLORS, DIVISIONS, DIVISIONS_1970_2001, DIVISIONS_PRE_1970, PLAYOFF_ERAS } from "./data/teams.js";
 import { QBS } from "./data/qbs.js";
 import { SCHEMES } from "./data/schemes.js";
+import { shuffle, pick, clamp, randInt, lerp, svgEscape, fmtPct, safeNum, fmtMoney, fmtDelta, recordLine } from "./utils/index.js";
 
 (function(){
   "use strict";
@@ -114,15 +115,9 @@ import { SCHEMES } from "./data/schemes.js";
   }
 
   /* ================= Utilities ================= */
-  function shuffle(arr){ const a=arr.slice(); for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
-  function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
-  function clamp(n,lo,hi){ return Math.max(lo, Math.min(hi, n)); }
-  function randInt(lo,hi){ return Math.floor(lo + Math.random()*(hi-lo+1)); }
-  function lerp(a,b,t){ return a+(b-a)*t; }
 
   /* ----- reusable inline-SVG charts: no chart library, just plain SVG strings, so every
      visual works inside a single self-contained HTML file. ----- */
-  function svgEscape(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
   function renderRadarChartSVG(attrs, opts={}){
     const size = opts.size || 340;
@@ -245,7 +240,6 @@ import { SCHEMES } from "./data/schemes.js";
   // it (two different visual bracket systems for the same underlying data). The round-by-round
   // reveal itself (playoffRoundBoxHtml / #playoffRoundsHolder, just above this comment) is
   // untouched -- that's the actual interactive gameplay, not a redundant summary graphic.
-  function fmtPct(x){ return (x*100).toFixed(1)+"%"; }
 
   function curveVal(points, age){
     if(age<=points[0][0]) return points[0][1];
@@ -626,9 +620,6 @@ import { SCHEMES } from "./data/schemes.js";
   // team-reassignment site), every subsequent season's drift step re-applies `NaN + delta` and it
   // never recovers on its own -- this is what let the post-suspension NaN-stats bug persist for the
   // reported ~3 seasons instead of self-correcting.
-  function safeNum(v, fallback){
-    return (typeof v==="number" && !isNaN(v)) ? v : fallback;
-  }
   function rollSupportingCastGrade(teamStrength){
     return clamp(Math.round(safeNum(teamStrength,60) + randInt(-18,18)), 20, 99);
   }
@@ -2138,17 +2129,11 @@ import { SCHEMES } from "./data/schemes.js";
   function rollEntrenchedYears(talent){
     return talent>=80 ? randInt(5,8) : talent>=65 ? randInt(3,6) : randInt(2,4);
   }
-  function fmtMoney(n){
-    if(n>=1000000) return "$"+(Math.round(n/100000)/10).toFixed(1).replace(/\.0$/,"")+"M";
-    return "$"+Math.round(n/1000)+"K";
-  }
   // Signed number for legible "Effect:" lines on event cards -- always shows the sign so a delta
   // of 0 (or a positive number without a leading "+") never reads as ambiguous.
-  function fmtDelta(n){ return (n>0?"+":"") + n; }
   // Ties QOL: a real record display, "-T" only shown when ties>0 -- keeps every pre-tie-era record
   // (and the vast majority of post-1974 seasons, where ties stay rare) reading exactly as before,
   // rather than cluttering every record everywhere with an always-present "-0".
-  function recordLine(w, l, t){ return (t>0) ? `${w}-${l}-${t}` : `${w}-${l}`; }
 
   /* ----- era style: the same build plays differently depending on when it lands -----
      Grounded in real scheme/rule history, not a smooth gradient:
