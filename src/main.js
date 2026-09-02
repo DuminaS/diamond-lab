@@ -702,6 +702,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
   // Office 10%. Every consumer of career.teamStrength/career.leagueStrength[id] is unchanged --
   // this only changes WHERE that number comes from.
   const TEAM_OVERALL_WEIGHTS = { oline:0.20, weapons:0.20, defense:0.30, coaching:0.20, gmGrade:0.10 };
+  // Wave 2B's deterministic starter-selection thresholds (originally local to evaluateSuccession),
+  // hoisted to module scope in Wave 6 so free-agency role projection can reuse the EXACT same
+  // numbers a real in-season promotion decision uses -- "never calculate FA role with a separate
+  // estimate." SUCCESSION_HYSTERESIS_MARGIN: the zone just below the promotion gap where an
+  // incumbent is deliberately kept even though a challenger reads slightly ahead (a real starter
+  // shouldn't lose the job over a 1-2 point noise-level edge). SUCCESSION_PROMOTION_GAP: the real
+  // trigger -- a challenger (in-season) or an FA candidate (projectDepthRoleForCandidate) clearing
+  // the incumbent by this much wins the job outright. Values unchanged from Wave 2B's own
+  // calibration (succession_gap_sweep.mjs; see PROGRESS.md).
+  const SUCCESSION_HYSTERESIS_MARGIN = 2, SUCCESSION_PROMOTION_GAP = 3;
   function computeTeamOverall(grades){
     const g = grades || {};
     return safeNum(g.oline,60)*TEAM_OVERALL_WEIGHTS.oline + safeNum(g.weapons,60)*TEAM_OVERALL_WEIGHTS.weapons +
@@ -1594,7 +1604,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       // Wave 5 (task #8): a save from before the championship flag existed has no wonChampionship
       // field at all on its history rows -- every read site already treats a missing flag as falsy,
       // so this is defense-in-depth, matching the ties backfill right above it.
-      (careerObj.teamSeasonHistory[teamId]||[]).forEach(h=>{ if(h.ties==null) h.ties = 0; if(h.wonChampionship==null) h.wonChampionship = false; });
+      // Wave 6: a save from before madePlayoffs existed has no way to know whether a given old
+      // season's row was actually a playoff team (that fact lived only in the season's own
+      // leagueStandings.seeded, long gone from a season predating this field) -- best-effort
+      // backfill from whatever title flags the row DOES have (a division/conference/championship
+      // win implies a playoff appearance); a wildcard team eliminated in the first round with no
+      // title flag will read as false for any pre-existing row, a documented approximation limited
+      // to saves made before this wave. Every row recorded from here forward is exact.
+      (careerObj.teamSeasonHistory[teamId]||[]).forEach(h=>{
+        if(h.ties==null) h.ties = 0;
+        if(h.wonChampionship==null) h.wonChampionship = false;
+        if(h.madePlayoffs==null) h.madePlayoffs = !!(h.wonDivision || h.wonConference || h.wonChampionship);
+      });
     });
   }
   // Wave 5 (MASTER_REMEDIATION_SPEC.md task #3): reconciles every team's aggregate (leagueStrength/
@@ -4205,6 +4226,12 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       const ranked = d.teams.map(id=>ls.results[id]).sort((a,b)=>compareTeamsForStandings(a,b,year,"division"));
       if(ranked[0]) divWinnerIds.add(ranked[0].id);
     });
+    // Wave 6: "recent playoffs" is a real, distinct signal buildTeamQuarterbackNeed/
+    // teamCompetitiveWindow both need -- a wildcard team eliminated in the first round has none of
+    // the title flags below but genuinely made the playoffs, a real fact those flags alone can't
+    // tell apart from a team that missed entirely. ls.seeded is already built by resolvePlayoffs
+    // before this runs.
+    const playoffTeamIds = new Set([...(ls.seeded && ls.seeded.AFC || []), ...(ls.seeded && ls.seeded.NFC || [])].map(t=>t.id));
     if(!career.teamSeasonHistory) career.teamSeasonHistory = {};
     divisionsForYear(year).flatMap(d=>d.teams).forEach(teamId=>{
       const r = ls.results[teamId];
@@ -4218,6 +4245,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       if(!career.teamSeasonHistory[teamId]) career.teamSeasonHistory[teamId] = [];
       career.teamSeasonHistory[teamId].push({
         year, wins: r.wins, losses: r.losses, ties: r.ties||0, qbName, qbRings,
+        madePlayoffs: playoffTeamIds.has(teamId),
         wonDivision: divWinnerIds.has(teamId), wonConference: false, wonChampionship: false,
         scheme: scheme ? scheme.name : null,
       });
@@ -5473,8 +5501,10 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // kept even though a challenger reads slightly ahead (a real starter shouldn't lose the job over
     // a 1-2 point noise-level edge); SUCCESSION_PROMOTION_GAP is the actual trigger. Recommended
     // initial values per the spec (2/3); calibrated via succession_gap_sweep.mjs before shipping --
-    // see PROGRESS.md for the measured event-frequency distribution this produced.
-    const SUCCESSION_HYSTERESIS_MARGIN = 2, SUCCESSION_PROMOTION_GAP = 3;
+    // see PROGRESS.md for the measured event-frequency distribution this produced. Wave 6: these two
+    // constants are now defined at module scope (near TEAM_OVERALL_WEIGHTS) instead of locally here,
+    // so FA role projection (projectDepthRoleForCandidate) can reuse the EXACT same numbers --
+    // "never calculate FA role with a separate estimate."
     const rivalVal = rivalEffTalent(rival);
     const candidates = [qb2, qb3].filter(p=>p && !p.retired);
     const bestChallenger = candidates.length
@@ -7375,35 +7405,181 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
      gone for good. A small independent chance of an "agent event" — a windfall like an
      unexpectedly team-friendly deal working out great, or the opposite, a lowball nobody saw
      coming — can land on any one offer regardless of how the negotiating goes. ----- */
-  function tierRank(tier){ return ({minimum:0,backup:1,average:2,good:3,elite:4})[tier] ?? 0; }
-  // Need used to be modeled purely off how WEAK a team's overall roster already was (100-teamStrength)
-  // -- which meant an elite free agent could only ever match with rebuilding teams, since a good
-  // team's high team-strength always registered as "low need," regardless of who was actually
-  // playing QB there. A real report: "I'm mid-80s+, consistently good, and my only offers are from
-  // 20-40 overall teams." Fixed by keying need off how replaceable the team's OWN current starter
-  // is (their rivalForTeam QB's talent) instead -- a stacked team stuck with a mediocre incumbent
-  // is exactly the kind of team that goes all-in on a big free-agent name in real life, and now
-  // shows up as a legitimate elite-tier destination the same way a rebuilding team does.
-  function teamNeedRank(teamId){
-    const rival = rivalForTeam(teamId);
-    const qbQuality = rival ? rivalEffTalent(rival) : 60;
-    // Phase 4 addition: an aging starter on a short leash reads as real future need even while
-    // he's still playing fine right now -- a team doesn't wait for its 36-year-old, one-year-left
-    // starter to actually decline before it starts genuinely listening on the position.
-    const runwayBonus = (rival && rival.age>=34 && rival.contract.years<=1) ? 15 : 0;
-    const need = clamp(100 - qbQuality + runwayBonus + randInt(-12,12), 0, 100);
-    if(need>=78) return 4; if(need>=58) return 3; if(need>=38) return 2; if(need>=18) return 1; return 0;
+  // Wave 6 (MASTER_REMEDIATION_SPEC.md): tierRank/teamNeedRank (the old contract-tier ranking and
+  // "100 minus incumbent talent, bucketed" need proxy) are superseded by buildTeamQuarterbackNeed/
+  // scoreFreeAgentFit below, which read the incumbent's real value directly rather than bucketing
+  // it into 5 need tiers first -- removed rather than left as dead code.
+  // Wave 6 (MASTER_REMEDIATION_SPEC.md): "a current aggregate-grade proxy, not a record/playoff
+  // trajectory" was a named defect -- a team's grade alone said nothing about whether it was
+  // ACTUALLY on a real run or a real slide. Now blends the persistent grade (still the anchor -- a
+  // bad roster can't be a real contender no matter its recent luck) with up to 3 seasons of
+  // recency-weighted record (career.teamSeasonHistory) and real titles (division/conference/
+  // championship), producing 4 tiers instead of 3 -- "contender" sits between "retool" and
+  // "win-now" for a team that's clearly good but hasn't (yet) separated itself into true win-now
+  // territory. Calibrated via a seeded sweep (see PROGRESS.md) rather than picked from intuition.
+  function teamCompetitiveWindow(teamId, year){
+    year = year || career.year;
+    const isMine = teamId===career.teamId;
+    const overall = isMine ? career.teamStrength : (career.leagueStrength[teamId] ?? 60);
+    const hist = ((career.teamSeasonHistory||{})[teamId]||[]).slice(-3);
+    let weightedWinPct = 0.5;
+    if(hist.length){
+      let sumWinPct=0, sumW=0;
+      hist.forEach((h,i)=>{
+        const w = i+1; // most-recent season (last in the slice) weighted highest
+        const gp = (h.wins||0)+(h.losses||0)+(h.ties||0);
+        const wp = gp>0 ? ((h.wins||0)+(h.ties||0)*0.5)/gp : 0.5;
+        sumWinPct += wp*w; sumW += w;
+      });
+      weightedWinPct = sumW>0 ? sumWinPct/sumW : 0.5;
+    }
+    const titleBoost = hist.filter(h=>h.wonChampionship).length*12 + hist.filter(h=>h.wonConference).length*6
+      + hist.filter(h=>h.wonDivision).length*3 + hist.filter(h=>h.madePlayoffs).length*2;
+    const score = clamp(overall + (weightedWinPct-0.5)*40 + titleBoost, 0, 130);
+    if(score>=93) return "win-now";
+    if(score>=76) return "contender";
+    if(score>=50) return "retool";
+    return "rebuild";
   }
-  // Phase 4: a rough proxy for "what is this team actually trying to do right now" -- a genuinely
-  // strong team is playing to win now, a genuinely weak one is rebuilding, everyone else is
-  // somewhere in between. Deliberately just career.leagueStrength (already-tracked, no new data
-  // needed) rather than scanning multiple seasons of win history -- simple enough to reason about,
-  // and leagueStrength already reflects exactly the kind of team-quality trend this needs.
-  function teamCompetitiveWindow(teamId){
-    const grade = career.leagueStrength[teamId] ?? 60;
-    if(grade>=72) return "win-now";
-    if(grade<=45) return "rebuild";
-    return "retool";
+  // Wave 6: the player's own resume, built the same way for the user (qbId===USER_QB_ID) or any
+  // rival by id -- FA offers only ever build this for the user today, but the shape is genuinely
+  // reusable (nothing here special-cases "this must be the person signing"). Every field named in
+  // the spec's own "player market profile" list is present; accomplishmentScore is the real
+  // substitute for the old isOldAccomplished (age>=34 + current tier, no real achievements
+  // inspected at all) -- a real, weighted read of rings/MVPs/All-Pros/Pro Bowls/playoff appearances.
+  function buildPlayerMarketProfile(qbId, year){
+    const qb = getQuarterbackById(qbId);
+    if(!qb) return null;
+    const isUserEntry = !!qb.isUser;
+    const decade = decadeForYear(year);
+    const age = isUserEntry ? career.age : qb.age;
+    const effOverall = isUserEntry ? computeEffOverall(career.age, decade) : rivalEffTalent(qb);
+    const totals = qb.totals || {};
+    const seasons = (qb.seasons || []).slice().sort((a,b)=>a.year-b.year);
+    // Last two seasons, recency- AND playing-time-weighted -- a hot LAST year should read stronger
+    // than a merely-good year two seasons back, and a token relief season shouldn't count as heavily
+    // as a full starter's year even if the per-game rate looked fine.
+    const recentSeasons = seasons.slice(-2);
+    let recentFormSum = 0, recentFormWeight = 0;
+    recentSeasons.forEach((s,i)=>{
+      const recencyWeight = i===recentSeasons.length-1 ? 0.65 : 0.35;
+      const seasonGames = (LEAGUE[decadeForYear(s.year)]||{}).games || 16;
+      const playingTimeShare = clamp((s.games||0)/seasonGames, 0, 1);
+      const w = recencyWeight * (0.4 + 0.6*playingTimeShare);
+      recentFormSum += (s.rating||0) * w;
+      recentFormWeight += w;
+    });
+    const recentFormRating = recentFormWeight>0 ? recentFormSum/recentFormWeight : null;
+    const availability = isUserEntry
+      ? ((career.suspensionSeasonsRemaining>0) ? { reason:"suspension" } : (career.injuryLeaveSeasonsRemaining>0 ? { reason:"injury" } : null))
+      : (qb.availability || null);
+    const mvps = totals.mvps||0, allPros = totals.allPros||0, proBowls = totals.proBowls||0, rings = totals.rings||0;
+    const playoffAppearances = isUserEntry ? (career.seasonLog||[]).filter(s=>s.playoffs && s.playoffs.made).length : 0;
+    // Rivals don't carry a per-season playoffs.rounds structure the way the user does -- rings/
+    // All-Pros/Pro Bowls already capture the bulk of a rival's real playoff-relevant reputation, so
+    // playoffAppearances is a documented user-only signal, not a hard requirement of the score below.
+    const accomplishmentScore = mvps*20 + allPros*12 + proBowls*6 + rings*25 + playoffAppearances*4;
+    const tier = performanceTier(effOverall);
+    const expectedApy = veteranAPY(decade, tier);
+    return {
+      qbId, name: qb.name, age, effOverall, tier,
+      expectedApy, contractRange: { low: Math.round(expectedApy*0.82), high: Math.round(expectedApy*1.25) },
+      recentFormRating, careerStarts: totals.games||0, availability, isCurrentlyUnavailable: !!availability,
+      mvps, allPros, proBowls, rings, playoffAppearances,
+      reputation: isUserEntry ? career.reputation : null,
+      accomplishmentScore,
+      isYoungPlayer: age<=27,
+      // Calibrated via a seeded sweep (see PROGRESS.md) against real accomplishmentScore
+      // distributions -- replaces the old isOldAccomplished (age alone + current tier).
+      isAccomplishedVeteran: age>=32 && accomplishmentScore>=28,
+    };
+  }
+  // Wave 6: everything a team's own front office would actually know about its QB room and recent
+  // trajectory before deciding how hard to chase a free agent -- current QB1/QB2/QB3 (live registry,
+  // not a stale snapshot), up to 3 seasons of weighted record/titles, the team's real persistent
+  // five-grade profile/scheme, and its competitive window (teamCompetitiveWindow above).
+  function buildTeamQuarterbackNeed(teamId, year){
+    year = year || career.year;
+    const decade = decadeForYear(year);
+    const qbs = getTeamQuarterbacks(teamId);
+    const valOf = qb => qb ? (qb.isUser ? Math.round(computeEffOverall(career.age, decade)) : rivalEffTalent(qb)) : null;
+    const rows = ["QB1","QB2","QB3"].map(slot=>{
+      const qb = qbs[slot];
+      return qb
+        ? { slot, present:true, id:qb.id, name:qb.name, val:valOf(qb), age:qb.age, availability: qb.availability||null, contract: qb.contract||null }
+        : { slot, present:false };
+    });
+    const hist = ((career.teamSeasonHistory||{})[teamId]||[]).slice(-3);
+    let recentWeightedWinPct = null;
+    if(hist.length){
+      let sumWinPct=0, sumW=0;
+      hist.forEach((h,i)=>{
+        const w = i+1;
+        const gp = (h.wins||0)+(h.losses||0)+(h.ties||0);
+        const wp = gp>0 ? ((h.wins||0)+(h.ties||0)*0.5)/gp : 0.5;
+        sumWinPct += wp*w; sumW += w;
+      });
+      recentWeightedWinPct = sumW>0 ? sumWinPct/sumW : null;
+    }
+    const titles = {
+      playoffAppearances: hist.filter(h=>h.madePlayoffs).length,
+      divisions: hist.filter(h=>h.wonDivision).length,
+      conferences: hist.filter(h=>h.wonConference).length,
+      championships: hist.filter(h=>h.wonChampionship).length,
+    };
+    const isMine = teamId===career.teamId;
+    const grades = isMine
+      ? { oline:career.oline, weapons:career.weapons, defense:career.defense, coaching:career.coaching, gmGrade:career.gmGrade }
+      : ((career.leagueTeamGrades && career.leagueTeamGrades[teamId]) || { oline:60, weapons:60, defense:60, coaching:60, gmGrade:60 });
+    const overall = isMine ? career.teamStrength : (career.leagueStrength[teamId] ?? Math.round(computeTeamOverall(grades)));
+    return {
+      teamId, qbs: rows, recentWeightedWinPct, titles, grades, overall,
+      schemeId: career.teamScheme ? career.teamScheme[teamId] : null,
+      window: teamCompetitiveWindow(teamId, year),
+    };
+  }
+  // Wave 6 required design: "Project role by inserting the player into a copy of the team's depth
+  // chart and running the same starter-selection function used by the season simulation. Never
+  // calculate FA role with a separate estimate." Reuses SUCCESSION_PROMOTION_GAP -- the EXACT same
+  // threshold evaluateSuccession uses to decide a rostered challenger wins the job outright -- so a
+  // candidate's projected FA role can never disagree with what would actually happen if that same
+  // talent gap showed up as an in-season promotion.
+  function projectDepthRoleForCandidate(candidateEffOverall, teamId){
+    const qbs = getTeamQuarterbacks(teamId);
+    const incumbent = qbs.QB1;
+    if(!incumbent) return "starter"; // nobody rostered at all -- immediate starter
+    // The home re-sign case: when the candidate IS the player and they're already this team's
+    // active (non-backup) starter, getTeamQuarterbacks itself resolves QB1 to the player's own
+    // userQuarterbackView() (Wave 2A -- the user's own team is never tracked in teamQbDepth) --
+    // "the incumbent" and "the candidate" would otherwise be the same person, always reading a
+    // zero gap and wrongly projecting "competition" for a normal re-sign. Re-signing where you're
+    // already the guy is definitionally staying the guy.
+    if(incumbent.isUser && !career.isBackup && teamId===career.teamId) return "starter";
+    const decade = decadeForYear(career.year);
+    const incumbentVal = incumbent.isUser ? Math.round(computeEffOverall(career.age, decade)) : rivalEffTalent(incumbent);
+    return (candidateEffOverall - incumbentVal >= SUCCESSION_PROMOTION_GAP) ? "starter" : "competition";
+  }
+  // Wave 6: replaces the old ad hoc gate (Math.abs(needRank-rank)>1, isOldAccomplished age+tier
+  // check) with a single pure score built entirely from the two real profiles above -- how
+  // replaceable the incumbent actually is, whether an accomplished veteran's résumé actually fits
+  // this team's real window (not just "is the grade high"), whether a young/mediocre arm fits a
+  // rebuilder's real need, and a real availability-risk dampener. Calibrated via a seeded sweep
+  // (see PROGRESS.md) so the resulting offer population isn't degenerate (never-fires or always-fires).
+  function scoreFreeAgentFit(playerProfile, teamNeedProfile){
+    const incumbentRow = teamNeedProfile.qbs.find(r=>r.slot==="QB1");
+    const incumbentVal = (incumbentRow && incumbentRow.present) ? incumbentRow.val : 30;
+    const window = teamNeedProfile.window;
+    let fit = clamp(100 - incumbentVal, 0, 100);
+    if(playerProfile.isAccomplishedVeteran){
+      // "Accomplished" must inspect actual achievements (accomplishmentScore), not age plus tier --
+      // and even a real résumé only draws real interest from a team actually trying to win now.
+      fit += window==="win-now" ? 25 : window==="contender" ? 8 : -45;
+    }
+    if(playerProfile.isYoungPlayer && (window==="rebuild"||window==="retool")){
+      fit += 15; // a rebuilder/retooler without a real answer at QB wants a real look at a young arm
+    }
+    if(playerProfile.isCurrentlyUnavailable) fit -= 15; // real injury/suspension risk, not flavor-only
+    return clamp(Math.round(fit), 0, 100);
   }
   function buildFreeAgentOffers(decade, tier, oldTeamId){
     // Wave 5: guarantee every candidate team already has its real, persistent five-grade profile
@@ -7411,7 +7587,6 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     // already run this season for these teams, but load-bearing the first time a team is seen (a
     // fresh save, or a just-joined expansion team not yet touched by any other code path this year).
     ensureLeagueTeamGrades(career.year);
-    const rank = tierRank(tier);
     const repMult = clamp(0.82 + (career.reputation/100)*0.34, 0.75, 1.25);
     const leverage = career._leverageBoost ? 1.13 : 1;
     const comeback = career._comebackFromSuspension ? 0.55 : 1;
@@ -7426,11 +7601,19 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
     const homeGmSkillMult = clamp(0.9 + ((career.gmGrade ?? 60)/100)*0.2, 0.85, 1.1);
     const candidates = shuffle(teamsAvailable(career.year).filter(t=>t.id!==oldTeamId));
     const offers = [];
+    // Wave 6: one real player profile, built once, reused against every candidate team's own real
+    // need profile -- never a separate per-team estimate of "is this player good/young/accomplished."
+    const playerProfile = buildPlayerMarketProfile(USER_QB_ID, career.year);
+    const FA_FIT_THRESHOLD = 35; // calibrated via seeded sweep -- see PROGRESS.md
     // re-sign option with the old team, unless he was just cut loose for cause (contract voided)
     if(oldTeamId && career.contract.apy>0){
-      const baseApy = veteranAPY(decade, tier==="minimum"?"minimum":tier);
+      // Required design: role is projected the same way every other offer's is -- never hardcoded
+      // "starter" -- so a backup still fighting for the job (career.isBackup) correctly re-signs
+      // into "competition" if they haven't actually caught the incumbent yet.
+      const homeRole = projectDepthRoleForCandidate(playerProfile.effOverall, oldTeamId);
+      const baseApy = veteranAPY(decade, homeRole==="competition" ? (tier==="minimum"?"minimum":"backup") : (tier==="minimum"?"minimum":tier));
       offers.push({
-        teamId: oldTeamId, role: "starter", isHome: true,
+        teamId: oldTeamId, role: homeRole, isHome: true,
         apy: Math.round(baseApy*repMult*gmMult*homeGmSkillMult*leverage*comeback*(0.95+Math.random()*0.2)),
         years: tier==="elite"?5:tier==="good"?4:tier==="average"?2:1,
         patience: randInt(55,85), pushCount:0, withdrawn:false,
@@ -7438,26 +7621,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade,
       });
     }
-    // Phase 4: team fit now also reasons about the PLAYER's own profile (age, not just current
-    // tier) against the offering team's competitive window, not just a flat tier-vs-need band.
-    const isYoungPlayer = career.age<=27;
-    const isOldAccomplished = career.age>=34 && (tier==="elite"||tier==="good");
     for(const t of candidates){
       if(offers.length>=4) break;
-      const needRank = teamNeedRank(t.id);
-      const window = teamCompetitiveWindow(t.id);
-      if(comeback<1 && needRank>=3) continue; // fresh off a suspension — only desperate teams call
-      // A rebuilding team without a real answer at QB always wants a real look at a promising young
-      // arm, even one whose current tier doesn't line up with their desperation by the numbers --
-      // this is specifically what makes a young, merely-mediocre player still draw a genuine QB1
-      // shot from a team with nothing at the position, instead of being filtered out entirely.
-      const rebuildYouthFit = window==="rebuild" && isYoungPlayer && needRank>=3;
-      // An old, still-accomplished player realistically only draws real interest from a team
-      // actually trying to win now -- a rebuilding team isn't spending a roster spot on a short-
-      // term rental just because he grades out fine on paper.
-      if(isOldAccomplished && window!=="win-now" && !rebuildYouthFit) continue;
-      if(!rebuildYouthFit && Math.abs(needRank-rank)>1) continue; // depth-chart mismatch
-      const role = rebuildYouthFit ? "starter" : (needRank>rank ? "starter" : needRank===rank ? "starter" : "competition");
+      const needProfile = buildTeamQuarterbackNeed(t.id, career.year);
+      const incumbentRow = needProfile.qbs.find(r=>r.slot==="QB1");
+      if(comeback<1 && incumbentRow && incumbentRow.present && incumbentRow.val>=65) continue; // fresh off a suspension — only a real need calls
+      const fit = scoreFreeAgentFit(playerProfile, needProfile);
+      if(fit<FA_FIT_THRESHOLD) continue;
+      // Required design: project role by running the SAME starter-selection comparison the season
+      // simulation itself uses -- never a separate estimate.
+      const role = projectDepthRoleForCandidate(playerProfile.effOverall, t.id);
       const tierForApy = role==="competition" ? (tier==="minimum"?"minimum":"backup") : (tier==="minimum"?"minimum":tier);
       const baseApy = veteranAPY(decade, tierForApy);
       // Wave 5: read straight from the team's real, persistent five-grade profile (the exact same
@@ -7465,16 +7638,18 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
       // see in the offer ("chase the bag, but you'd play behind a C-grade line") is exactly what
       // you get if you take it (signFreeAgentOffer copies these same fields onto career.*), AND
       // exactly what you'd have seen opening this same team's page from Standings/FA a moment ago.
-      const teamProfileForOffer = career.leagueTeamGrades[t.id] || { oline:60, weapons:60, defense:60, coaching:60, gmGrade:60 };
+      const teamProfileForOffer = needProfile.grades;
       const gmGradeForOffer = teamProfileForOffer.gmGrade;
       // A sharp front office pays close to fair value; a bad one is erratic -- sometimes a lowball,
       // sometimes (comedically) an overpay for a player they'll regret. Independent of repMult/
       // leverage, which are about the PLAYER's own standing, not this team's competence.
       const awayGmMult = clamp(0.85 + (gmGradeForOffer/100)*0.3 + (Math.random()-0.5)*0.1, 0.78, 1.2);
-      // One legible line for WHY this team is calling -- makes the team-fit logic above visible to
-      // the player instead of just felt through the numbers.
-      const reason = rebuildYouthFit ? "Rebuilding, and they don't have a real answer at the position."
+      // One legible line for WHY this team is calling -- makes the fit score above visible to the
+      // player instead of just felt through the numbers.
+      const window = needProfile.window;
+      const reason = role==="starter" && window==="rebuild" ? "Rebuilding, and they don't have a real answer at the position."
         : window==="win-now" ? "In win-now mode — they want a proven arm, not a project."
+        : window==="contender" ? "A real contender, and QB is exactly where they'd upgrade first."
         : window==="rebuild" ? "Rebuilding, and open to seeing what he's got."
         : "Retooling, and QB is squarely in the mix.";
       offers.push({
@@ -7486,7 +7661,7 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
         defense: teamProfileForOffer.defense, coaching: teamProfileForOffer.coaching, gmGrade: gmGradeForOffer,
       });
     }
-    // one rare agent-driven swing, independent of how negotiations go
+    // one rare agent-driven swing, independent of how negotiating goes
     if(offers.length && Math.random()<0.05){
       const target = pick(offers);
       if(Math.random()<0.5){ target.apy = Math.round(target.apy*(1.25+Math.random()*0.2)); target.agentEvent = "lucky"; }
@@ -7582,6 +7757,16 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 
   function signFreeAgentOffer(o, meta){
     const teamName = teamNameAt(o.teamId, career.year);
+    // Wave 6 required design: the offer's own projected role must be exactly what happens once
+    // signed -- a "competition" role used to be pure flavor text (no mechanical difference from
+    // "starter" at all once signed); now it genuinely means competing for the job, the same
+    // isBackup-gated mechanism a drafted rookie behind an entrenched incumbent already uses
+    // (resolveBackupSeasonSnaps/resolveBackupCompetition). Set BEFORE reassignRivalsForTeamChange
+    // for an away sign -- that function's own early-return reads career.isBackup to decide whether
+    // to displace the destination team's existing rival (skipped when only competing, not replacing
+    // him outright).
+    career.isBackup = (o.role === "competition");
+    if(career.isBackup) career._backupSeasonsCount = 0; // a fresh competition, not a stale count carried over from a previous team/stint
     if(o.isHome){
       career.transactions.push(`${career.year}: Re-signed with the ${teamName} (${fmtMoney(o.apy)}/yr).`);
       // NOT a team change -- keep his tenure streak intact so the "first season in a new uniform"

@@ -1578,6 +1578,126 @@ truth instead of over-engineering a second special case for a comparatively rare
 snapshots recomputed from live data on every call (not cached) — cheap at this league size (~32
 teams) but worth revisiting if a future wave adds many more simultaneous active franchises.
 
+### Wave 6 — Free-agency decision model
+
+**Section 12 product question, not triggered**: question #1 (contract guarantees/cap penalties)
+only applies "if modeled" — this wave deliberately keeps the existing simple apy/years/tier contract
+shape (no cap model), so the question never needed asking; the wave's own task list only lists
+"guarantees if modeled" as conditional, never required.
+
+**Three new pure profile functions**, exactly the interface named in the spec:
+- `buildPlayerMarketProfile(qbId, year)` — works for the user (`qbId===USER_QB_ID`, via
+  `getQuarterbackById`) or any rival by id, though FA offers only ever build one for the user today.
+  Includes age/effective value, a recency- AND playing-time-weighted read of the last two seasons
+  (`recentFormRating` — a token relief appearance counts for much less than a full starter's year,
+  and the most recent season is weighted higher than the one before it), career starts, real
+  availability (injury/suspension, reusing Wave 3's `.availability`), MVP/All-Pro/Pro
+  Bowl/rings/playoff-appearance counts, reputation, and expected market tier/contract range (reusing
+  `performanceTier`/`veteranAPY`, never reinvented). `accomplishmentScore` (mvps×20 + allPros×12 +
+  proBowls×6 + rings×25 + playoffAppearances×4) is the real substitute for the old `isOldAccomplished`
+  (age≥34 + current tier, no actual achievements inspected at all) — `isAccomplishedVeteran` is
+  `age>=32 && accomplishmentScore>=28`.
+- `buildTeamQuarterbackNeed(teamId, year)` — current QB1/QB2/QB3 via `getTeamQuarterbacks` (the live
+  registry, never a stale snapshot) with value/age/availability/contract per slot, up to 3 seasons of
+  recency-weighted record and real titles (division/conference/championship, plus a new
+  `madePlayoffs` flag — see below), the team's real persistent five-grade profile/scheme, and its
+  competitive window.
+- `scoreFreeAgentFit(playerProfile, teamNeedProfile)` — replaces the old ad hoc gate
+  (`Math.abs(needRank-rank)>1`, `isOldAccomplished` age+tier check) with one pure score: how
+  replaceable the incumbent actually is (`100-incumbentVal`), an accomplished veteran's real fit
+  against the team's real window (win-now +25, contender +8, anything else -45 — an accomplished
+  résumé only draws real interest from a team actually trying to win now), a young player's fit
+  against a rebuild/retool window (+15), and a real availability-risk dampener (-15). Gated at
+  `FA_FIT_THRESHOLD=35`.
+
+**`teamCompetitiveWindow(teamId, year)` rewritten** — the named defect ("a current aggregate-grade
+proxy, not a record/playoff trajectory") fixed by blending the persistent grade (still the anchor)
+with up to 3 seasons of recency-weighted win% and real titles (`teamSeasonHistory`) into one score,
+now 4 tiers instead of 3 (`rebuild`/`retool`/`contender`/`win-now` — "contender" is new, between
+retool and true win-now).
+
+**New `madePlayoffs` field** on `teamSeasonHistory` rows (`recordTeamSeasonHistory`, sourced from
+`ls.seeded`) — the spec's own team-need profile explicitly lists "recent playoffs" as a signal
+distinct from the title flags (a wildcard team eliminated in the first round has none of
+division/conference/championship but genuinely made the playoffs). Migration: pre-existing rows
+backfill `madePlayoffs = wonDivision||wonConference||wonChampionship` — a documented best-effort
+approximation (an old wildcard-and-out row reads false), exact for every row recorded from here on.
+
+**Role rules, the required design**: "Project role by inserting the player into a copy of the
+team's depth chart and running the same starter-selection function used by the season simulation.
+Never calculate FA role with a separate estimate." `SUCCESSION_HYSTERESIS_MARGIN`/
+`SUCCESSION_PROMOTION_GAP` (Wave 2B's deterministic starter-selection thresholds, previously local
+to `evaluateSuccession`) are hoisted to module scope so the new `projectDepthRoleForCandidate
+(candidateEffOverall, teamId)` can reuse the EXACT same numbers a real in-season promotion decision
+uses. A real bug caught while wiring this: a normal HOME re-sign (the player already the active,
+non-backup starter there) would read "the incumbent" as the player's own `userQuarterbackView()`
+(Wave 2A: the user's own team is never tracked in `teamQbDepth`), always computing a zero talent gap
+and wrongly projecting "competition" — fixed with an explicit guard (`incumbent.isUser &&
+!career.isBackup && teamId===career.teamId` → always "starter"). The home offer's own role is now
+ALSO projected through this same function (previously hardcoded `"starter"`), so a backup still
+fighting for a job whose contract simultaneously expires correctly re-signs into "competition" if
+they haven't caught the incumbent yet, instead of a silent, incorrect promotion.
+
+**"Competition" role is now mechanically real, not flavor text** — a confirmed gap found while
+implementing this wave: accepting a "Camp competition, no guarantees" offer used to be
+IDENTICAL, mechanically, to accepting "Sign as the starter" (the destination team's real incumbent
+was always displaced to free agency regardless of what the offer said, and `career.isBackup` was
+never set for an FA sign at all). `signFreeAgentOffer` now sets `career.isBackup = (o.role ===
+"competition")` BEFORE `reassignRivalsForTeamChange` (whose own early-return already reads
+`career.isBackup` to skip displacing the incoming team's rival — the same mechanism a drafted rookie
+behind an entrenched incumbent already uses), and resets `career._backupSeasonsCount` to 0 so a
+fresh competition never inherits a stale force-resolution countdown from a previous team/stint.
+
+**`teamNeedRank`/`tierRank` removed** (not left as dead code) — fully superseded by
+`buildTeamQuarterbackNeed`/`scoreFreeAgentFit`, which read the incumbent's real value directly
+rather than bucketing it into 5 need tiers first.
+
+**Calibration** (three new numeric thresholds — `teamCompetitiveWindow`'s 76/93 score cutoffs,
+`isAccomplishedVeteran`'s `accomplishmentScore>=28`, `FA_FIT_THRESHOLD=35`): swept via a disposable
+Node script re-implementing each formula over realistic synthetic populations (deleted after use, per
+project convention) rather than picked from intuition. `teamCompetitiveWindow` over 20,000 synthetic
+teams: win-now 22.0%, contender 14.1%, retool 22.0%, rebuild 41.9% — all four buckets populated, none
+degenerate (the "rebuild"-heavy skew is an artifact of the sweep's uniform overall distribution, not
+a real-game population, which clusters closer to the 65 baseline). `isAccomplishedVeteran` fires for
+33.3% of synthetic veterans (age≥32) — not never-fires, not always-fires. `scoreFreeAgentFit>=35`
+fires 59.7% of synthetic player×team pairs; the five named exit-criteria archetypes were checked
+directly: young mediocre QB/rebuilder (score 60, fits), elite old veteran/contender (65, fits),
+declining famous veteran/rebuilder (15, correctly does NOT fit), stacked team/weak QB1 (65, fits) —
+all behaved as the wave's own exit criteria expect.
+
+**Verification.** 3 new regression tests: `fa-role-matches-post-signing-depth-chart` (sweeps several
+seeds/career points to a real free-agency event, accepts whichever offer renders, and confirms
+"starter" always displaces the real incumbent from the registry's QB1 slot while "competition" always
+sets `isBackup` and leaves the real incumbent in place — both role outcomes are exercised naturally
+within the sweep), `fa-stacked-team-weak-qb1-gets-real-offer` (the named "stacked team, weak QB1"
+scenario, constructed directly: a specific away team boosted to a high persistent grade + a real
+3-season winning/title history, with its actual rostered starter's talent deliberately lowered, while
+every OTHER team's incumbent is boosted to elite to make the scenario shuffle-order-independent —
+confirms that team makes a real offer projecting "starter"), and updates to Wave 5's
+`fa-offers-match-persistent-team-profile` (its away-offer selector was identifying offers by role-
+label text, which broke now that a home re-sign can legitimately show "Camp competition" too — fixed
+to select by team id instead; separately, its post-sign grade check could race against
+`checkInjuryThenPlay`'s own no-injury branch falling straight through to a synchronous
+`generateSeason()` call — Wave 6's added `Math.random()` calls shifted which branch a fixed seed
+lands on, exposing that the test's read could observe DRIFTED grades from an already-generated new
+season rather than the just-signed values; fixed by forcing the injury-interstitial branch
+(`Math.random=()=>0` immediately before the accept click) to guarantee a stable read point before
+any season is generated — not a product bug, a test-timing fix). Full suite (30 files/tests) run 3
+consecutive times: identical 27 pass / 1 fail every time — `pro-bowl-eligibility` (Wave 7's job,
+unrelated, unchanged). `npm run build` clean, `git diff --check` clean. Committed locally, **not
+pushed** — push requires separate explicit authorization, which "Wave 6" was not.
+
+**Known limitations, stated plainly**: (1) `buildPlayerMarketProfile`'s `playoffAppearances` field is
+only ever populated for the user (`career.seasonLog`'s own `playoffs.made` flag) — a rival doesn't
+carry the same per-season playoffs structure, so a rival profile's `playoffAppearances` is always 0;
+documented as acceptable since `buildPlayerMarketProfile` is only ever actually called for the user
+today (FA offers are always about signing the player), and rings/All-Pros/Pro Bowls already capture
+the bulk of a rival's real playoff-relevant reputation. (2) No cap/guarantees model was added
+(Section 12 question #1, not triggered — see above); contracts remain apy/years/tier only. (3)
+`madePlayoffs` on pre-existing `teamSeasonHistory` rows is a best-effort migration approximation
+(division/conference/championship implies it; a wildcard-and-out season does not, so an old row like
+that reads `false`) — exact for every row recorded going forward.
+
 ### Round 33 — Playoff Tree follow-up fixes: Continue-button gating, full-tree preview, QB-link bug, Standings tab redesign
 
 User feedback (with screenshots) on Round 32's shipped work, four items:

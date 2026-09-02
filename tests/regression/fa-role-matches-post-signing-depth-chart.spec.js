@@ -1,0 +1,123 @@
+// Wave 6 (MASTER_REMEDIATION_SPEC.md) exit criterion: "Offer role matches the Team-page projection
+// and actual post-signing depth chart." Before this wave, an FA offer's role ("Sign as the starter"
+// vs. "Camp competition, no guarantees") was pure flavor text -- signFreeAgentOffer never set
+// career.isBackup for an away sign, so accepting a "competition" offer produced EXACTLY the same
+// mechanical outcome as "starter" (the destination team's real incumbent was always displaced/
+// evicted to free agency regardless of what the offer said). Now role is projected by
+// projectDepthRoleForCandidate (the same SUCCESSION_PROMOTION_GAP comparison a real in-season
+// promotion uses) and signFreeAgentOffer wires career.isBackup accordingly. This walks a real
+// seeded career to a real free-agency event, accepts whichever offer actually renders (starter or
+// competition -- both are exercised across a few different seeds/points in the career to increase
+// the odds of seeing each at least once), and confirms in each case that what happens on the roster
+// afterward exactly matches what the offer said would happen.
+import { test, expect } from "@playwright/test";
+import { startCareer, advanceOneSeason, readActiveCareer, writeActiveCareer } from "../helpers/careerFlow.mjs";
+import { installSeededRandom } from "../helpers/seededRandom.mjs";
+
+async function forceFreeAgencyAndCapture(page, seed, decadeIndex, seasonsFirst) {
+  await installSeededRandom(page, seed);
+  await startCareer(page, { decadeIndex });
+  for (let i = 0; i < seasonsFirst; i++) {
+    const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+    if (!stillActive) return null;
+    await advanceOneSeason(page);
+  }
+  const saved = await readActiveCareer(page);
+  if (!saved) return null;
+  saved.career.contract.years = 0;
+  await writeActiveCareer(page, saved);
+  await page.reload();
+  const resumeBtn = page.locator("#resumeCareerBtn");
+  if (await resumeBtn.count()) await resumeBtn.click();
+  await page.waitForTimeout(300);
+
+  let sawOffers = false;
+  for (let i = 0; i < 80 && !sawOffers; i++) {
+    sawOffers = await page.evaluate(() => document.querySelectorAll(".fa-offer").length > 0);
+    if (sawOffers) break;
+    const clicked = await page.evaluate(() => {
+      const content = document.getElementById("careerContent");
+      const simEnd = document.querySelector("#playoffRoundsHolder [id^='pqSimEnd-']:not([disabled])");
+      if (simEnd) { simEnd.click(); return true; }
+      const contBtn = document.getElementById("continueBtn") || document.getElementById("playOnBtn");
+      if (contBtn && !contBtn.disabled) { contBtn.click(); return true; }
+      const simRoundBtn = document.getElementById("playoffTreeSimulateBtn");
+      if (simRoundBtn && !simRoundBtn.disabled) { simRoundBtn.click(); return true; }
+      const btn = content && content.querySelector(".choice-btn, [id^='pqAck-'], button[id$='Ack']");
+      if (btn) { btn.click(); return true; }
+      const km = document.getElementById("keyMomentOverlay");
+      if (km && km.classList.contains("open")) {
+        const kb = km.querySelector(".choice-btn, button:not([disabled])");
+        if (kb) { kb.click(); return true; }
+      }
+      return false;
+    });
+    await page.waitForTimeout(clicked ? 100 : 150);
+  }
+  if (!sawOffers) return null;
+
+  const offers = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll(".fa-offer")).map((card, i) => {
+      const teamBtn = card.querySelector("[data-team-id]");
+      const roleEl = card.querySelector(".fa-role");
+      return { index: i, teamId: teamBtn ? teamBtn.dataset.teamId : null, roleLabel: roleEl ? roleEl.textContent : null };
+    });
+  });
+  return { offers };
+}
+
+test("fa-role-matches-post-signing-depth-chart", async ({ page }) => {
+  test.setTimeout(240_000);
+  // A few different (seed, decadeIndex, seasonsFirst) combinations -- early in a career, the
+  // player's own effOverall is more likely to trail an established incumbent somewhere in the
+  // league, giving a real chance of seeing BOTH a "starter" and a "competition" offer across this
+  // sweep without forcing either artificially.
+  const attempts = [
+    { seed: 13579, decadeIndex: 1, seasonsFirst: 0 },
+    { seed: 24681, decadeIndex: 2, seasonsFirst: 0 },
+    { seed: 97531, decadeIndex: 3, seasonsFirst: 1 },
+    { seed: 86420, decadeIndex: 4, seasonsFirst: 0 },
+  ];
+
+  let sawStarter = false, sawCompetition = false;
+  for (const attempt of attempts) {
+    const result = await forceFreeAgencyAndCapture(page, attempt.seed, attempt.decadeIndex, attempt.seasonsFirst);
+    if (!result) continue;
+    const awayOffers = result.offers.filter(o => o.teamId);
+    for (const o of awayOffers) {
+      const isCompetition = o.roleLabel && o.roleLabel.includes("Camp competition");
+      if (isCompetition) sawCompetition = true; else sawStarter = true;
+
+      const before = await readActiveCareer(page);
+      const incumbentIdBefore = before.career.teamQbDepth && before.career.teamQbDepth[o.teamId] && before.career.teamQbDepth[o.teamId].QB1;
+
+      await page.evaluate((i) => document.querySelectorAll(".fa-accept")[i].click(), o.index);
+      await page.waitForTimeout(200);
+
+      const after = await readActiveCareer(page);
+      expect(after.career.teamId, `should have signed with ${o.teamId}`).toBe(o.teamId);
+
+      if (isCompetition) {
+        // The offer said "competition" -- the player must genuinely be competing (isBackup), and
+        // the real incumbent must still be sitting at QB1, not displaced.
+        expect(after.career.isBackup, `a "competition" offer must actually set isBackup`).toBe(true);
+        const incumbentIdAfter = after.career.teamQbDepth && after.career.teamQbDepth[o.teamId] && after.career.teamQbDepth[o.teamId].QB1;
+        expect(incumbentIdAfter, `the real incumbent must still occupy QB1 after a competition sign`).toBe(incumbentIdBefore);
+      } else {
+        // The offer said "starter" -- the player must NOT be marked as competing, and the team's
+        // registry QB1 slot must no longer point at the old incumbent (the user's own team is never
+        // tracked in teamQbDepth -- see getTeamQuarterbacks -- so the slot should be cleared/reassigned).
+        expect(after.career.isBackup, `a "starter" offer must not leave the player marked as competing`).toBe(false);
+        const qb1After = after.career.teamQbDepth && after.career.teamQbDepth[o.teamId] && after.career.teamQbDepth[o.teamId].QB1;
+        if (incumbentIdBefore) {
+          expect(qb1After, `a real incumbent must be displaced from QB1 once the player signs as the starter`).not.toBe(incumbentIdBefore);
+        }
+      }
+      break; // one accepted offer is enough to test this attempt's scenario
+    }
+    if (sawStarter && sawCompetition) break;
+  }
+
+  expect(sawStarter, "expected at least one 'starter' role offer across the sweep").toBe(true);
+  expect(sawCompetition, "expected at least one 'competition' role offer across the sweep").toBe(true);
+});

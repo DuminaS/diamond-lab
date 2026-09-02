@@ -86,15 +86,18 @@ test("fa-offers-match-persistent-team-profile", async ({ page }) => {
   // Pick the first AWAY-team offer -- every card (home/re-sign included) gets a [data-team-id]
   // link, but only an AWAY offer exercises the fix under test (the home/re-sign card just shows
   // career.oline etc. right back at the player, since ensureLeagueTeamGrades deliberately never
-  // creates a leagueTeamGrades entry for the player's OWN current team).
-  const offerInfo = await page.evaluate(() => {
+  // creates a leagueTeamGrades entry for the player's OWN current team). Identified by team id
+  // (never the old team) rather than the role label text -- Wave 6 made the home offer's own role
+  // a real projection too (no longer hardcoded "starter"), so a backup-competition home re-sign can
+  // legitimately show the same "Camp competition" label an away offer would.
+  const offerInfo = await page.evaluate((oldTid) => {
     const cards = Array.from(document.querySelectorAll(".fa-offer"));
     for (let i = 0; i < cards.length; i++) {
       const teamBtn = cards[i].querySelector("[data-team-id]");
-      if (teamBtn && teamBtn.dataset.faRole !== "Re-sign as the starter") return { index: i, teamId: teamBtn.dataset.teamId, faRole: teamBtn.dataset.faRole };
+      if (teamBtn && teamBtn.dataset.teamId !== oldTid) return { index: i, teamId: teamBtn.dataset.teamId, faRole: teamBtn.dataset.faRole };
     }
     return null;
-  });
+  }, oldTeamId);
   expect(offerInfo, "expected at least one away-team FA offer with a clickable team link").toBeTruthy();
 
   // #21: open that team's generic page straight from the offer card, capture its five grade
@@ -114,15 +117,18 @@ test("fa-offers-match-persistent-team-profile", async ({ page }) => {
   // buildGradeCardsHtml always renders in this fixed order: oline, weapons, defense, coaching, gmGrade.
   const [tgOline, tgWeapons, tgDefense, tgCoaching, tgGm] = teamPageGrades.nums;
 
-  // Close the overlay and accept that exact offer. (Deliberately NOT reading career.leagueTeamGrades
-  // via localStorage here -- ensureLeagueTeamGrades/buildFreeAgentOffers only mutate the LIVE
-  // in-memory career object; nothing checkpoints a save between the offers rendering and actually
-  // signing one, so a mid-flow localStorage read would just see a stale, pre-offer snapshot. The
-  // Team page's own rendered numbers, captured above straight from the DOM, are the live ground
-  // truth instead -- signFreeAgentOffer/saveActiveCareer DOES checkpoint immediately on signing,
-  // so the post-sign read below is trustworthy.)
+  // Close the overlay and accept that exact offer. Force the injury-check branch that immediately
+  // follows signing (checkInjuryThenPlay) to fire -- signFreeAgentOffer's own saveActiveCareer
+  // checkpoint (eventId:"fa_signed") happens BEFORE that check, but if it doesn't fire, the SAME
+  // synchronous click handler falls straight through to playSeasonAndRender()/generateSeason(),
+  // which can legitimately drift career.oline etc via the season-end drift block (Wave 5) before
+  // Playwright ever regains control to read anything -- there is no way to observe the intermediate
+  // "just signed" state from outside once that's already happened in the same JS turn. Forcing the
+  // injury branch (a real, harmless interstitial that requires its own separate click) guarantees a
+  // stable pause point immediately after signing, before any season is generated.
   await page.evaluate(() => document.querySelector("#teamProfileOverlay .rival-close")?.click());
   await page.waitForTimeout(100);
+  await page.evaluate(() => { Math.random = () => 0; });
   await page.evaluate((i) => {
     document.querySelectorAll(".fa-accept")[i].click();
   }, offerInfo.index);
