@@ -4026,13 +4026,29 @@ import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js"
   // triggers the separate isBye/bye-badge styling, which is reserved for an actual bye slot).
   // Deliberately only implemented for round index 1 (Divisional immediately following Wild Card) --
   // this game's real historical formats never have byes feeding into anything deeper than that.
+  //
+  // Pairs indices exactly the way the post-Wild-Card "field" branch of previewNextRoundMatchups
+  // does (top-half index i vs bottom-half index fieldLen-1-i) -- NOT "one card per bye team" as a
+  // prior version of this function assumed. Those coincide whenever byes<=wcGames (every bye pairs
+  // 1:1 with an eventual Wild Card winner, e.g. the 1990-2001 and 2020s+ formats), but the 1978-1989
+  // format (wildcards:2, wcGames:1 -> byes:3 -- see PLAYOFF_ERAS in src/data/teams.js) has MORE
+  // byes than incoming Wild Card winners: the #1 seed genuinely waits on the Wild Card game's
+  // winner, but the #2 and #3 seeds already know they play EACH OTHER regardless of that result
+  // (real NFL history) -- both known now, no "TBD" side at all for that matchup. The old version
+  // rendered byes-many separate "vs TBD" cards unconditionally (3 cards for a 2-matchup round,
+  // wrongly showing #2 and #3 as if each awaited an unknown opponent) instead of exactly `total`.
   function previewByeAheadMatchups(state){
     const { s, byes, wcGames } = state;
     if(!(byes>0)) return null;
-    const total = Math.floor((byes+wcGames)/2);
+    const fieldLen = byes+wcGames;
+    const total = Math.floor(fieldLen/2);
     const matchups = [];
-    for(let i=0;i<byes;i++){ matchups.push({ aSeed:s[i].seed, aId:s[i].id, bSeed:null, bId:"TBD" }); }
-    for(let i=byes;i<total;i++){ matchups.push({ aSeed:null, aId:"TBD", bSeed:null, bId:"TBD" }); }
+    for(let i=0;i<total;i++){
+      const bIdx = fieldLen-1-i;
+      const a = i<byes ? s[i] : null;
+      const b = bIdx<byes ? s[bIdx] : null;
+      matchups.push({ aSeed: a?a.seed:null, aId: a?a.id:"TBD", bSeed: b?b.seed:null, bId: b?b.id:"TBD" });
+    }
     return matchups;
   }
   // Manually advances ONE conference's bracket state by exactly one round and records it -- used
