@@ -109,11 +109,26 @@ test("fa-role-matches-post-signing-depth-chart", async ({ page }) => {
       expect(after.career.teamId, `should have signed with ${o.teamId}`).toBe(o.teamId);
 
       if (isCompetition) {
-        // The offer said "competition" -- the player must genuinely be competing (isBackup), and
-        // the real incumbent must still be sitting at QB1, not displaced.
-        expect(after.career.isBackup, `a "competition" offer must actually set isBackup`).toBe(true);
-        const incumbentIdAfter = after.career.teamQbDepth && after.career.teamQbDepth[o.teamId] && after.career.teamQbDepth[o.teamId].QB1;
-        expect(incumbentIdAfter, `the real incumbent must still occupy QB1 after a competition sign`).toBe(incumbentIdBefore);
+        // signFreeAgentOffer sets career.isBackup=true synchronously, but then calls
+        // checkInjuryThenPlay() -- which, on a page this fast (no interactive injury screen this
+        // run), plays the WHOLE first season out before this read happens. resolveBackupCompetition
+        // runs at the end of that same season and has an unconditional 5% floor to win the job
+        // outright in year one regardless of how big the talent gap is (clamp(...,0.05,0.85)) -- a
+        // real, pre-existing, always-possible outcome, not a bug, that a sufficiently-shifted RNG
+        // stream can and (rarely) will land on. Both outcomes are legitimate: still competing
+        // (isBackup still true, incumbent still at QB1), or a verified immediate win of that same
+        // 5%-floor roll (isBackup now false, with the exact transaction line that roll produces --
+        // this exact string check is what rules out a genuine isBackup-wiring regression silently
+        // passing here instead of a real, explained competition win).
+        const wonJobImmediately = after.career.isBackup === false
+          && (after.career.transactions || []).some(t => t.includes("Wins the starting job."));
+        if (wonJobImmediately) {
+          test.info().annotations.push({ type: "note", description: `${o.teamId}: the rare (~5% floor) same-season competition win fired -- verified via the transaction log, not a bug` });
+        } else {
+          expect(after.career.isBackup, `a "competition" offer must actually set isBackup (unless the ~5%-floor immediate win legitimately fired -- see above)`).toBe(true);
+          const incumbentIdAfter = after.career.teamQbDepth && after.career.teamQbDepth[o.teamId] && after.career.teamQbDepth[o.teamId].QB1;
+          expect(incumbentIdAfter, `the real incumbent must still occupy QB1 after a competition sign`).toBe(incumbentIdBefore);
+        }
       } else {
         // The offer said "starter" -- the player must NOT be marked as competing, and the team's
         // registry QB1 slot must no longer point at the old incumbent (the user's own team is never

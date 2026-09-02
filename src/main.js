@@ -15,6 +15,9 @@ import {
   developmentPlanFor,
   developmentSpeedTag as devSpeedTag,
   developmentSwingChance,
+  earnedBreakthroughChance,
+  evaluatePerformanceOverExpectation,
+  nextBreakthroughMomentum,
   rollDevelopmentSpeed as rollDevSpeed,
 } from "./sim/development.js";
 
@@ -4915,10 +4918,26 @@ import {
     const ageMult = primeMultiplier(entity.age);
     const delta = talentEdge*ageMult;
     const cal = STAT_CAL[decade] || STAT_CAL["2000s"];
-    const comp = clamp(league.comp + delta*(delta>=0?cal.comp.up:cal.comp.down)*RIVAL_STAT_SCALE, cal.comp.lo, cal.comp.hi);
-    const ypa = clamp(league.ypa + delta*(delta>=0?cal.ypa.up:cal.ypa.down)*RIVAL_STAT_SCALE, cal.ypa.lo, cal.ypa.hi);
-    const tdRate = clamp(league.tdRate + delta*(delta>=0?cal.td.up:cal.td.down)*RIVAL_STAT_SCALE, cal.td.lo, cal.td.hi);
-    const intRate = clamp(league.intRate - delta*(delta>=0?cal.int.up:cal.int.down)*RIVAL_STAT_SCALE, cal.int.lo, cal.int.hi);
+    // These four rates are THIS entity's own talent/age/era-derived expectation -- exactly the
+    // shape generateSeason() computes for the player before that season's own variance is layered
+    // on. Balance Wave 2 (AI parity): a real season-level performance swing around that expectation
+    // is rolled below and applied on top, so an AI QB's ACTUAL production can differ from what his
+    // talent alone would predict -- without that gap, performanceIndex would always land at exactly
+    // 0 ("met expectations"), which would make the shared earned-breakthrough path structurally
+    // unreachable for AI regardless of any gating, not just rare. This is the one piece Wave 1 left
+    // unaddressed in "one shared development model for the player and AI."
+    const expectedComp = clamp(league.comp + delta*(delta>=0?cal.comp.up:cal.comp.down)*RIVAL_STAT_SCALE, cal.comp.lo, cal.comp.hi);
+    const expectedYpa = clamp(league.ypa + delta*(delta>=0?cal.ypa.up:cal.ypa.down)*RIVAL_STAT_SCALE, cal.ypa.lo, cal.ypa.hi);
+    const expectedTdRate = clamp(league.tdRate + delta*(delta>=0?cal.td.up:cal.td.down)*RIVAL_STAT_SCALE, cal.td.lo, cal.td.hi);
+    const expectedIntRate = clamp(league.intRate - delta*(delta>=0?cal.int.up:cal.int.down)*RIVAL_STAT_SCALE, cal.int.lo, cal.int.hi);
+    // Bell-shaped, mean 0, in [-1,1] -- the same three-uniform-average technique used for devSpeed
+    // and for the balance audit's own ordinary-variance model (see scripts/balance-audit.mjs).
+    const performanceIndexRoll = clamp(((Math.random()+Math.random()+Math.random())/3)*2-1, -1, 1);
+    const perfSwingMultiplier = clamp(1 + performanceIndexRoll*0.22, 0.78, 1.22);
+    const comp = clamp(expectedComp*perfSwingMultiplier, cal.comp.lo, cal.comp.hi);
+    const ypa = clamp(expectedYpa*perfSwingMultiplier, cal.ypa.lo, cal.ypa.hi);
+    const tdRate = clamp(expectedTdRate*perfSwingMultiplier, cal.td.lo, cal.td.hi);
+    const intRate = clamp(expectedIntRate*(2-perfSwingMultiplier), cal.int.lo, cal.int.hi);
     if(entity.volumeLean==null) entity.volumeLean = rollVolumeLean();
     const attPerGame = clamp(league.attPerGame + entity.volumeLean*12 + randInt(-2,2), 18, 45);
     // forcedGames (Part C of the bench-realism fix): when a caller already knows exactly how many
@@ -4978,6 +4997,19 @@ import {
     const { awards, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = evaluateSeasonAwards({
       rating, td, winPct, attempts, gamesPlayed, leagueGames: league.games, decade,
     });
+    // Same function, same shape, as the player's own developmentReport -- real actual production
+    // (post-perfSwingMultiplier) against this entity's clean talent-derived expectation. Stashed on
+    // the season row so developEntityTalent (called right after this by every caller) can read it
+    // without recomputing it a second time or drifting from a slightly different formula.
+    const performance = evaluatePerformanceOverExpectation({
+      actual: { attempts, completions, yards, touchdowns: td, interceptions },
+      expected: { completionPct: expectedComp, yardsPerAttempt: expectedYpa, touchdownRate: expectedTdRate, interceptionRate: expectedIntRate },
+      leagueGames: league.games,
+    });
+    // nextBreakthroughMomentum (called from developEntityTalent, right after this returns) needs
+    // this season's own games-played share, same input the player's own momentum update uses.
+    performance.gamesPlayed = gamesPlayed;
+    performance.leagueGames = league.games;
     // Wave 4 (MASTER_REMEDIATION_SPEC.md, required design #5): ties:0 is a real default here, not
     // an afterthought -- reconcileWinLossFromGames normally overwrites it with the real count right
     // after this returns, but the rare case where NO real weeks ever get tagged to this entity this
@@ -4985,7 +5017,7 @@ import {
     // that call entirely, which used to leave this season row with no ties field at all.
     const season = { year, age: entity.age, teamId: entity.teamId, games: gamesPlayed, comp: completions, att: attempts,
       pct: attempts>0?completions/attempts:0, yards, td, int: interceptions, rating, wins, losses, ties:0, awards,
-      proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible };
+      proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible, performance };
     // Wave 2B (MASTER_REMEDIATION_SPEC.md, Section 3 invariant #6 / Section 7 required design #4):
     // a (qbId, year) pair must never get a second season row. This used to be reachable for real --
     // resolveBackupSeasonSnaps simulated the player's own team's incumbent directly, and this same
@@ -5050,7 +5082,7 @@ import {
       // instead of a second independent roll.
       const isBackupIncumbent = career.isBackup && career._backupUsagePlan && r.id===career._backupUsagePlan.qbId;
       const seasonResult = simulatePlayerSeasonStats(r, decade, league, year, isBackupIncumbent ? career._backupUsagePlan.games : undefined);
-      developEntityTalent(r, decade);
+      developEntityTalent(r, decade, seasonResult.performance);
       // Wave 3 (MASTER_REMEDIATION_SPEC.md, exit criterion: "AI injury/suspension status is visible
       // on the player profile and transaction/history surfaces"): r.availability was just set (or
       // cleared) inside simulatePlayerSeasonStats -- the player profile already reads it directly
@@ -5152,8 +5184,9 @@ import {
           assignQuarterbackToRoster(repl.id, teamId, slot==="qb2"?"QB2":"QB3");
           return;
         }
+        let reliefResult = null;
         if(p._reliefGames>0){
-          const reliefResult = simulatePlayerSeasonStats(p, decade, league, year, p._reliefGames);
+          reliefResult = simulatePlayerSeasonStats(p, decade, league, year, p._reliefGames);
           if(p._reliefWeeks && p._reliefWeeks.length){
             applyStatLineToGames(p._reliefWeeks, p.id, reliefResult.comp, reliefResult.att, reliefResult.yards, reliefResult.td, reliefResult.int);
             reconcileWinLossFromGames(p, reliefResult, p._reliefWeeks, decade, league.games);
@@ -5161,7 +5194,7 @@ import {
         } else {
           p.age++;
         }
-        developEntityTalent(p, decade);
+        developEntityTalent(p, decade, reliefResult ? reliefResult.performance : null);
         p._reliefGames = 0;
         p._reliefWeeks = null;
       });
@@ -5173,11 +5206,18 @@ import {
      exact football-overall-weighted average of those attribute groups. This prevents either side
      from receiving a categorically more generous career model. Fields are initialized lazily so
      existing saves migrate on read without a destructive save-version reset. ----- */
-  function developEntityTalent(entity, decade){
+  // `performance` is this entity's own evaluatePerformanceOverExpectation result for the season
+  // just played (see simulatePlayerSeasonStats), or null for an entity that didn't play at all this
+  // year (a bench player with no relief games -- ages/drifts on the ordinary curve exactly like
+  // before, just with nothing to evaluate, same as the player's own <20-attempt neutral fallback).
+  function developEntityTalent(entity, decade, performance){
     if(entity.devSpeed==null) entity.devSpeed = rollDevSpeed();
     if(entity.durability==null) entity.durability = clamp(Math.round((Math.random()+Math.random()+Math.random())/3*79)+20, 20, 99);
     if(entity._originalTalent==null) entity._originalTalent = entity.talent;
     if(entity._devCarry==null) entity._devCarry = 0;
+    if(entity._talentCeilingBonus==null) entity._talentCeilingBonus = 0;
+    if(entity.breakthroughMomentum==null) entity.breakthroughMomentum = 0;
+    if(entity._earnedBreakthroughCount==null) entity._earnedBreakthroughCount = 0;
     entity.devSpeed = clamp(entity.devSpeed, 0.6, 1.4);
 
     // The scalar gets the exact physical/accuracy/mental weighted average of the
@@ -5185,13 +5225,17 @@ import {
     // same scale while preserving the lighter-weight AI representation.
     const teamGrades = career.leagueTeamGrades && career.leagueTeamGrades[entity.teamId];
     const coachingMult = developmentCoachingMultiplier(teamGrades ? teamGrades.coaching : 60);
+    // Balance Wave 2 (AI parity): ordinary growth also responds to performance vs. this entity's
+    // own expectation, exactly like the player's performanceMultiplier -- meeting expectation is
+    // neutral, crushing or missing it nudges the season's growth up or down by the same +/-22%.
+    const performanceGrowthMultiplier = performance ? clamp(1 + performance.index*0.22, 0.78, 1.22) : 1;
     const variance = 0.85 + Math.random()*0.3;
-    entity._devCarry += developmentBaseForOverall(entity.age) * entity.devSpeed * coachingMult * variance;
+    entity._devCarry += developmentBaseForOverall(entity.age) * entity.devSpeed * coachingMult * performanceGrowthMultiplier * variance;
     const whole = Math.trunc(entity._devCarry);
     if(whole!==0){
       entity._devCarry -= whole;
       const lo = clamp(entity._originalTalent-18, 15, 99);
-      const hi = clamp(entity._originalTalent+Math.round(11*entity.devSpeed), 15, 99);
+      const hi = clamp(entity._originalTalent+Math.round(11*entity.devSpeed)+entity._talentCeilingBonus, 15, 99);
       entity.talent = clamp(entity.talent+whole, lo, hi);
     }
 
@@ -5200,11 +5244,31 @@ import {
       const isBreakout = Math.random()<clamp(0.5+(entity.devSpeed-1)*0.25, 0.30, 0.70);
       const breakoutAllowed = (entity._breakoutCount||0)<2 && (!(entity._breakoutCount||0) || Math.random()<0.15);
       if(isBreakout && breakoutAllowed){
-        entity.talent = clamp(entity.talent + randInt(1,2), 15, clamp(entity._originalTalent+18,15,99));
+        entity.talent = clamp(entity.talent + randInt(1,2), 15, clamp(entity._originalTalent+18+entity._talentCeilingBonus,15,99));
         entity._breakoutCount = (entity._breakoutCount||0)+1;
       } else if(!isBreakout && (entity._bustCount||0)<2){
         entity.talent = clamp(entity.talent - randInt(1,2), clamp(entity._originalTalent-24,15,99), 99);
         entity._bustCount = (entity._bustCount||0)+1;
+      }
+    }
+
+    // Balance Wave 2 (AI parity): the same rare, hard-gated earned-breakthrough path the player's
+    // offseason program can unlock -- identical shared gating functions/thresholds
+    // (nextBreakthroughMomentum/earnedBreakthroughChance from src/sim/development.js), applied to
+    // the single talent scalar instead of picking several attribute keys, since that's the whole
+    // point of AI using one lighter-weight number. No devSpeed self-amplification here either.
+    if(performance){
+      entity.breakthroughMomentum = nextBreakthroughMomentum(entity.breakthroughMomentum, performance.index, performance.gamesPlayed, performance.leagueGames);
+      const chance = earnedBreakthroughChance({
+        momentum: entity.breakthroughMomentum, performanceIndex: performance.index, age: entity.age,
+        devSpeed: entity.devSpeed, planId: "balanced", count: entity._earnedBreakthroughCount,
+      });
+      if(chance>0 && Math.random()<chance){
+        const gain = 3+Math.floor(Math.random()*4);
+        entity._talentCeilingBonus = clamp(entity._talentCeilingBonus+gain, 0, 30);
+        entity.talent = clamp(entity.talent+gain, 15, 99);
+        entity._earnedBreakthroughCount++;
+        entity.breakthroughMomentum = Math.max(0, entity.breakthroughMomentum-45);
       }
     }
   }
