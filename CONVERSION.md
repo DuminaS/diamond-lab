@@ -30,17 +30,21 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [x] icon.svg → baseball (PNG regeneration in public/ still TODO — no converter installed)
 - [ ] deploy-pages.yml: branch `master` → whatever the new repo uses
 
-### Phase 1 — domain data (src/data/)
-- [ ] teams.js — 30 MLB franchises, leagues, divisions by era, colors, PLAYOFF_ERAS
-- [ ] players.js (was qbs.js) — ~150 real MLB hitters, 12 tools, era
-- [ ] schemes.js — 8 hitting-approach philosophies
-- [ ] awards.js (data) — BADGE_ICONS, MLB_RECORDS, TROPHY_ICONS
+### Phase 1 — domain data (src/data/)  ✅ committed
+- [x] teams.js — 30 MLB franchises, leagues (AFC=AL/NFC=NL), divisions by era, colors, PLAYOFF_ERAS
+- [x] players.js (replaces qbs.js) — ~150 real MLB hitters, 12 tools, era
+- [x] schemes.js — 8 hitting-approach philosophies
+- [x] awards.js (data) — baseball icons, MLB_RECORDS; checkSeason/CareerRecords call sites migrated
 
-### Phase 2 — attribute & rating core
-- [ ] ATTRIBUTES / groups / radar labels
-- [ ] ERA_ATTR_AVG, LEAGUE era table, STAT_CAL era ceilings/floors
-- [ ] CURVES / PRIME_CURVE hitter aging
-- [ ] sim/ratings.js weights + prospect eval + draft order
+### Phase 2 — attribute & rating core  (in progress)
+- [x] ATTRIBUTES (12 hitter tools) / groups (accuracy→hitting everywhere incl. development.js) / GROUP_LABEL/ORDER
+- [x] LEAGUE era table → avg/obp/slg/hrRate/bbRate/kRate/paPerGame; DECADE_BLURB
+- [x] sim/ratings.js → HITTER_OVERALL_WEIGHTS (+ back-compat aliases), hitterOverall
+- [ ] STAT_CAL era ceilings/floors → AVG/OBP/SLG/HR/K/BB grounded in real record seasons
+- [ ] ERA_ATTR_MULT (era stat multipliers) — still football
+- [ ] CURVES / PRIME_CURVE / DEVELOPMENT_CURVES → hitter aging (peak 26-29)
+- [ ] draftSlotFor / chooseDraftTeam — MLB draft order
+- [ ] evaluateProspect return field footballOverall→hitterOverall (+ 3 main.js sites)
 
 ### Phase 3 — season sim
 - [ ] stat pipeline (PA/AB/H split/BB/K/RBI/R/SB → AVG/OBP/SLG/OPS/OPS+)

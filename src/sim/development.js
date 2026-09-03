@@ -6,7 +6,7 @@ const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 export const DEVELOPMENT_ATTRIBUTE_GROUPS = Object.freeze({
   ARM: "physical", REL: "physical", MOB: "physical", IMP: "physical",
-  DAC: "accuracy", SHA: "accuracy", TCH: "accuracy", PKT: "accuracy",
+  DAC: "hitting", SHA: "hitting", TCH: "hitting", PKT: "hitting",
   ANT: "mental", DEC: "mental", CLU: "mental", DUR: "mental",
 });
 
@@ -26,16 +26,16 @@ export const DEVELOPMENT_PLANS = Object.freeze({
   balanced: freezePlan({
     id: "balanced", label: "Balanced Program", icon: "BAL",
     summary: "No shortcuts and no major weakness: steady work across the whole game.",
-    growth: { physical: 1, accuracy: 1, mental: 1 },
-    decline: { physical: 1, accuracy: 1, mental: 1 },
+    growth: { physical: 1, hitting: 1, mental: 1 },
+    decline: { physical: 1, hitting: 1, mental: 1 },
     injuryRisk: 1, wearDelta: 0, chemistryDelta: 1,
     targetKeys: DEVELOPMENT_ATTRIBUTE_KEYS.filter(key => key !== "DUR"),
   }),
   mechanics: freezePlan({
     id: "mechanics", label: "Mechanics Lab", icon: "ACC",
-    summary: "Accelerate accuracy work, but sacrifice athletic and mental-development time.",
-    growth: { physical: 0.70, accuracy: 1.40, mental: 0.85 },
-    decline: { physical: 1, accuracy: 0.95, mental: 1 },
+    summary: "Accelerate hitting work, but sacrifice athletic and mental-development time.",
+    growth: { physical: 0.70, hitting: 1.40, mental: 0.85 },
+    decline: { physical: 1, hitting: 0.95, mental: 1 },
     injuryRisk: 1.04, wearDelta: 1, chemistryDelta: -3,
     breakthroughBonus: 0.008,
     targetKeys: ["DAC", "SHA", "TCH", "PKT"],
@@ -43,8 +43,8 @@ export const DEVELOPMENT_PLANS = Object.freeze({
   film: freezePlan({
     id: "film", label: "Film Room", icon: "IQ",
     summary: "Build anticipation, decisions, and clutch processing while physical work takes a back seat.",
-    growth: { physical: 0.65, accuracy: 0.80, mental: 1.50 },
-    decline: { physical: 1, accuracy: 0.95, mental: 0.85 },
+    growth: { physical: 0.65, hitting: 0.80, mental: 1.50 },
+    decline: { physical: 1, hitting: 0.95, mental: 0.85 },
     injuryRisk: 0.96, wearDelta: -1, chemistryDelta: -2,
     breakthroughBonus: 0.008,
     targetKeys: ["ANT", "DEC", "CLU"],
@@ -52,8 +52,8 @@ export const DEVELOPMENT_PLANS = Object.freeze({
   athletic: freezePlan({
     id: "athletic", label: "Athletic Camp", icon: "PHY",
     summary: "Chase arm and movement gains through a harder workload with real injury and wear costs.",
-    growth: { physical: 1.55, accuracy: 0.70, mental: 0.65 },
-    decline: { physical: 1.15, accuracy: 1, mental: 1 },
+    growth: { physical: 1.55, hitting: 0.70, mental: 0.65 },
+    decline: { physical: 1.15, hitting: 1, mental: 1 },
     injuryRisk: 1.18, wearDelta: 4, chemistryDelta: -4,
     breakthroughBonus: 0.012,
     targetKeys: ["ARM", "REL", "MOB", "IMP"],
@@ -61,16 +61,16 @@ export const DEVELOPMENT_PLANS = Object.freeze({
   chemistry: freezePlan({
     id: "chemistry", label: "Chemistry Camp", icon: "TEAM",
     summary: "Trade individual growth for timing, trust, and a small on-field team edge this season.",
-    growth: { physical: 0.80, accuracy: 0.80, mental: 0.85 },
-    decline: { physical: 1, accuracy: 1, mental: 1 },
+    growth: { physical: 0.80, hitting: 0.80, mental: 0.85 },
+    decline: { physical: 1, hitting: 1, mental: 1 },
     injuryRisk: 0.96, wearDelta: 0, chemistryDelta: 14,
     targetKeys: ["ANT", "DEC", "CLU", "TCH"],
   }),
   recovery: freezePlan({
     id: "recovery", label: "Recovery & Rehab", icon: "REST",
     summary: "Give up most growth to shed wear, lower injury risk, and slow age-related decline.",
-    growth: { physical: 0.45, accuracy: 0.45, mental: 0.45 },
-    decline: { physical: 0.45, accuracy: 0.55, mental: 0.65 },
+    growth: { physical: 0.45, hitting: 0.45, mental: 0.45 },
+    decline: { physical: 0.45, hitting: 0.55, mental: 0.65 },
     injuryRisk: 0.70, wearDelta: -12, chemistryDelta: -1,
     targetKeys: [],
   }),
@@ -155,7 +155,7 @@ export function earnedBreakthroughChance({ momentum, performanceIndex, age, devS
 // broad 8-12 point climb the default outcome for every healthy starter.
 export const DEVELOPMENT_CURVES = Object.freeze({
   physical: Object.freeze([[22,1.00],[25,0.65],[27,0],[30,-0.40],[33,-0.90],[36,-1.50],[39,-2.20],[42,-3.00]]),
-  accuracy: Object.freeze([[22,1.45],[25,1.15],[28,0.60],[31,0],[34,-0.40],[37,-0.90],[40,-1.50]]),
+  hitting: Object.freeze([[22,1.45],[25,1.15],[28,0.60],[31,0],[34,-0.40],[37,-0.90],[40,-1.50]]),
   mental: Object.freeze([[22,1.75],[25,1.45],[28,0.95],[31,0.50],[34,0],[37,-0.20],[40,-0.45],[43,-0.70]]),
 });
 
@@ -176,12 +176,12 @@ export function developmentBaseForGroup(group, age) {
   return curveValue(DEVELOPMENT_CURVES[group] || DEVELOPMENT_CURVES.mental, age);
 }
 
-// OVERALL_WEIGHTS resolve to 10% physical, 52% accuracy, and 38% mental.
+// OVERALL_WEIGHTS resolve to 10% physical, 52% hitting, and 38% mental.
 // Rival QBs use one talent scalar, so this is the matching weighted development
 // curve for that scalar rather than a separate, more or less generous species.
 export function developmentBaseForOverall(age) {
   return developmentBaseForGroup("physical", age) * 0.10
-    + developmentBaseForGroup("accuracy", age) * 0.52
+    + developmentBaseForGroup("hitting", age) * 0.52
     + developmentBaseForGroup("mental", age) * 0.38;
 }
 

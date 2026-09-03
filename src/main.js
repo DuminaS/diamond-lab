@@ -40,10 +40,40 @@ import {
   "use strict";
 
   /* ================= Data ================= */
-  const ATTRIBUTES = [{"key":"ARM","label":"Arm Strength","group":"physical"},{"key":"DAC","label":"Deep Ball Accuracy","group":"accuracy"},{"key":"SHA","label":"Short & Intermediate Accuracy","group":"accuracy"},{"key":"TCH","label":"Touch & Ball Placement","group":"accuracy"},{"key":"PKT","label":"Pocket Presence","group":"accuracy"},{"key":"REL","label":"Release Quickness","group":"physical"},{"key":"MOB","label":"Mobility","group":"physical"},{"key":"IMP","label":"Improvisation","group":"physical"},{"key":"ANT","label":"Anticipation","group":"mental"},{"key":"DEC","label":"Decision Making","group":"mental"},{"key":"CLU","label":"Clutch","group":"mental"},{"key":"DUR","label":"Durability","group":"mental"}];
+  // The 12 hitter tools. Keys are inherited unchanged from the Gridiron Lab skeleton (ATTR_KEYS,
+  // the radar chart, the development curves, and every scheme multiplier key off these 3-letter
+  // codes); only the labels and the group a tool belongs to changed for baseball. The group
+  // formerly called "accuracy" is now "hitting".
+  const ATTRIBUTES = [
+    {"key":"ARM","label":"Arm Strength","group":"physical"},
+    {"key":"REL","label":"Bat Speed","group":"physical"},
+    {"key":"MOB","label":"Speed","group":"physical"},
+    {"key":"IMP","label":"Baserunning Instinct","group":"physical"},
+    {"key":"DAC","label":"Raw Power","group":"hitting"},
+    {"key":"SHA","label":"Contact Hitting","group":"hitting"},
+    {"key":"TCH","label":"Bat Control","group":"hitting"},
+    {"key":"PKT","label":"Plate Discipline","group":"hitting"},
+    {"key":"ANT","label":"Pitch Recognition","group":"mental"},
+    {"key":"DEC","label":"Plate Approach","group":"mental"},
+    {"key":"CLU","label":"Clutch","group":"mental"},
+    {"key":"DUR","label":"Durability","group":"mental"},
+  ];
   const DECADES = ["1960s","1970s","1980s","1990s","2000s","2010s","2020s"];
-  const DECADE_BLURB = {"1960s":"Leather-tough, run-first, and barely forward-passing. Completion rates hover near 50%.","1970s":"The dead-ball era. Defenses rule, schedules run 14 games, and a 60% passer is a wizard.","1980s":"Play-action and the West Coast offense arrive. Arms get bigger, seasons hit 16 games.","1990s":"Zone blitzes, boundary rules loosen, and mobile quarterbacks start reshaping the position.","2000s":"The modern passing game takes hold — shotgun spreads, quick game, and record-book rewrites.","2010s":"Defenseless-receiver rules and RPOs turn the passer rating chart into a rocket.","2020s":"17-game slate, historic completion rates, and quarterbacks who run the whole offense pre-snap."};
-  const LEAGUE = {"1960s":{"games":14,"comp":0.51,"ypa":6.9,"tdRate":0.038,"intRate":0.052,"attPerGame":27},"1970s":{"games":14,"comp":0.52,"ypa":6.6,"tdRate":0.036,"intRate":0.05,"attPerGame":27},"1980s":{"games":16,"comp":0.56,"ypa":7,"tdRate":0.042,"intRate":0.042,"attPerGame":31},"1990s":{"games":16,"comp":0.58,"ypa":6.9,"tdRate":0.041,"intRate":0.036,"attPerGame":32},"2000s":{"games":16,"comp":0.6,"ypa":7,"tdRate":0.04,"intRate":0.03,"attPerGame":33},"2010s":{"games":16,"comp":0.63,"ypa":7.2,"tdRate":0.041,"intRate":0.024,"attPerGame":35},"2020s":{"games":17,"comp":0.655,"ypa":7.3,"tdRate":0.042,"intRate":0.021,"attPerGame":34}};
+  const DECADE_BLURB = {"1960s":"Pitching rules the earth — high mounds, big parks, a .240 hitter plays every day. 1968 is the nadir.","1970s":"Turf, the DH arrives in the AL, and speed comes back. Contact and stolen bases over the long ball.","1980s":"Balanced baseball — 30-30 seasons, artificial turf gap power, and the leadoff man as a weapon.","1990s":"Expansion, smaller parks, and the start of an offensive surge. Forty homers stops being special.","2000s":"The height of the offensive era — 50-homer seasons, .300 team averages, and a rewritten record book.","2010s":"The strikeout explosion and the launch-angle revolution. Velocity up, contact down, defense shifted.","2020s":"Three true outcomes, a lively then a deadened ball, the universal DH, and a pitch clock."};
+  // Per-era league-average rate context, consumed by the season stat engine. `games` is the
+  // schedule length; the rest are the offensive environment a league-average regular posts.
+  //   avg   batting average        obp   on-base percentage      slg   slugging percentage
+  //   hrRate  HR per plate appearance     bbRate  BB per PA      kRate  K per PA
+  //   paPerGame  plate appearances a full-time hitter gets per team game
+  const LEAGUE = {
+    "1960s":{ games:162, avg:0.248, obp:0.312, slg:0.375, hrRate:0.021, bbRate:0.082, kRate:0.157, paPerGame:4.2 },
+    "1970s":{ games:162, avg:0.256, obp:0.322, slg:0.375, hrRate:0.019, bbRate:0.085, kRate:0.135, paPerGame:4.2 },
+    "1980s":{ games:162, avg:0.258, obp:0.324, slg:0.393, hrRate:0.021, bbRate:0.085, kRate:0.138, paPerGame:4.2 },
+    "1990s":{ games:162, avg:0.266, obp:0.335, slg:0.418, hrRate:0.027, bbRate:0.090, kRate:0.163, paPerGame:4.25 },
+    "2000s":{ games:162, avg:0.267, obp:0.335, slg:0.427, hrRate:0.030, bbRate:0.088, kRate:0.168, paPerGame:4.25 },
+    "2010s":{ games:162, avg:0.255, obp:0.320, slg:0.410, hrRate:0.028, bbRate:0.079, kRate:0.204, paPerGame:4.2 },
+    "2020s":{ games:162, avg:0.246, obp:0.317, slg:0.407, hrRate:0.031, bbRate:0.085, kRate:0.223, paPerGame:4.15 },
+  };
   // ---- Career stat ceilings/floors (item #7) ----
   // Each decade's realistic per-attempt production range is grounded against an actual
   // record-caliber season from that decade, compared to that decade's LEAGUE average above.
@@ -282,7 +312,7 @@ import {
   }
   const CURVES = {
     physical: [[22,0.90],[24,0.95],[27,1.00],[29,1.00],[31,0.97],[33,0.90],[35,0.80],[37,0.68],[39,0.55],[41,0.45],[43,0.35]],
-    accuracy: [[22,0.78],[24,0.86],[27,0.95],[29,1.00],[32,1.00],[34,0.97],[36,0.92],[38,0.85],[40,0.76],[42,0.65]],
+    hitting:  [[22,0.78],[24,0.86],[27,0.95],[29,1.00],[32,1.00],[34,0.97],[36,0.92],[38,0.85],[40,0.76],[42,0.65]],
     mental:   [[22,0.65],[24,0.75],[26,0.85],[28,0.92],[30,0.97],[32,1.00],[35,1.00],[37,0.98],[39,0.94],[41,0.88],[43,0.80]],
   };
   function ageMultiplier(group, age){ return curveVal(CURVES[group] || CURVES.mental, age); }
@@ -9832,8 +9862,8 @@ import {
   // season's production once age, era, and scheme are all applied. Reuses the same
   // schemeEffective()/weighted() pipeline generateSeason() itself plays by, so nothing shown here
   // can contradict the season card's actual numbers. -----
-  const ATTR_GROUP_LABEL = { physical:"Physical", accuracy:"Accuracy", mental:"Mental & Intangibles" };
-  const ATTR_GROUP_ORDER = ["physical","accuracy","mental"];
+  const ATTR_GROUP_LABEL = { physical:"Physical", hitting:"Hitting", mental:"Mental & Intangibles" };
+  const ATTR_GROUP_ORDER = ["physical","hitting","mental"];
   // The per-season "This Season's Development" strip at the top of the Attributes tab -- built
   // from season.attrChanges (stashed by developAttributes() the moment it computes them) rather
   // than re-deriving anything, so this can never disagree with the transaction-log breakout/
@@ -10957,7 +10987,7 @@ import {
   }
 
   function offseasonPlanMeta(plan){
-    const groupLabel = { physical:"Physical", accuracy:"Accuracy", mental:"Mental" };
+    const groupLabel = { physical:"Physical", hitting:"Hitting", mental:"Mental" };
     const growth = Object.entries(plan.growth)
       .filter(([,value])=>value!==1)
       .map(([group,value])=>`${groupLabel[group]} growth ${signedPercent(value)}`);
@@ -11777,7 +11807,7 @@ import {
     // typed into this editor has had a chance to move it. The lazy same-session snapshot is only a
     // fallback for states without one (e.g. mid-development saves from before this existed).
     if(!adminState.buildSnapshot) adminState.buildSnapshot = career.originalBuild ? {...career.originalBuild} : {...build};
-    const groupOrder = [["accuracy","Accuracy"], ["physical","Physical"], ["mental","Mental"]];
+    const groupOrder = [["hitting","Hitting"], ["physical","Physical"], ["mental","Mental"]];
     const buildEditorHtml = `
       <div class="cbe-wrap">
         <div class="cbe-head">

@@ -1,23 +1,29 @@
 // Pure rating and draft-order calculations shared by the browser game and the
 // headless balance audit. Keep this module free of DOM and career-state access.
 
-export const FOOTBALL_OVERALL_WEIGHTS = Object.freeze({
-  SHA: 0.16,
-  TCH: 0.12,
-  DAC: 0.12,
-  PKT: 0.12,
-  ANT: 0.14,
-  DEC: 0.14,
-  CLU: 0.10,
-  ARM: 0.06,
-  REL: 0.02,
-  MOB: 0.01,
-  IMP: 0.01,
+// What actually predicts a hitter's value: getting on base and driving the ball. Power and
+// contact and plate discipline carry the load; approach and pitch recognition feed them; bat
+// speed, speed, baserunning and (fielding) arm are real but secondary; durability is excluded
+// (it gates how much of a career happens, not how good a season is). Sums to 1.0.
+export const HITTER_OVERALL_WEIGHTS = Object.freeze({
+  DAC: 0.16,
+  SHA: 0.15,
+  PKT: 0.15,
+  DEC: 0.12,
+  ANT: 0.12,
+  TCH: 0.09,
+  CLU: 0.06,
+  REL: 0.06,
+  MOB: 0.05,
+  IMP: 0.03,
+  ARM: 0.01,
 });
+// Back-compat alias -- main.js still imports the old name until the rename pass.
+export const FOOTBALL_OVERALL_WEIGHTS = HITTER_OVERALL_WEIGHTS;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
-export function weightedRating(values, weights = FOOTBALL_OVERALL_WEIGHTS) {
+export function weightedRating(values, weights = HITTER_OVERALL_WEIGHTS) {
   let total = 0;
   let weightTotal = 0;
   for (const [key, weight] of Object.entries(weights)) {
@@ -27,9 +33,11 @@ export function weightedRating(values, weights = FOOTBALL_OVERALL_WEIGHTS) {
   return weightTotal > 0 ? total / weightTotal : 0;
 }
 
-export function footballOverall(values) {
-  return weightedRating(values, FOOTBALL_OVERALL_WEIGHTS);
+export function hitterOverall(values) {
+  return weightedRating(values, HITTER_OVERALL_WEIGHTS);
 }
+// Back-compat alias.
+export const footballOverall = hitterOverall;
 
 // The Combine grade intentionally measures completeness. Football OVR is kept
 // alongside it because the career engine values the attributes unequally. These
