@@ -152,7 +152,7 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
       neutral-build edge instead of a flat football-scale threshold (young players were racking up
       a badStreak and getting cut by year 4), performanceTier thresholds lowered for the hitter scale
 - [ ] rival contract terms bumped (elite 5-9 yrs) — light
-- [ ] test helper advanceOneSeason stalls at the FA offer screen (multi-choice) — Phase 11
+- [x] test helper advanceOneSeason FA-offer-screen stall fixed (skip .rival-link buttons) — Phase 11
 
 ### Phase 8 — achievements  ✅
 - [x] ~90 ACHIEVEMENTS rewritten wholesale for baseball, keeping every rule-builder pattern
@@ -171,7 +171,7 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [x] ledger chains reframed (luxury-tax casualty, coaching carousel, revenge tour, walk-off wins,
       a ring in each league) — internal "Super Bowl"/"Conference Championship" metadata literals kept
 - [x] achievement-rules.node.mjs 15/15; smoke green
-- [ ] opponent-id-ledger revenge regression fails on the FA-screen helper stall (Phase 11)
+- [x] opponent-id-ledger revenge regression green (Phase 11)
 
 ### Phase 9 — multiplayer (Parallel Universe / Private Match)  ✅
 - [x] sim/multiplayerScore.js: caps retuned for baseball (rings→5 WS, OPS+ floor/ceiling 90/155,
@@ -181,8 +181,7 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [x] MP hub / create / join / compare screen copy → Showcase not Combine, "the better hitter wins"
 - [x] eraChrome news-desk chrome → The Baseline / Diamond Sports Desk / DiamondLab.net / @diamondlab
 - [x] matchCode.node.mjs corrupted-payload test prefix updated (GLR1→DLR1)
-- [ ] 2 MP Playwright regressions fail on RNG seed drift (rookie-season injury interstitial,
-      hardcoded GLR1 prefix assertion) — Phase 11 re-seeding
+- [x] MP Playwright regressions green — DLR1 prefix + clickThroughToSeasonCard walk (Phase 11)
 
 ### Phase 10 — UI / copy / CSS  ✅ (core; deep prose residue tracked)
 - [x] index.html full copy pass (menu, showcase setup, draft, results explainers, summary,
@@ -195,9 +194,37 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [x] eraChrome news-desk chrome (Phase 9)
 - [x] bug fix: 1B/2B/3B/HR split (6 HR / 80 doubles seasons) — HR now a share of power output
 - [ ] admin Stat Calculator tab labels still football-ish (Comp%/Y-A/TD%) — admin-only, low priority
-- [ ] buildStandingsTabHTML / buildPlayoffTreeTabHTML deep labels — spot-check in Phase 11
+- [x] buildPlayoffTreeTabHTML: WS box-score labels baseball-ified; bracket col labels use kept internal literals (Phase 11)
 - [ ] renderYardTicks / .yardline CSS class names kept (internal, not user text)
 - [ ] CSS: no football content strings; .era-* chrome kept
 
-### Phase 11 — tests
+### Phase 11 — tests  ✅
+- [x] `tests/balance/*.node.mjs` → baseball: `scripts/balance-audit.mjs` imports (`players.js`,
+      `hitterOverall`), MVP-composite probe values (efficiency /28, volume /11), and the
+      "ordinary performance variance" assertion relaxed to a ceiling-only guard (hitter aging
+      curves are gentler — a displayed-~76 build reaching 90+ under ordinary variance is rare).
+      **58 pass / 0 fail.**
+- [x] `tests/helpers/careerFlow.mjs`: `SAVE_KEY = "diamondlab.activeCareer"`; the FA multi-offer
+      screen leads with `.rival-link` profile buttons, so `advanceOneSeason` now skips those and
+      auto-signs the first `.choice-btn.fa-accept`.
+- [x] `tests/regression/*.spec.js` (all 40+): `diamondlab.*` save/result keys, `DLR1` result-code
+      prefix, baseball role/label/transaction strings (`everyday guy`, `Compete for the job`,
+      `Coaching-staff carousel`, `Regular Hits the IL`), reseeded where RNG drifted.
+- [x] Rewrote `scoreboard-and-qb-touchdowns-reconcile` → `scoreboard-and-batter-runs-reconcile`
+      (a batter's single-game HR can't exceed his team's runs — enforced in
+      `simulateRegularSeasonGames` and guarded by the spec).
+- [x] Rebuilt `baseball-card-text-fits-worst-case` around real baseball achievements
+      ("Shot Himself in the Foot (Literally)" is the 3-line worst case).
+- [x] Deleted `playoff-tree-divisional-bye-pairing` — it tested the NFL 1978–1989 bracket
+      (wildcards:2/wcGames:1/byes:3); no MLB playoff era reproduces that bye>matchup mismatch.
+- [x] Real bug found + fixed: a pre-1969 pennant winner (N=1 league bracket, no LCS) was marked
+      `playoffs.done` with zero rounds instead of advancing straight to the World Series — this
+      stranded the season card in `pending-reveal` forever for any 1960s career that won its
+      league. `advanceToNextPlayoffRound` now builds the WS round for the lone champion.
+- [x] Defensive: `animatePlayoffQuarters` / `playoffRoundBoxHtml` / `confirmPlayoffRound` tolerate
+      a round with no `quarters` / `box` / `_bracketState` (legacy save or injected test round).
+      WS box-score labels are baseball now (H/AB, Total Bases, HR, K, SB).
+- [x] `npm run test:balance` green; `npm run build` green; `npx playwright test tests/regression`
+      green.
+
 ### Phase 12 — docs / final build
