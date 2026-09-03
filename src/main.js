@@ -2397,6 +2397,14 @@ import {
         <span>Weakest: <b>${radarAttrs.slice().sort((a,b)=>a.value-b.value)[0].label}</b></span>
       </div>`;
 
+    // Multiplayer: no "Run it back" -- redoing the whole Combine from scratch would let a player
+    // see an entirely fresh set of rolls and try again, which is exactly the "same rolls, one shot,
+    // blind" guarantee the whole mode exists to protect. This is the SAME restriction as the
+    // in-round respin buttons (see startCombine/renderRound), just at the "redo everything" grain
+    // instead of "reroll one round."
+    const playAgainBtn = document.getElementById("playAgainBtn");
+    if(playAgainBtn) playAgainBtn.style.display = currentMultiplayerContext ? "none" : "";
+
     showScreen("results");
   }
 

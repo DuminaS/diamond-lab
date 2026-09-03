@@ -36,6 +36,11 @@ step (solo) / the Create-Join screens' own Key-Moments-only option (multiplayer,
 real choice there anymore). `resetToSoloSession()` resets `cs.mode` back to Classic and
 `syncModeToggleDisplay()` re-syncs the toggle's visible state on every visit, specifically so a
 forced-blind multiplayer session can never leave a stale mode showing on a later solo attempt.
+"No respins" originally covered only the in-Combine respin buttons; a same-day follow-up caught
+that the Results screen's own `#playAgainBtn` (literally labeled **"Run it back"**, redoes the
+entire Combine from scratch) was the bigger loophole and needed hiding too -- fixed the same way
+(`finishCombine()` hides it whenever `currentMultiplayerContext` is set). See PROGRESS.md for both
+entries.
 
 A visual overflow audit (development-plan picker + the exportable baseball card + a broader sweep)
 shipped 2026-09-03: fixed a real achievement-name-wrapping bug on the baseball card's SVG back face

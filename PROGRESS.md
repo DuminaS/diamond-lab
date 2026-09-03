@@ -959,6 +959,22 @@ Create/Join expose a Key Moments checkbox but never a Mode toggle; a multiplayer
 hub never renders `#fastForwardBtn`. `npm test`: 58/58 balance tests (unaffected, no pure-module
 changes this pass), production build clean, 55/55 Playwright (52 prior + 3 new).
 
+### Correction, same day: "Run it back" was a different button than first assumed
+
+The user's original phrase "no run it back for the drafting" was initially read as the in-Combine
+respin buttons (era/player respin, the ad-bonus pool) -- reasonable at a glance, but wrong: the
+Results screen (shown after all 12 rounds are picked, before "Draft Prospect") has its OWN button
+literally labeled **"Run it back"** (`#playAgainBtn`), which redoes the ENTIRE Combine from scratch
+with a fresh set of rolls. That's the more serious loophole for a "one shot, same rolls, blind"
+comparison -- a player unhappy with their build could just discard it and try again until landing on
+something better, which no amount of per-round respin restriction would have prevented. Caught from
+a follow-up screenshot pointing at the actual button. Fixed the same way as the respin restriction:
+`finishCombine()` now hides `#playAgainBtn` outright whenever `currentMultiplayerContext` is set
+("Draft Prospect" and "Copy build" are unaffected -- only the redo-everything path is closed). Two
+more Playwright tests added: multiplayer never shows "Run it back" on the results screen; solo play
+still does. `npm test`: 58/58 balance tests, production build clean, 57/57 Playwright (55 prior + 2
+new).
+
 ### Not done this pass
 
 Everything from the prior entry's "Not done" list still applies unchanged (Same League Mode, the

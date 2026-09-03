@@ -104,6 +104,13 @@ actually shipped (not in the original pass above, tightened after a direct follo
 - **No respins of any kind** — not the free era/player respin, not the ad-earned bonus pool. Both
   players see the exact same single set of four candidates each round with no way to reroll toward
   a better one; the whole respin UI is hidden outright rather than just shown disabled at "(0)".
+- **No "Run it back" either** — a genuinely separate button from the respins above: the Results
+  screen (after all 12 rounds are picked) has its own `#playAgainBtn`, literally labeled "Run it
+  back," that discards the whole build and starts the Combine over from scratch. Left available,
+  it would have been the bigger loophole of the two — a player unhappy with their build could just
+  keep redoing the entire Combine until landing on something better, no matter how tightly the
+  per-round respins were restricted. Hidden outright for a multiplayer Combine; "Draft Prospect" and
+  "Copy build" (a harmless share action) are unaffected.
 
 Plus the two additions the original pass already called for:
 

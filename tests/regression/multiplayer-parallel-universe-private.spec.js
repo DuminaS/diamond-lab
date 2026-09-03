@@ -247,6 +247,49 @@ test("multiplayer is always played Blind and never offers respins, even if Class
   expect(combineState.respinRowsVisible, "no respin UI should be visible in a multiplayer Combine").toBe(false);
 });
 
+test("multiplayer never offers \"Run it back\" (redo the whole Combine) on the results screen", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto("/");
+  await page.click("#multiplayerBtn");
+  await page.click("#mpCreateBtn");
+  await page.waitForSelector("#mpCreateDecadeGrid .decade-card", { timeout: 10_000 });
+  await page.click("#mpCreateDecadeGrid .decade-card >> nth=0");
+  await page.waitForSelector("#mpCreateCodePanel", { state: "visible", timeout: 10_000 });
+  await page.click("#mpCreateStartBtn");
+  for (let i = 0; i < 12; i++) {
+    await page.waitForSelector(".player-card", { timeout: 10_000 });
+    await page.click(".player-card >> nth=0");
+  }
+  await page.waitForSelector("#goProBtn", { timeout: 10_000 });
+
+  const runItBackVisible = await page.evaluate(() => {
+    const btn = document.getElementById("playAgainBtn");
+    return !!btn && getComputedStyle(btn).display !== "none";
+  });
+  expect(runItBackVisible, "\"Run it back\" must be hidden on a multiplayer Combine's results screen").toBe(false);
+  // "Draft Prospect" (the actual, one-shot path forward) and "Copy build" (a harmless share action,
+  // not a re-roll) must both remain available.
+  expect(await page.evaluate(() => !!document.getElementById("goProBtn"))).toBe(true);
+});
+
+test("solo play still shows \"Run it back\" on the results screen", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto("/");
+  await page.click("#startBtn");
+  await page.waitForSelector("#combineSetupBeginBtn", { timeout: 10_000 });
+  await page.click("#combineSetupBeginBtn");
+  for (let i = 0; i < 12; i++) {
+    await page.waitForSelector(".player-card", { timeout: 10_000 });
+    await page.click(".player-card >> nth=0");
+  }
+  await page.waitForSelector("#goProBtn", { timeout: 10_000 });
+  const runItBackVisible = await page.evaluate(() => {
+    const btn = document.getElementById("playAgainBtn");
+    return !!btn && getComputedStyle(btn).display !== "none";
+  });
+  expect(runItBackVisible).toBe(true);
+});
+
 test("multiplayer offers a Key Moments preference on Create/Join but never a Mode choice (forced Blind)", async ({ page }) => {
   test.setTimeout(30_000);
   await page.goto("/");
