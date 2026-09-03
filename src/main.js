@@ -5276,6 +5276,9 @@ import {
     // correct place to bump rivalry off a playoff result, for every round type uniformly.
     bumpRivalry(round._oppQbId ? findRivalById(round._oppQbId) : null, { playoff:true, won: round.won, close: Math.abs(round.myScore-round.oppScore)<=3 });
     if(round.round==="Super Bowl"){ playoffs.wonSuperBowl = round.won; playoffs.done = true; return; }
+    // A round with no live bracket state behind it (a legacy save, or a hand-injected round) can't
+    // walk the bracket any further -- settle the run on this round's own result.
+    if(!playoffs._bracketState || !season.leagueStandings || !season.leagueStandings.bracket){ playoffs.done = true; return; }
     // Round 32: record MY just-finished round (siblings included -- their results were already
     // rolled back when this round was first generated, but only become visible on the Playoff Tree
     // now that the player's own game is actually decided) and lockstep the other conference by

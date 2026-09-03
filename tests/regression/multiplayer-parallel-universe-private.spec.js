@@ -11,7 +11,7 @@
 import { test, expect } from "@playwright/test";
 import { encodeResultCode } from "../../src/sim/matchCode.js";
 import { installSeededRandom } from "../helpers/seededRandom.mjs";
-import { ensureBracketFinalized } from "../helpers/careerFlow.mjs";
+import { ensureBracketFinalized, clickThroughToSeasonCard } from "../helpers/careerFlow.mjs";
 
 async function readCombineRoundState(page) {
   return page.evaluate(() => {
@@ -126,6 +126,7 @@ test("full lifecycle: create, combine, locked decade, a shortened career, an exp
   await page.click("#enterDraftNightBtn");
   await page.waitForSelector("#startCareerBtn", { state: "visible", timeout: 10_000 });
   await page.click("#startCareerBtn");
+  await clickThroughToSeasonCard(page);
   await page.waitForSelector("#careerContent .season-card", { timeout: 15_000 });
 
   // Confirm the save landed in a NAMESPACED multiplayer key, never the plain solo key -- and that
@@ -330,6 +331,7 @@ test("multiplayer career hub never offers Fast-Forward", async ({ page }) => {
   await page.click("#enterDraftNightBtn");
   await page.waitForSelector("#startCareerBtn", { state: "visible", timeout: 10_000 });
   await page.click("#startCareerBtn");
+  await clickThroughToSeasonCard(page);
   await page.waitForSelector("#careerContent .season-card", { timeout: 15_000 });
 
   expect(await page.evaluate(() => !!document.getElementById("fastForwardBtn"))).toBe(false);
