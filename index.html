@@ -31,21 +31,21 @@
   <!-- MENU -->
   <section class="screen active" id="screen-menu">
     <div class="intro">
-      <h1>Draft twelve legends.<br>Build one QB.</h1>
-      <p class="lede">Every round hands you a decade and a real quarterback skill. Pick the best passer football has ever produced for that skill — then take your build to the Combine, and if it grades out, into a simulated career: draft night, trades, injuries, MVPs, and a Hall of Fame verdict at the end.</p>
+      <h1>Draft twelve legends.<br>Build one hitter.</h1>
+      <p class="lede">Every round hands you an era and a real hitting tool. Pick the best bat baseball has ever produced for that tool — then take your build to the Showcase, and if it grades out, into a simulated career: draft day, trades, injuries, MVPs, and a Cooperstown verdict at the end.</p>
     </div>
 
     <div class="menu-actions" style="margin-top:1.5rem;">
-      <button class="btn btn-primary" id="startBtn">Start the combine</button>
+      <button class="btn btn-primary" id="startBtn">Enter the Showcase</button>
       <button class="btn btn-ghost" id="trophyRoomBtn">Trophy Room</button>
       <button class="btn btn-ghost" id="achievementsBtn">Achievements</button>
       <button class="btn btn-ghost" id="multiplayerBtn">Multiplayer</button>
     </div>
 
     <div class="stat-row">
-      <span><b id="statQbCount">80</b> quarterbacks scouted</span>
-      <span><b>7</b> decades, 1960s–2020s</span>
-      <span><b>12</b> attributes per prospect</span>
+      <span><b id="statQbCount">80</b> hitters scouted</span>
+      <span><b>7</b> eras, 1960s–2020s</span>
+      <span><b>12</b> tools per prospect</span>
     </div>
 
     <div class="active-career-strip" id="activeCareerStrip"></div>
@@ -58,7 +58,7 @@
   <section class="screen" id="screen-combine-setup">
     <div class="section-label">Before you start</div>
     <h2 style="font-size:clamp(1.6rem,5vw,2.2rem);">Set your options.</h2>
-    <p class="lede" style="margin-top:0.6rem;">These apply to this Combine and the career that follows it.</p>
+    <p class="lede" style="margin-top:0.6rem;">These apply to this Showcase and the career that follows it.</p>
 
     <div class="section-label" style="margin-top:1.5rem;">Mode</div>
     <div class="mode-toggle" role="radiogroup" aria-label="Game mode">
@@ -70,12 +70,12 @@
     <div class="section-label" style="margin-top:1.5rem;">Key Moments <span class="km-beta-tag">Beta</span></div>
     <label class="km-toggle-row" for="keyMomentsToggle">
       <input type="checkbox" id="keyMomentsToggle">
-      <span>Enable the skill-based Key Moment mini-game during playoff games</span>
+      <span>Enable the skill-based clutch-at-bat mini-game during playoff games</span>
     </label>
-    <p class="mode-help">On big playoff possessions, read the scouting report and call the right play. Odds of one coming up scale with your build's Clutch. Off by default — toggle on to try it.</p>
+    <p class="mode-help">In big late-inning at-bats, read the pitcher and pick the right approach. Odds of one coming up scale with your build's Clutch. Off by default — toggle on to try it.</p>
 
     <div class="menu-actions" style="margin-top:1.75rem;">
-      <button class="btn btn-primary" id="combineSetupBeginBtn">Begin the Combine</button>
+      <button class="btn btn-primary" id="combineSetupBeginBtn">Begin the Showcase</button>
       <button class="btn btn-ghost" id="combineSetupBackBtn">Back to menu</button>
     </div>
   </section>
@@ -84,11 +84,11 @@
   <section class="screen" id="screen-draft">
     <div class="draft-head">
       <div>
-        <p class="eyebrow" id="draftPosLabel">Quarterback Combine · Classic</p>
+        <p class="eyebrow" id="draftPosLabel">Draft Showcase · Classic</p>
         <h2 id="draftAttrLabel">Arm Strength</h2>
       </div>
       <div class="draft-meta">
-        Round <span id="roundNum" class="tabular">1</span>/<span id="roundTotal">12</span>
+        Tool <span id="roundNum" class="tabular">1</span>/<span id="roundTotal">12</span>
         <div class="era-pill" id="eraPill">1980s</div>
       </div>
     </div>
@@ -117,7 +117,7 @@
     <div class="result-hero">
       <div>
         <div class="result-score"><span id="resultScore">0</span><sup>/100</sup></div>
-        <div class="result-grade">Combine Grade <b id="resultGrade">—</b></div>
+        <div class="result-grade">Showcase Grade <b id="resultGrade">—</b></div>
         <div class="result-flavor" id="resultFlavor">—</div>
         <div id="newBestBadge"></div>
       </div>
@@ -126,7 +126,7 @@
 
     <div class="scouting-head">
       <h2>Scouting profile</h2>
-      <div class="scouting-sub">12 attributes · every axis scored <b id="scoutingOverallLabel">0</b>/100 combine</div>
+      <div class="scouting-sub">12 tools · every axis scored <b id="scoutingOverallLabel">0</b>/100</div>
     </div>
     <div class="radar-wrap" id="scoutingRadar"></div>
 
@@ -134,26 +134,26 @@
     <div class="roster-list" id="rosterList"></div>
 
     <div class="results-actions">
-      <button class="btn btn-leather" id="goProBtn">Draft Prospect →</button>
+      <button class="btn btn-leather" id="goProBtn">Enter the Draft →</button>
       <button class="btn btn-primary" id="playAgainBtn">Run it back</button>
       <button class="btn btn-ghost" id="shareBtn">Copy build</button>
     </div>
 
     <details class="howscore">
-      <summary>How the combine grade works</summary>
-      <p><b>Combine Grade and Football OVR are deliberately different.</b> Combine Grade measures the completeness of all twelve picks. Football OVR uses the same position-specific weights as the career simulation, so accuracy, pocket play, anticipation, decision-making, and clutch matter more than secondary traits. Football OVR is the number teams use for your draft projection.</p>
-      <p>Your grade starts as the average of your twelve picks. Big gaps between your best and weakest pick cost you — the lab rewards a complete quarterback, not one huge number and eleven shrugs. Keep every pick at 90+ and you earn a small floor bonus.</p>
-      <p>The ceiling sits well under 100 on purpose: almost none of the <span id="howscoreQbCount">200+</span> quarterbacks in the pool ever grade above the low-to-mid 90s in any single skill, and nobody grades that high everywhere. A score in the 70s from an all-decade build is genuinely great.</p>
-      <p>The pool blends 80 real passers from NFL history with a larger set of generated prospects, so there's real depth beyond the household names. Every generated player is built from a transparent formula, not a gut call: a tier (Elite down to Camp Arm) sets a target overall, an archetype (Pocket Passer, Gunslinger, Dual-Threat, Game Manager, Field General) decides which of the twelve ratings sit above or below that target, and a bit of jitter keeps no two prospects identical. That's why a 64 is a 64 and not a 70 — it's math, not vibes.</p>
+      <summary>How the Showcase grade works</summary>
+      <p><b>Showcase Grade and Hitter OVR are deliberately different.</b> Showcase Grade measures the completeness of all twelve picks. Hitter OVR uses the same value weights as the career simulation, so raw power, contact, plate discipline, plate approach, and pitch recognition matter more than secondary tools. Hitter OVR is the number scouts use for your draft projection.</p>
+      <p>Your grade starts as the average of your twelve picks. Big gaps between your best and weakest pick cost you — the lab rewards a complete hitter, not one huge number and eleven shrugs. Keep every pick at 90+ and you earn a small floor bonus.</p>
+      <p>The ceiling sits well under 100 on purpose: almost none of the <span id="howscoreQbCount">200+</span> hitters in the pool ever grade above the low-to-mid 90s in any single tool, and nobody grades that high everywhere. A score in the 70s from an all-era build is genuinely great.</p>
+      <p>The pool blends real hitters from MLB history with a larger set of generated prospects, so there's real depth beyond the household names. Every generated player is built from a transparent formula, not a gut call: a tier (Elite down to Cup of Coffee) sets a target overall, an archetype (Slugger, Contact Hitter, Table-Setter, Five-Tool, On-Base Machine) decides which of the twelve tools sit above or below that target, and a bit of jitter keeps no two prospects identical. That's why a 64 is a 64 and not a 70 — it's math, not vibes.</p>
     </details>
 
     <details class="howscore">
       <summary>How your build shapes your career</summary>
-      <p>Every season, your twelve ratings are aged for how old you are that year (arm and legs peak in your mid-20s and fade after 30; touch and decision-making keep improving into your 30s) and then reweighted for the decade you're playing in — mobility and durability matter far more in the leather-tough 1960s-70s, while touch and anticipation matter far more in the rule-friendly 2010s-20s. The same build plays like a different player depending which era you enter.</p>
-      <p>Short/intermediate accuracy, touch, deep accuracy, and anticipation drive completion percentage. Arm strength, deep accuracy, touch, and improvisation drive yards per attempt. Anticipation, decision-making, and touch drive touchdowns; decision-making, anticipation, and pocket presence hold down interceptions. Mobility and improvisation now also generate real rushing production — a scrambler build racks up rush yards and touchdowns on top of the passing line, not just a passing-game penalty for everyone else. Durability drives your injury odds, and a blended overall rating drives team record, awards, contract tier, and whether you keep your job. The gap between a backup-caliber build and an elite one is deliberately wide — expect very different stat lines, not the same box score with a different name on it.</p>
-      <p>Your team has its own grade, separate from you, and it moves on its own from year to year — coaching changes, roster churn, a good or bad draft class — the same way a real front office can hand a great quarterback a bad supporting cast (or vice versa). Your rating does not magically improve the defense, coaching staff, or front office: a legendary arm can still lose games on a team that's falling apart around him.</p>
-      <p>Standings are now a real league: 8 divisions across 2 conferences, with every other team simulated off its own evolving grade. Division winners plus the best remaining records seed a 7-team playoff bracket per conference, so your seed and your record can never contradict each other — check the "View league standings" button on any season card to see the full picture. Only a Super Bowl appearance gets the quarter-by-quarter simulation and box score; every other round just shows the final.</p>
-      <p>That overall rating is also what a team is paying for. Play well and free agency brings multiple offers — a hometown deal, a contender, or the biggest paycheck on the board. Decline, and the options shrink to a prove-it minimum, or nothing at all. Aging veterans on bad teams get traded; quarterbacks who fall off a cliff get waived outright, with only a slim chance of catching on elsewhere. Very few careers make it anywhere near 40.</p>
+      <p>Every season, your twelve tools are aged for how old you are that year (bat speed and legs peak in your mid-20s and fade after 30; pitch recognition and plate approach keep improving into your 30s) and then reweighted for the era you're playing in — contact and speed matter far more in the pitching-dominant 1960s-70s, while raw power and bat speed matter far more in the launch-angle 2010s-20s. The same build plays like a different player depending which era you enter.</p>
+      <p>Contact hitting, bat control, pitch recognition, and plate approach drive batting average. Raw power and bat speed drive isolated power and home runs. Plate discipline, pitch recognition, and approach drive your walk rate; contact and bat control hold down strikeouts. Speed and baserunning instinct generate real stolen-base production on top of the batting line. Durability drives your injury odds, and a blended overall rating drives how much your bat lifts the team, awards, contract tier, and whether you keep your job. The gap between a bench-caliber build and an elite one is deliberately wide — expect very different stat lines, not the same box score with a different name on it.</p>
+      <p>Your team has its own grade, separate from you, and it moves on its own from year to year — a new manager, roster churn, a good or bad farm system — the same way a real front office can hand a great hitter a bad supporting cast (or vice versa). Your bat does not magically improve the pitching staff, the manager, or the front office: an inner-circle hitter can still lose 95 games on a team falling apart around him.</p>
+      <p>Standings are a real league: the American and National Leagues with their divisions, every other team simulated off its own evolving grade. Division winners plus the wild cards seed the postseason bracket per league, so your seed and your record can never contradict each other — check the "View league standings" button on any season card. Every playoff round the player is in gets the inning-by-inning simulation and box score.</p>
+      <p>That overall rating is also what a club is paying for. After six years of team control, free agency brings multiple offers — a hometown deal, a contender, or the biggest paycheck on the board. Decline, and the options shrink to a prove-it deal, or nothing at all. Aging veterans on bad teams get traded; hitters who fall off a cliff get released outright, with only a slim chance of catching on elsewhere. Very few careers make it much past 40.</p>
     </details>
   </section>
 
@@ -235,9 +235,9 @@
     </div>
 
     <div class="results-actions">
-      <button class="btn btn-leather" id="viewCardBtn">View trading card</button>
+      <button class="btn btn-leather" id="viewCardBtn">View baseball card</button>
       <button class="btn btn-leather" id="shareCareerBtn">Copy career recap</button>
-      <button class="btn btn-primary" id="newCareerBtn">Same build, new decade</button>
+      <button class="btn btn-primary" id="newCareerBtn">Same build, new era</button>
       <button class="btn btn-ghost" id="careerMenuBtn">Back to menu</button>
     </div>
   </section>
@@ -245,15 +245,15 @@
   <!-- TROPHY ROOM: a local leaderboard across every completed career on this browser -->
   <section class="screen" id="screen-trophyroom">
     <div class="section-label">Trophy Room</div>
-    <h2 style="font-size:clamp(1.6rem,5vw,2.2rem);">Every QB you've ever built.</h2>
-    <p class="lede" style="margin-top:0.6rem;">A local leaderboard across every completed career on this browser — who holds the record for rings, yards, rating, or the biggest paycheck.</p>
+    <h2 style="font-size:clamp(1.6rem,5vw,2.2rem);">Every hitter you've ever built.</h2>
+    <p class="lede" style="margin-top:0.6rem;">A local leaderboard across every completed career on this browser — who holds the record for rings, home runs, OPS+, or the biggest paycheck.</p>
 
     <div class="mode-toggle" id="trophyRoomSortRow" style="margin-top:1.25rem; flex-wrap:wrap;">
       <button type="button" class="tr-sort-btn active" data-sort="recent">Most Recent</button>
       <button type="button" class="tr-sort-btn" data-sort="rings">Rings</button>
-      <button type="button" class="tr-sort-btn" data-sort="yards">Pass Yards</button>
-      <button type="button" class="tr-sort-btn" data-sort="td">Touchdowns</button>
-      <button type="button" class="tr-sort-btn" data-sort="rating">Rating</button>
+      <button type="button" class="tr-sort-btn" data-sort="yards">Total Bases</button>
+      <button type="button" class="tr-sort-btn" data-sort="td">Home Runs</button>
+      <button type="button" class="tr-sort-btn" data-sort="rating">OPS+</button>
       <button type="button" class="tr-sort-btn" data-sort="earnings">Earnings</button>
       <button type="button" class="tr-sort-btn" data-sort="seasons">Seasons</button>
     </div>
@@ -312,7 +312,7 @@
       <div class="section-label" style="margin-top:1rem;">Key Moments <span class="km-beta-tag">Beta</span></div>
       <label class="km-toggle-row" for="mpCreateKeyMomentsToggle">
         <input type="checkbox" id="mpCreateKeyMomentsToggle">
-        <span>Enable the skill-based Key Moment mini-game during playoff games</span>
+        <span>Enable the skill-based clutch-at-bat mini-game during playoff games</span>
       </label>
       <p class="mode-help">A personal preference for your own career only — off by default.</p>
 
@@ -346,7 +346,7 @@
       <div class="section-label" style="margin-top:1rem;">Key Moments <span class="km-beta-tag">Beta</span></div>
       <label class="km-toggle-row" for="mpJoinKeyMomentsToggle">
         <input type="checkbox" id="mpJoinKeyMomentsToggle">
-        <span>Enable the skill-based Key Moment mini-game during playoff games</span>
+        <span>Enable the skill-based clutch-at-bat mini-game during playoff games</span>
       </label>
       <p class="mode-help">A personal preference for your own career only — off by default.</p>
 
@@ -406,7 +406,7 @@
 </div>
 <div id="buildStamp" aria-hidden="true"></div>
 
-<footer>Gridiron Lab — ratings, stat lines, and career outcomes are illustrative simulation, not real statistics or events.</footer>
+<footer>Diamond Lab — ratings, stat lines, and career outcomes are illustrative simulation, not real statistics or events.</footer>
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>

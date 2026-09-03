@@ -1498,7 +1498,7 @@ import {
       </tr>`).join("");
     return `<div class="table-wrap">
         <table class="league-table">
-          <thead><tr><th>QB</th><th>Verdict</th><th class="tabular">Seasons</th><th class="tabular">Rings</th><th class="tabular">Pass Yds</th><th class="tabular">TD</th><th class="tabular">Rating</th><th class="tabular">Earnings</th><th></th></tr></thead>
+          <thead><tr><th>Hitter</th><th>Verdict</th><th class="tabular">Seasons</th><th class="tabular">Rings</th><th class="tabular">TB</th><th class="tabular">HR</th><th class="tabular">OPS+</th><th class="tabular">Earnings</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -1649,8 +1649,8 @@ import {
       const teamBadgeRow = cardTeamBadgesSVG(entry.teamIds, entry.teams, 128);
       const trophyBits = [];
       if(entry.mvps) trophyBits.push(`${entry.mvps}x MVP`);
-      if(entry.allPros) trophyBits.push(`${entry.allPros}x All-Pro`);
-      if(entry.proBowls) trophyBits.push(`${entry.proBowls}x Pro Bowl`);
+      if(entry.allPros) trophyBits.push(`${entry.allPros}x Silver Slugger`);
+      if(entry.proBowls) trophyBits.push(`${entry.proBowls}x All-Star`);
       // Uncapped, a max-decorated (GOAT-tier) career's trophy line can genuinely run long --
       // e.g. "9x MVP  ·  12x All-Pro  ·  15x Pro Bowl" -- cap it defensively the same way teamsLine
       // just above already is.
@@ -1658,10 +1658,10 @@ import {
       const statBoxes = [
         ["SEASONS", entry.seasons],
         ["RINGS", entry.rings],
-        ["PASS YDS", entry.yards.toLocaleString()],
-        ["PASS TD", entry.td],
-        ["INT", entry.int],
-        ["RATING", entry.rating.toFixed(1)],
+        ["HITS", (entry.hits!=null?entry.hits:entry.comp||0).toLocaleString()],
+        ["HR", entry.td],
+        ["RBI", entry.rbi!=null?entry.rbi:"—"],
+        ["OPS+", Math.round(entry.rating)],
       ];
       const gridX = 40, gridY = 366, boxW = 106, boxH = 66, gapX = 8, gapY = 8;
       const statHtml = statBoxes.map((s,i)=>{
@@ -1686,12 +1686,12 @@ import {
           })()}
           ${teamBadgeRow || cardCenteredText(200, 128, teamsLine, {size:12, color:CARD_HEX.goldStrong})}
           <circle cx="200" cy="210" r="58" fill="rgba(212,175,55,0.08)" stroke="${CARD_HEX.gold}" stroke-width="2.5"/>
-          ${cardCenteredText(200, 202, "PEAK OVERALL", {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:1})}
+          ${cardCenteredText(200, 202, "PEAK OVR", {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:1})}
           ${cardCenteredText(200, 238, String(entry.peakOverall||Math.round(entry.rating)), {size:42, weight:800, color:CARD_HEX.gold, font:CARD_FONT_DISPLAY})}
           ${cardCenteredText(200, 296, entry.verdict, {size:14, weight:700, color:CARD_HEX.ink, font:CARD_FONT_DISPLAY})}
           ${cardCenteredText(200, 318, trophyLine, {size:11, color:CARD_HEX.inkMuted})}
           ${statHtml}
-          ${cardCenteredText(200, 540, "GRIDIRON LAB", {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:2})}
+          ${cardCenteredText(200, 540, "DIAMOND LAB", {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:2})}
         </svg>`;
     }
 
@@ -2385,18 +2385,18 @@ import {
   // long middle of the distribution (most builds land somewhere in C/B territory) doesn't get
   // flattened into one bucket.
   function gradeFor(score){
-    if(score>=94) return {grade:"S",  flavor:"GOAT-Tier Build"};
-    if(score>=89) return {grade:"A+", flavor:"Hall of Fame Build"};
-    if(score>=84) return {grade:"A",  flavor:"All-Pro Build"};
-    if(score>=79) return {grade:"A-", flavor:"Pro Bowl Build"};
-    if(score>=74) return {grade:"B+", flavor:"Borderline Pro Bowler"};
-    if(score>=69) return {grade:"B",  flavor:"Above-Average Starter"};
-    if(score>=63) return {grade:"C+", flavor:"Average Starter"};
-    if(score>=56) return {grade:"C",  flavor:"Below-Average Starter"};
-    if(score>=48) return {grade:"D+", flavor:"Fringe Starter"};
-    if(score>=40) return {grade:"D",  flavor:"Backup-Caliber"};
-    if(score>=32) return {grade:"D-", flavor:"Camp Body"};
-    return {grade:"F", flavor:"Cut Day"};
+    if(score>=94) return {grade:"S",  flavor:"Inner-Circle Build"};
+    if(score>=89) return {grade:"A+", flavor:"Cooperstown Build"};
+    if(score>=84) return {grade:"A",  flavor:"Silver Slugger Build"};
+    if(score>=79) return {grade:"A-", flavor:"All-Star Build"};
+    if(score>=74) return {grade:"B+", flavor:"Borderline All-Star"};
+    if(score>=69) return {grade:"B",  flavor:"Above-Average Regular"};
+    if(score>=63) return {grade:"C+", flavor:"Average Regular"};
+    if(score>=56) return {grade:"C",  flavor:"Below-Average Regular"};
+    if(score>=48) return {grade:"D+", flavor:"Fringe Regular"};
+    if(score>=40) return {grade:"D",  flavor:"Bench-Caliber"};
+    if(score>=32) return {grade:"D-", flavor:"Quad-A Bat"};
+    return {grade:"F", flavor:"Roster Cut"};
   }
   function computeCombineScore(picks){
     return evaluateProspect(picks);
@@ -2460,8 +2460,8 @@ import {
 
   document.getElementById("shareBtn").addEventListener("click", ()=>{
     const lines = [
-      `GRIDIRON LAB — QB build`,
-      `Combine grade: ${lastCombine.result.score}/100 (${lastCombine.grade.grade} · ${lastCombine.grade.flavor})`,
+      `DIAMOND LAB — hitter build`,
+      `Showcase grade: ${lastCombine.result.score}/100 (${lastCombine.grade.grade} · ${lastCombine.grade.flavor})`,
       ...cs.picks.map(p=>`${p.attr}: ${p.player.name} (${p.decade}) — ${p.value}`),
       window.location.href,
     ];
@@ -4527,15 +4527,15 @@ import {
     if(rival.isRival) facts.push(`Drafted the exact same year as you (${rival.draftYear}) — a true draft classmate.`);
     if(EASTER_EGG_NAMES.includes(rival.name)) facts.push(`Yes, that's really his name.`);
     if(seasonsPlayed){
-      const best = rival.seasons.reduce((a,b)=> b.rating>a.rating ? b : a, rival.seasons[0]);
-      facts.push(`Best season: ${best.year} — ${best.yards.toLocaleString()} yards, ${best.td} TD, a ${best.rating.toFixed(1)} rating.`);
+      const best = rival.seasons.reduce((a,b)=> (b.opsPlus||b.rating||0)>(a.opsPlus||a.rating||0) ? b : a, rival.seasons[0]);
+      facts.push(`Best season: ${best.year} — ${best.hr!=null?best.hr:best.td} HR, ${best.rbi||0} RBI, a ${best.opsPlus!=null?best.opsPlus:Math.round(best.rating||0)} OPS+.`);
     }
-    if(rival.totals.rings>0) facts.push(`${rival.totals.rings}-time Super Bowl champion.`);
+    if(rival.totals.rings>0) facts.push(`${rival.totals.rings}-time World Series champion.`);
     if(rival.totals.mvps>0) facts.push(`${rival.totals.mvps}-time MVP.`);
-    if(rival.totals.allPros>0) facts.push(`${rival.totals.allPros}-time All-Pro.`);
-    if(rival.totals.proBowls>0) facts.push(`${rival.totals.proBowls}-time Pro Bowler.`);
-    else if(seasonsPlayed>=4) facts.push(`Still hasn't made a Pro Bowl despite ${seasonsPlayed} seasons as a starter.`);
-    if(rival.succeededId) facts.push(`Took over the starting job after his predecessor retired.`);
+    if(rival.totals.allPros>0) facts.push(`${rival.totals.allPros}-time Silver Slugger.`);
+    if(rival.totals.proBowls>0) facts.push(`${rival.totals.proBowls}-time All-Star.`);
+    else if(seasonsPlayed>=4) facts.push(`Still hasn't made an All-Star team despite ${seasonsPlayed} seasons as a regular.`);
+    if(rival.succeededId) facts.push(`Took over the everyday job after his predecessor retired.`);
     if(rival.retired){
       const lastYear = seasonsPlayed ? rival.seasons[seasonsPlayed-1].year : rival.draftYear;
       facts.push(`Retired after the ${lastYear} season.`);
@@ -4560,8 +4560,8 @@ import {
     const winPct = totalGames>0 ? ((t.wins+0.5*(t.ties||0))/totalGames*100).toFixed(1) : "0.0";
     const badges = [
       t.mvps ? `<span class="badge gold">${t.mvps}x MVP</span>` : "",
-      t.allPros ? `<span class="badge good">${t.allPros}x All-Pro</span>` : "",
-      t.proBowls ? `<span class="badge good">${t.proBowls}x Pro Bowl</span>` : "",
+      t.allPros ? `<span class="badge good">${t.allPros}x Silver Slugger</span>` : "",
+      t.proBowls ? `<span class="badge good">${t.proBowls}x All-Star</span>` : "",
     ].join("");
     const facts = rivalCareerFunFacts(rival);
     const rec = (career.rivalries||{})[rival.id];
@@ -4578,13 +4578,13 @@ import {
     // buildTeamPageHTML/openTeamProfile, reachable from teamNameAt links) -- a QB's own profile now
     // shows what a player profile should: his own season-by-season stat line and awards.
     const seasonsRows = (rival.seasons||[]).slice().reverse().map(s=>`
-        <tr><td>${s.year}</td><td>${s.age}</td><td class="tabular">${s.comp}/${s.att}</td>
-        <td class="tabular">${s.yards.toLocaleString()}</td><td class="tabular">${s.td}</td><td class="tabular">${s.int}</td>
-        <td class="tabular">${s.rating.toFixed(1)}</td><td class="tabular">${recordLine(s.wins, s.losses, s.ties||0)}</td>
+        <tr><td>${s.year}</td><td>${s.age}</td><td class="tabular">${(s.avg!=null?s.avg:0).toFixed(3).replace(/^0/,"")}</td>
+        <td class="tabular">${s.hr!=null?s.hr:s.td}</td><td class="tabular">${s.rbi||0}</td><td class="tabular">${s.sb||0}</td>
+        <td class="tabular">${s.opsPlus!=null?s.opsPlus:Math.round(s.rating||0)}</td><td class="tabular">${recordLine(s.wins, s.losses, s.ties||0)}</td>
         <td>${(s.awards||[]).join(", ")||"—"}</td></tr>`).join("");
     const seasonsTableHtml = seasonsRows ? `<div class="table-wrap" style="margin-top:0.8rem;">
         <table class="career-table">
-          <thead><tr><th>Year</th><th>Age</th><th>Comp/Att</th><th>Yards</th><th>TD</th><th>INT</th><th>Rating</th><th>Record</th><th>Awards</th></tr></thead>
+          <thead><tr><th>Year</th><th>Age</th><th>AVG</th><th>HR</th><th>RBI</th><th>SB</th><th>OPS+</th><th>Record</th><th>Awards</th></tr></thead>
           <tbody>${seasonsRows}</tbody>
         </table>
       </div>` : "";
@@ -4596,11 +4596,11 @@ import {
         ${contractLine}
         ${availabilityLine}
         <div class="rival-stats-grid">
-          <div><div class="rv-label">Career Yards</div><div class="rv-value tabular">${t.yards.toLocaleString()}</div></div>
-          <div><div class="rv-label">Touchdowns</div><div class="rv-value tabular">${t.td}</div></div>
-          <div><div class="rv-label">Interceptions</div><div class="rv-value tabular">${t.int}</div></div>
-          <div><div class="rv-label">Rating</div><div class="rv-value tabular">${rating.toFixed(1)}</div></div>
-          <div><div class="rv-label">Record</div><div class="rv-value tabular">${recordLine(t.wins, t.losses, t.ties||0)}${totalGames?` (${winPct}%)`:""}</div></div>
+          <div><div class="rv-label">Hits</div><div class="rv-value tabular">${(t.comp||0).toLocaleString()}</div></div>
+          <div><div class="rv-label">Home Runs</div><div class="rv-value tabular">${t.td||0}</div></div>
+          <div><div class="rv-label">RBI</div><div class="rv-value tabular">${(t.rbi||0).toLocaleString()}</div></div>
+          <div><div class="rv-label">OPS+</div><div class="rv-value tabular">${Math.round(rating)}</div></div>
+          <div><div class="rv-label">Team Record</div><div class="rv-value tabular">${recordLine(t.wins, t.losses, t.ties||0)}${totalGames?` (${winPct}%)`:""}</div></div>
           <div><div class="rv-label">Games</div><div class="rv-value tabular">${t.games}</div></div>
         </div>
         ${badges ? `<div class="rival-badges">${badges}</div>` : ""}
@@ -5076,16 +5076,16 @@ import {
   // differently-derived ranking.
   function buildGradeCardsHtml(grades, rankInfo){
     const defs = [
-      { key:"oline", label:"Offensive Line",
-        impact:"Sack rate and injury risk — a shaky line means more hits taken; an elite one buys extra time in the pocket." },
-      { key:"weapons", label:"Weapons",
-        impact:"Completion % and yards per attempt — better targets make every throw a little easier to complete, and a little more likely to go the distance." },
-      { key:"defense", label:"Defense",
-        impact:"How many points opponents score, independent of the offense — a great defense can carry a team to wins the stat line alone wouldn't explain." },
-      { key:"coaching", label:"Coaching",
-        impact:"Attribute development speed, every single season — a strong staff genuinely develops talent faster; a bad one is a permanent drag on growth." },
+      { key:"oline", label:"Rotation",
+        impact:"Team run prevention and a small nudge to your own hittable-count rate — a strong front of the rotation keeps games close and takes pressure off the lineup." },
+      { key:"weapons", label:"Lineup",
+        impact:"The bats hitting around you — a deep lineup means more RBI chances, more fastballs to hit, and a small bump to average and on-base." },
+      { key:"defense", label:"Defense & Bullpen",
+        impact:"How many runs opponents score, independent of your bat — elite fielding and a lockdown pen can carry a team to wins the box score alone wouldn't explain." },
+      { key:"coaching", label:"Coaching Staff",
+        impact:"Tool development speed, every single season — a strong hitting coach genuinely develops talent faster; a bad one is a permanent drag on growth." },
       { key:"gmGrade", label:"Front Office",
-        impact:"Contract offer size and how patient the organization is through a rough stretch — a sharp front office pays fair value and doesn't panic; an incompetent one is erratic either way." },
+        impact:"Contract offer size and how patient the organization is through a rough stretch — a sharp front office pays fair value and doesn't panic; an erratic one does either." },
     ];
     return defs.map(g=>{
       const value = grades[g.key] ?? 60;
@@ -5896,11 +5896,14 @@ import {
     const hbp = Math.round(pa*0.009), sf = Math.round(pa*0.006);
     const ab = Math.max(0, pa - walks - hbp - sf);
     const hits = clamp(Math.round(ab*avgR), 0, ab);
-    const hr = clamp(Math.round(pa*hrRateR), 0, hits);
+    const powerBasesR = Math.max(0, Math.round(isoR * ab)); // 2B + 2*3B + 3*HR
+    // HR is a share of the power output (rises with the raw HR rate and with ISO), not a bare
+    // per-PA rate -- keeps a 20-HR power profile from reading as 6 HR / 80 doubles.
+    const hrShareR = clamp(0.44 + (isoR - 0.145)*0.9 + (hrRateR - 0.028)*3.5, 0.20, 0.74);
+    const hr = clamp(Math.round(powerBasesR * hrShareR / 3), 0, Math.max(0, hits - 3));
     const strikeouts = Math.max(0, Math.round(pa*kRateR));
-    const tbTarget = Math.round(ab*(avgR+isoR));
-    let doubles = clamp(Math.round((tbTarget - hits - 3*hr)/2), 0, Math.max(0, hits-hr));
-    const triples = clamp(Math.round((entity.talent-72)*0.05 + Math.random()*3), 0, Math.max(0, hits-hr-doubles));
+    let doubles = clamp(Math.round(powerBasesR - 3*hr), 0, Math.min(62, Math.max(0, hits-hr)));
+    const triples = clamp(Math.round((entity.talent-72)*0.04 + Math.random()*2.6), 0, Math.max(0, Math.round((hits-hr-doubles)*0.15)));
     const singles = Math.max(0, hits - hr - doubles - triples);
     const tbActual = singles + 2*doubles + 3*triples + 4*hr;
     const sbAtt = Math.max(0, Math.round(gamesPlayed * clamp((entity.talent-70)*0.006, 0, 0.55)));
@@ -6840,12 +6843,16 @@ import {
     const ab = Math.max(0, pa - walks - hbp - sf);
     const hits = clamp(completions, 0, ab);
     const strikeouts = interceptions;
-    const powerBases = Math.max(0, Math.round(isoRate * ab)); // 2B + 2*3B + 3*HR
-    const hrShare = clamp(0.26 + (effTd - neutralTd)*0.006, 0.12, 0.46); // pull-power vs. gap-power lean
+    const powerBases = Math.max(0, Math.round(isoRate * ab)); // extra bases: 2B + 2*3B + 3*HR
+    // What fraction of the power output is home runs vs. gap doubles. Rises with the HR-lean tool
+    // signal AND with raw ISO (a genuine slugger turns his extra-base hits into homers; a doubles
+    // machine spreads them into the gaps). Tuned so a .440-SLG / ~.155-ISO hitter lands ~20 HR /
+    // ~35 2B, not 6 HR / 80 2B.
+    const hrShare = clamp(0.44 + (effTd - neutralTd)*0.010 + (isoRate - 0.145)*0.9, 0.20, 0.74);
     const hr = clamp(Math.round(powerBases * hrShare / 3), 0, Math.max(0, hits - 3));
-    const triples = clamp(Math.round((effRush-64)*0.09 + Math.random()*2.4), 0, Math.max(0, hits - hr));
-    let doublesN = Math.round(powerBases*(1-hrShare) - 2*triples);
-    doublesN = clamp(doublesN, 0, Math.max(0, hits - hr - triples));
+    const triples = clamp(Math.round((effRush-64)*0.08 + Math.random()*2.2), 0, Math.max(0, Math.round((hits-hr)*0.14)));
+    let doublesN = Math.round((powerBases - 3*hr - 2*triples));
+    doublesN = clamp(doublesN, 0, Math.min(62, Math.max(0, hits - hr - triples)));
     const singles = Math.max(0, hits - hr - triples - doublesN);
     const totalBases = singles + 2*doublesN + 3*triples + 4*hr;
     const tbActual = totalBases;
@@ -9452,18 +9459,23 @@ import {
   // flat-resolved playoff games (nobody real involved) never got a per-game simulation, only a
   // final score. Distributes that QB's real per-game AVERAGE with natural variance rather than
   // fabricating something disconnected from his real season.
+  // A one-game batting line for a rival, sampled around his career per-game rates.
   function estimateSingleGameStatLine(qb){
     const t = qb && qb.totals;
     if(!t || !t.games) return null;
-    const jitter = ()=> 0.75+Math.random()*0.5;
-    const att = Math.max(1, Math.round((t.att/t.games)*jitter()));
-    const compPct = t.att>0 ? t.comp/t.att : 0, ypa = t.att>0 ? t.yards/t.att : 0;
-    const tdRate = t.att>0 ? t.td/t.att : 0, intRate = t.att>0 ? t.int/t.att : 0;
-    const comp = Math.min(att, Math.round(att*compPct));
-    const yards = Math.round(att*ypa*jitter());
-    const td = Math.max(0, Math.round(att*tdRate*jitter()));
-    const interceptions = Math.max(0, Math.round(att*intRate*jitter()));
-    return { comp, att, yards, td, int: interceptions, rating: passerRating(comp, att, yards, td, interceptions) };
+    const jitter = ()=> 0.3+Math.random()*1.6;
+    const ab = clamp(Math.round(3.4 + Math.random()*1.6), 2, 6);
+    const avg = t.att>0 && t.comp!=null ? clamp(t.comp/Math.max(1, t.att*0.9), 0, 0.5) : 0.25;
+    const hrPerAb = t.att>0 ? (t.td/Math.max(1,t.att*0.9)) : 0.03;
+    const h = clamp(Math.round(ab*clamp(avg*jitter(), 0, 1)), 0, ab);
+    const hr = h>0 && Math.random() < clamp(hrPerAb*ab*1.2, 0, 0.5) ? 1 : 0;
+    const bb = Math.random() < clamp((t.bb||0)/Math.max(1,t.att)*4.2/4.2, 0.03, 0.4) ? 1 : 0;
+    const k = Math.min(ab-h, Math.round(clamp((t.int||0)/Math.max(1,t.att), 0, 0.9) * (ab+bb) * (0.4+Math.random())));
+    const rbi = clamp(hr + (h-hr>0 && Math.random()<0.4?1:0), 0, 4);
+    const r = (h>0||bb>0) && Math.random()<0.4 ? 1 : 0;
+    return { ab, r, h, hr, rbi, bb, k: Math.max(0,k),
+      // legacy aliases used by the box-score line
+      comp: h, att: ab, yards: h + hr*3, td: hr, int: Math.max(0,k), rating: 0 };
   }
   function buildBracketBoxScoreModalHTML(match, year, roundLabel){
     const aName = svgEscape(teamNameAt(match.aId, year)), bName = svgEscape(teamNameAt(match.bId, year));
@@ -9480,21 +9492,23 @@ import {
         // through the backup mechanic at all, so this can only ever be non-null for a schedule-tab
         // match, never a real playoff round.
         const box = match.realRound && match.realRound.box;
-        const line = box ? `${box.comp}/${box.att}, ${box.yards} yds, ${box.td} TD, ${box.int} INT` : "";
+        const bl = b => `${b.h!=null?b.h:b.comp}-for-${b.ab!=null?b.ab:b.att}${(b.hr!=null?b.hr:b.td)?`, ${b.hr!=null?b.hr:b.td} HR`:""}${(b.rbi||0)?`, ${b.rbi} RBI`:""}${(b.bb||0)?`, ${b.bb} BB`:""}`;
+        const line = box ? bl(box) : "";
         const startedByOther = match.realRound && match.realRound.qbId;
         const label = startedByOther ? svgEscape(match.realRound.qbName || "a fill-in") : svgEscape(career.name);
         return `<div class="bracket-qb-line"><b>${label}</b>${line ? ` — ${line}` : ""}</div>`;
       }
       const qb = rivalForTeam(teamId);
       const line = qb ? estimateSingleGameStatLine(qb) : null;
-      return `<div class="bracket-qb-line">${qb ? `<button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button>` : "—"}${line ? ` — ${line.comp}/${line.att}, ${line.yards} yds, ${line.td} TD, ${line.int} INT, ${line.rating.toFixed(1)} rtg` : ""}</div>`;
+      const bl = b => `${b.h}-for-${b.ab}${b.hr?`, ${b.hr} HR`:""}${b.rbi?`, ${b.rbi} RBI`:""}${b.bb?`, ${b.bb} BB`:""}`;
+      return `<div class="bracket-qb-line">${qb ? `<button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button>` : "—"}${line ? ` — ${bl(line)}` : ""}</div>`;
     }
     const margin = Math.abs(match.aScore-match.bScore);
-    const recap = match.winnerId==null ? "Nobody blinked — this one ended in a tie."
-      : margin<=3 ? "A nail-biter decided in the final minutes." : margin>=21 ? "Never really in doubt after the first half." : "A hard-fought, back-and-forth game.";
+    const recap = match.winnerId==null ? "Nobody blinked — this one went to extras and stayed level."
+      : margin<=1 ? "A one-run game, decided in the final at-bat." : margin>=7 ? "Never really in doubt after the middle innings." : "A hard-fought, back-and-forth game.";
     return `<div class="modal-box">
         <div class="modal-head"><h3 id="bracketBoxScoreHeading">${svgEscape(roundDisplayLabel(roundLabel, year))}</h3><button type="button" class="modal-close">Close</button></div>
-        <div class="table-wrap"><table class="standings-table"><thead><tr><th></th><th class="tabular">Q1</th><th class="tabular">Q2</th><th class="tabular">Q3</th><th class="tabular">Q4</th><th class="tabular">F</th></tr></thead>
+        <div class="table-wrap"><table class="standings-table"><thead><tr><th></th><th class="tabular">1-3</th><th class="tabular">4-6</th><th class="tabular">7-9</th><th class="tabular">X</th><th class="tabular">R</th></tr></thead>
           <tbody>
             <tr class="${match.winnerId===match.aId?"me":""}"><td>${aName}</td><td class="tabular">${q1a}</td><td class="tabular">${q2a}</td><td class="tabular">${q3a}</td><td class="tabular">${q4a}</td><td class="tabular"><b>${match.aScore}</b></td></tr>
             <tr class="${match.winnerId===match.bId?"me":""}"><td>${bName}</td><td class="tabular">${q1b}</td><td class="tabular">${q2b}</td><td class="tabular">${q3b}</td><td class="tabular">${q4b}</td><td class="tabular"><b>${match.bScore}</b></td></tr>
@@ -9573,7 +9587,7 @@ import {
     let sbHtml = "";
     if(pb){
       const sbWinnerName = svgEscape(teamNameAt(pb.superBowlWinnerId, year)), sbLoserName = svgEscape(teamNameAt(pb.superBowlLoserId, year));
-      sbHtml = `<div class="calc-refnote" style="margin-top:0.4rem;">${svgEscape(superBowlDisplayName(year))}: ${sbWinnerName} def. ${sbLoserName}, <span class="tabular">${pb.superBowlScore}</span>${pb.superBowlWinnerId===career.teamId ? " — your Super Bowl!" : ""}</div>`;
+      sbHtml = `<div class="calc-refnote" style="margin-top:0.4rem;">${svgEscape(superBowlDisplayName(year))}: ${sbWinnerName} def. ${sbLoserName}, <span class="tabular">${pb.superBowlScore}</span>${pb.superBowlWinnerId===career.teamId ? " — your ring!" : ""}</div>`;
     }
 
     const innerHtml = `<div class="playoff-tree-inner">
@@ -9606,12 +9620,12 @@ import {
     name: (a,b)=> a.name.localeCompare(b.name),
     age: (a,b)=> a.age-b.age,
     games: (a,b)=> a.games-b.games,
-    pct: (a,b)=> a.pct-b.pct,
-    att: (a,b)=> a.att-b.att,
-    yards: (a,b)=> a.yards-b.yards,
-    td: (a,b)=> a.td-b.td,
-    int: (a,b)=> a.int-b.int,
-    rating: (a,b)=> a.rating-b.rating,
+    pct: (a,b)=> (a.pct||0)-(b.pct||0),           // AVG
+    td: (a,b)=> a.td-b.td,                         // HR
+    rbi: (a,b)=> (a.rbi||0)-(b.rbi||0),            // RBI
+    yards: (a,b)=> (a.hits||a.comp||0)-(b.hits||b.comp||0), // hits
+    int: (a,b)=> (a.sb||0)-(b.sb||0),              // SB
+    rating: (a,b)=> a.rating-b.rating,             // OPS+
   };
   const LEAGUE_INACTIVE_SORTERS = {
     name: (a,b)=> a.name.localeCompare(b.name),
@@ -9762,12 +9776,12 @@ import {
         <td>${r.mine ? svgEscape(r.name)+" (you)" : `<button type="button" class="rival-link" data-rival-id="${r.id}">${svgEscape(r.name)}</button>${r.isRival?" ★":""}`} <span style="color:var(--ink-muted);">— ${svgEscape(teamNameAt(r.teamId, season.year))}</span></td>
         <td class="tabular">${r.age}</td>
         <td class="tabular">${r.games}</td>
-        <td class="tabular">${(r.pct*100).toFixed(1)}%</td>
-        <td class="tabular">${r.att}</td>
-        <td class="tabular">${r.yards.toLocaleString()}</td>
+        <td class="tabular">${(r.pct||0).toFixed(3).replace(/^0/,"")}</td>
         <td class="tabular">${r.td}</td>
-        <td class="tabular">${r.int}</td>
-        <td class="tabular"><b>${r.rating.toFixed(1)}</b></td>
+        <td class="tabular">${r.rbi||0}</td>
+        <td class="tabular">${r.hits||r.comp||0}</td>
+        <td class="tabular">${r.sb||0}</td>
+        <td class="tabular"><b>${Math.round(r.rating)}</b></td>
         <td>${r.awards.map(a=>`<span class="badge ${a==="MVP"?"gold":"good"}" style="margin-right:0.25rem;">${a}</span>`).join("")}</td>
       </tr>`).join("");
   }
@@ -9876,8 +9890,8 @@ import {
     leagueTabSeason = season;
     const rows = computeSeasonAwardRows(season);
     const myRank = rows.findIndex(r=>r.mine)+1;
-    const proBowlCount = rows.filter(r=>r.awards.includes("Pro Bowl")).length;
-    const allProCount = rows.filter(r=>r.awards.some(a=>a.endsWith("All-Pro"))).length;
+    const proBowlCount = rows.filter(r=>r.awards.includes("All-Star")).length;
+    const allProCount = rows.filter(r=>r.awards.includes("Silver Slugger")).length;
     const mvpCount = rows.filter(r=>r.awards.includes("MVP")).length;
 
     const rowsHtml = buildLeagueActiveRowsHtml(season);
@@ -9930,20 +9944,20 @@ import {
           <button type="button" class="league-subtab-btn" data-league-subtab="alltime">All-Time</button>
         </div>
         <div class="league-subtab-panel active" data-league-panel="active">
-          <div class="calc-refnote">${year} passing leaderboard — every QB who actually played real games for their team this season, judged by the exact same Pro Bowl / All-Pro / MVP rules as you (see the Stat Calculator tab in Admin &amp; Testing for the formulas). You ranked <b>#${myRank}</b> of ${rows.length} in passer rating. League-wide this season: Pro Bowl ×${proBowlCount}, All-Pro ×${allProCount}, MVP ×${mvpCount}.</div>
+          <div class="calc-refnote">${year} hitting leaderboard — every hitter who played real games this season, judged by the exact same All-Star / Silver Slugger / MVP rules as you. You ranked <b>#${myRank}</b> of ${rows.length} in OPS+. League-wide this season: All-Star ×${proBowlCount}, Silver Slugger ×${allProCount}, MVP ×${mvpCount}.</div>
           <div class="table-wrap">
             <table class="league-table">
-              <thead><tr><th>#</th>${activeTh("name","QB")}${activeTh("age","Age","tabular")}${activeTh("games","GP","tabular")}${activeTh("pct","Comp%","tabular")}${activeTh("att","Att","tabular")}${activeTh("yards","Yds","tabular")}${activeTh("td","TD","tabular")}${activeTh("int","INT","tabular")}${activeTh("rating","Rating","tabular")}<th>Awards</th></tr></thead>
+              <thead><tr><th>#</th>${activeTh("name","Hitter")}${activeTh("age","Age","tabular")}${activeTh("games","G","tabular")}${activeTh("pct","AVG","tabular")}${activeTh("td","HR","tabular")}${activeTh("rbi","RBI","tabular")}${activeTh("yards","H","tabular")}${activeTh("int","SB","tabular")}${activeTh("rating","OPS+","tabular")}<th>Awards</th></tr></thead>
               <tbody>${rowsHtml}</tbody>
             </table>
           </div>
           ${classHtml}
         </div>
         <div class="league-subtab-panel" data-league-panel="inactive">
-          <div class="calc-refnote">${inactiveRows.length ? "Bench QBs who didn't get real snaps this season, plus every QB currently unsigned — nobody here has stats to show because none of them actually played." : "Nobody's sitting inactive right now — every bench QB in the league got at least a look this season."}</div>
+          <div class="calc-refnote">${inactiveRows.length ? "Bench bats who didn't get real playing time this season, plus every hitter currently unsigned — nobody here has stats to show." : "Nobody's sitting inactive right now — every bench bat in the league got at least a look this season."}</div>
           ${inactiveRows.length ? `<div class="table-wrap">
             <table class="league-table">
-              <thead><tr>${inactiveTh("name","QB")}${inactiveTh("age","Age","tabular")}${inactiveTh("overall","Overall","tabular")}<th>Status</th></tr></thead>
+              <thead><tr>${inactiveTh("name","Hitter")}${inactiveTh("age","Age","tabular")}${inactiveTh("overall","Overall","tabular")}<th>Status</th></tr></thead>
               <tbody>${inactiveRowsHtml}</tbody>
             </table>
           </div>` : ""}
@@ -9958,11 +9972,11 @@ import {
   }
 
   const TREND_STATS = [
-    { key:"rating", label:"Passer Rating", get:s=>s.rating },
-    { key:"yards", label:"Pass Yards", get:s=>s.yards },
-    { key:"td", label:"Touchdowns", get:s=>s.td },
-    { key:"int", label:"Interceptions", get:s=>s.int },
-    { key:"wins", label:"Wins", get:s=>s.wins },
+    { key:"rating", label:"OPS+", get:s=>s.rating },
+    { key:"hr", label:"Home Runs", get:s=>s.hr },
+    { key:"rbi", label:"RBI", get:s=>s.rbi },
+    { key:"avg", label:"Batting Avg", get:s=>Math.round((s.avg||0)*1000) },
+    { key:"wins", label:"Team Wins", get:s=>s.wins },
     { key:"teamOverall", label:"Team Grade", get:s=>s.teamOverall },
     { key:"rushYards", label:"Rush Yards", get:s=>s.rushYards },
   ];
@@ -9989,15 +10003,15 @@ import {
   function buildTrendsTabHTML(){
     const log = career.seasonLog;
     const rows = log.slice().reverse().map(s=>`
-        <tr><td>${s.year}</td><td class="team-cell">${s.teamName}</td><td>${s.rating}</td><td>${s.yards.toLocaleString()}</td>
-        <td>${s.td}</td><td>${recordLine(s.wins, s.losses, s.ties||0)}</td><td>${s.awards.join(", ")||"—"}</td></tr>`).join("");
+        <tr><td>${s.year}</td><td class="team-cell">${s.teamName}</td><td>${(s.avg||0).toFixed(3).replace(/^0/,"")}</td><td>${s.hr||s.td||0}</td>
+        <td>${s.rbi||0}</td><td>${s.opsPlus||s.rating||0}</td><td>${s.awards.join(", ")||"—"}</td></tr>`).join("");
     return `
       <div class="sparkline-wrap">
         <div id="trendsSparklineHolder"></div>
       </div>
       <div class="trend-table-wrap table-wrap">
         <table class="career-table">
-          <thead><tr><th>Year</th><th>Team</th><th>Rating</th><th>Yards</th><th>TD</th><th>Record</th><th>Awards</th></tr></thead>
+          <thead><tr><th>Year</th><th>Team</th><th>AVG</th><th>HR</th><th>RBI</th><th>OPS+</th><th>Awards</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`;
@@ -10023,7 +10037,7 @@ import {
   function buildSchemeTabHTML(){
     const schemeId = career.teamScheme ? career.teamScheme[career.teamId] : null;
     const scheme = SCHEMES.find(s=>s.id===schemeId);
-    if(!scheme) return `<p style="color:var(--ink-muted);">No scheme data for this team.</p>`;
+    if(!scheme) return `<p style="color:var(--ink-muted);">No approach data for this team.</p>`;
     return `
       <div class="scheme-head">
         <h4>${scheme.name}</h4>
@@ -10031,11 +10045,11 @@ import {
       </div>
       <div class="table-wrap">
         <table class="career-table scheme-table">
-          <thead><tr><th>Attribute</th><th>Scheme Impact</th><th>Fit</th></tr></thead>
+          <thead><tr><th>Tool</th><th>Approach Impact</th><th>Fit</th></tr></thead>
           <tbody>${schemeAttrRows(schemeId)}</tbody>
         </table>
       </div>
-      <p class="scheme-footnote">This is applied directly to on-field production, not flavor text — a favored attribute counts for more and a hurt one counts for less, exactly as shown above. Front-office shakeups (a fired coach, a new GM) can bring in a new coordinator and change the scheme entirely.</p>
+      <p class="scheme-footnote">This is applied directly to on-field production, not flavor text — a favored tool counts for more and a hurt one counts for less, exactly as shown above. Front-office shakeups (a fired manager, a new GM) can bring in a new hitting coach and change the club’s approach entirely.</p>
     `;
   }
 
@@ -10085,7 +10099,7 @@ import {
     const teamGrade = Math.round(career.teamStrength);
 
     const teamRankHtml = ranks.overall[career.teamId] ? ` — #${ranks.overall[career.teamId]} of ${ranks.total}` : "";
-    return `<div class="calc-refnote">${svgEscape(teamNameAt(career.teamId, career.year))} — Team Grade <b>${teamGrade}</b> (${svgEscape(gradeFor(clamp(teamGrade,0,98)).flavor)})${teamRankHtml}. Team Grade is a weighted read of the five grades below it (O-Line/Weapons 20% each, Defense 30%, Coaching 20%, Front Office 10%) — each still moves for its own legible reasons (roster variance, coaching changes, front-office moves), and each has a real, direct effect on your own numbers, not just flavor.</div>
+    return `<div class="calc-refnote">${svgEscape(teamNameAt(career.teamId, career.year))} — Team Grade <b>${teamGrade}</b> (${svgEscape(gradeFor(clamp(teamGrade,0,98)).flavor)})${teamRankHtml}. Team Grade is a weighted read of the five grades below it (Rotation/Lineup 20% each, Defense &amp; Bullpen 30%, Coaching 20%, Front Office 10%) — each moves for its own legible reasons (roster churn, a new manager, front-office moves), and each has a real, direct effect on your own numbers, not just flavor.</div>
       <div class="team-grade-grid">${gradeCards}</div>
       <div class="section-label" style="margin-top:1.4rem;">Depth Chart</div>
       <div class="table-wrap">
@@ -10197,7 +10211,7 @@ import {
       ${seasonProgressHtml}
       <div class="calc-metric">
         <div class="calc-metric-head"><span class="calc-metric-name">Overall (right now)</span><span class="calc-metric-result">${overallNow}</span></div>
-        <div class="calc-refnote">Development trait: <b>${svgEscape(devSpeedTag(devSpeed))}</b>. Ordinary growth now combines age, real playing time, coaching, the offseason program you selected, and performance against this build's own expected production. Meeting an elite player's expectation is neutral; repeatedly beating it builds breakthrough momentum. Random breakouts never accelerate themselves, while an earned breakthrough is the rare route that can permanently raise an attribute ceiling. Net change since draft day: <b>${totalDelta>0?"+":""}${totalDelta}</b> across all eleven developable attributes. "Effective" is the raw rating after age, era, temporary effects, and ${scheme?`the ${svgEscape(scheme.name)} scheme`:"scheme"} are applied.</div>
+        <div class="calc-refnote">Development trait: <b>${svgEscape(devSpeedTag(devSpeed))}</b>. Ordinary growth now combines age, real playing time, coaching, the offseason program you selected, and performance against this build's own expected production. Meeting an elite player's expectation is neutral; repeatedly beating it builds breakthrough momentum. Random breakouts never accelerate themselves, while an earned breakthrough is the rare route that can permanently raise a tool’s ceiling. Net change since draft day: <b>${totalDelta>0?"+":""}${totalDelta}</b> across all eleven developable tools. "Effective" is the raw rating after age, era, temporary effects, and ${scheme?`the ${svgEscape(scheme.name)} approach`:"the club’s approach"} are applied.</div>
       </div>
       ${blocks}
     `;
@@ -10281,8 +10295,8 @@ import {
           <div class="fo-row-sub">Durability ${build.DUR} — the body should hold up through roughly age ${ageCap}${yearsLeft>0 ? ` (about ${yearsLeft} more season${yearsLeft===1?"":"s"} at current age, injuries permitting)` : " — this could be the last one"}.</div>
         </div>
         <div class="fo-row">
-          <div class="fo-row-head"><span class="fo-row-label">Supporting Cast</span><span class="fo-row-value tabular">O-Line ${castLetterGrade(career.oline)} · Weapons ${castLetterGrade(career.weapons)}</span></div>
-          <div class="fo-row-sub">${career.oline<48 ? "A shaky line means more hits taken and a real bump to injury risk. " : career.oline>=82 ? "One of the best lines in the league — extra time in the pocket every week. " : ""}${career.weapons<48 ? "Thin at the skill positions — every rep gets a little harder to complete." : career.weapons>=82 ? "A genuinely stacked group of targets makes every throw a little easier." : ""}</div>
+          <div class="fo-row-head"><span class="fo-row-label">Roster</span><span class="fo-row-value tabular">Rotation ${castLetterGrade(career.oline)} · Lineup ${castLetterGrade(career.weapons)}</span></div>
+          <div class="fo-row-sub">${career.oline<48 ? "A thin rotation means more shootouts and a real bump to how many runs the team gives up. " : career.oline>=82 ? "One of the best rotations in the league — games stay close every night. " : ""}${career.weapons<48 ? "Nobody hitting around him — pitchers work around him and RBI chances dry up." : career.weapons>=82 ? "A genuinely stacked lineup means fastballs to hit and runners on base all night." : ""}</div>
         </div>
         ${buildDepthChartRowHTML()}
         ${scheme ? `<div class="fo-scheme-line">Running <b>${scheme.name}</b> — ${schemeFavorText(schemeId) || "no strong lean"}. <span class="fo-scheme-link" data-goto-scheme="1">See details →</span></div>` : ""}
@@ -10382,7 +10396,9 @@ import {
   function animateNumberTicker(el, finalValue, duration, kind){
     if(!el) return;
     const reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const format = kind==="decimal1" ? (v)=>v.toFixed(1) : (v)=>Math.round(v).toLocaleString();
+    const format = kind==="decimal1" ? (v)=>v.toFixed(1)
+      : kind==="avg3" ? (v)=>v.toFixed(3).replace(/^0/,"")
+      : (v)=>Math.round(v).toLocaleString();
     if(reduced || !finalValue){ el.textContent = format(finalValue); return; }
     const start = performance.now();
     function frame(now){
@@ -10460,9 +10476,10 @@ import {
       playoffRoundsHtml = `<div id="playoffRoundsHolder"></div>`;
     }
 
-    const rushMini = season.rushAtt>0
-      ? `<span>Rush <b class="tabular">${season.rushAtt}-${season.rushYards.toLocaleString()}${season.rushTd?" · "+season.rushTd+" TD":""}</b>${recBy.rushYards?recordBadgeHtml(recBy.rushYards):""}${simBy.rushYards?simBestBadgeHtml(simBy.rushYards):""}</span>` : "";
-    const sacksMini = `<span>Sacks Taken <b class="tabular">${season.sacks}</b></span>`;
+    const fmtAvg3 = v => (v||0).toFixed(3).replace(/^0/,"");
+    const rushMini = (season.sb||0)>0
+      ? `<span>SB <b class="tabular">${season.sb}${(season.cs||0)>0?`-${season.cs} CS`:""}</b>${recBy.sb?recordBadgeHtml(recBy.sb):""}${simBy.sb?simBestBadgeHtml(simBy.sb):""}</span>` : "";
+    const sacksMini = `<span>BB <b class="tabular">${season.bb||0}</b></span> <span>K <b class="tabular">${season.k||season.int||0}</b></span>`;
 
     // Overall delta badge: compares this season's grade against the PREVIOUS season's, the same
     // "roster update" convention sports games use -- so it reads as "what changed since last time,"
@@ -10507,7 +10524,7 @@ import {
               <button type="button" class="dash-tab" data-tab="awards">Awards</button>
               <button type="button" class="dash-tab" data-tab="trends">Career Trends</button>
               <button type="button" class="dash-tab" data-tab="attributes">Attributes</button>
-              <button type="button" class="dash-tab" data-tab="scheme">Scheme</button>
+              <button type="button" class="dash-tab" data-tab="scheme">Approach</button>
               <button type="button" class="dash-tab" data-tab="team">Team</button>
               <button type="button" class="dash-tab" data-tab="badges">Achievements</button>
               <button type="button" class="dash-tab" data-tab="log">Log</button>
@@ -10517,13 +10534,14 @@ import {
 
           <div class="dash-tabpanel active" id="tabpanel-season">
             <div class="widget-grid">
-              <div class="stat-widget"><span class="sw-label">Pass Yards</span><span class="sw-value tabular"><span class="sw-num" id="swNumYards" data-final="${season.yards}" data-kind="int">${season.yards.toLocaleString()}</span>${recBy.yards?recordBadgeHtml(recBy.yards):""}${simBy.yards?simBestBadgeHtml(simBy.yards):""}</span><span class="sw-sub">${season.comp}/${season.att} · ${(season.pct*100).toFixed(1)}%</span></div>
-              <div class="stat-widget"><span class="sw-label">Touchdowns</span><span class="sw-value good tabular"><span class="sw-num" id="swNumTd" data-final="${season.td}" data-kind="int">${season.td}</span>${recBy.td?recordBadgeHtml(recBy.td):""}${simBy.td?simBestBadgeHtml(simBy.td):""}</span><span class="sw-sub">${season.games} games played</span></div>
-              <div class="stat-widget${season.int>=15?" neg":""}"><span class="sw-label">Interceptions</span><span class="sw-value${season.int>=15?" bad":""} tabular"><span class="sw-num" id="swNumInt" data-final="${season.int}" data-kind="int">${season.int}</span></span><span class="sw-sub">&nbsp;</span></div>
-              <div class="stat-widget"><span class="sw-label">Passer Rating</span><span class="sw-value tabular"><span class="sw-num" id="swNumRating" data-final="${season.rating}" data-kind="decimal1">${season.rating}</span>${recBy.rating?recordBadgeHtml(recBy.rating):""}${simBy.rating?simBestBadgeHtml(simBy.rating):""}</span><span class="sw-sub">&nbsp;</span></div>
+              <div class="stat-widget"><span class="sw-label">Average</span><span class="sw-value tabular"><span class="sw-num" id="swNumYards" data-final="${(season.avg||0).toFixed(3)}" data-kind="avg3">${fmtAvg3(season.avg)}</span></span><span class="sw-sub">${fmtAvg3(season.obp)} OBP · ${fmtAvg3(season.slg)} SLG</span></div>
+              <div class="stat-widget"><span class="sw-label">Home Runs</span><span class="sw-value good tabular"><span class="sw-num" id="swNumTd" data-final="${season.hr||season.td}" data-kind="int">${season.hr||season.td}</span>${recBy.hr?recordBadgeHtml(recBy.hr):""}${simBy.hr?simBestBadgeHtml(simBy.hr):""}</span><span class="sw-sub">${season.rbi||0} RBI · ${season.runs||0} R</span></div>
+              <div class="stat-widget"><span class="sw-label">Hits</span><span class="sw-value tabular"><span class="sw-num" id="swNumInt" data-final="${season.hits||season.comp}" data-kind="int">${season.hits||season.comp}</span>${recBy.hits?recordBadgeHtml(recBy.hits):""}${simBy.hits?simBestBadgeHtml(simBy.hits):""}</span><span class="sw-sub">${season.doubles||0} 2B · ${season.triples||0} 3B</span></div>
+              <div class="stat-widget"><span class="sw-label">OPS+</span><span class="sw-value tabular"><span class="sw-num" id="swNumRating" data-final="${season.opsPlus||season.rating}" data-kind="int">${season.opsPlus||season.rating}</span>${recBy.opsPlus?recordBadgeHtml(recBy.opsPlus):""}${simBy.opsPlus?simBestBadgeHtml(simBy.opsPlus):""}</span><span class="sw-sub">100 = league avg</span></div>
             </div>
             <div class="mini-stat-row">
               <span>Games <b class="tabular">${season.games}</b></span>
+              <span>PA <b class="tabular">${season.pa||season.att}</b></span>
               ${rushMini}
               ${sacksMini}
             </div>
@@ -11623,9 +11641,11 @@ import {
       decade: career.decade, draftYear: career.draftYear, finalYear: career.year,
       verdict: verdict.tier, seasons: career.seasonLog.length, exitReason: career.exitReason,
       games: t.games, yards: t.yards, td: t.td, int: t.int, sacks: t.sacks,
+      hits: t.comp, comp: t.comp, rbi: t.rbi||0, runs: t.runs||0, bb: t.bb||0, sb: t.sb||0,
+      doubles: t.doubles||0, triples: t.triples||0,
       rushYards: t.rushYards, rushTd: t.rushTd, proBowls: t.proBowls, allPros: t.allPros,
       mvps: t.mvps, rings: t.rings, earnings: t.earnings,
-      rating: passerRating(t.comp, t.att, t.yards, t.td, t.int),
+      rating: passerRating(t.comp, t.att, t.yards, t.td, t.int, t.bb),
       peakOverall: Math.max(0, ...career.seasonLog.map(s=>s.overall||0)),
       teams: cardTeams,
       teamIds: cardTeamIds,
@@ -11719,7 +11739,7 @@ import {
     const verdict = hofVerdict();
     const t = career.totals;
     const lines = [
-      `GRIDIRON LAB — Career Recap`,
+      `DIAMOND LAB — Career Recap`,
       `${career.seasonLog.length} seasons (${career.draftYear}–${career.year}), starting decade ${career.decade}`,
       `Verdict: ${verdict.tier}`,
       `${t.yards.toLocaleString()} yds, ${t.td} TD, ${t.int} INT, ${t.proBowls} Pro Bowls, ${t.allPros} All-Pros, ${t.mvps} MVP, ${t.rings} ring(s)`,
@@ -12098,7 +12118,7 @@ import {
     const totalDelta = ATTR_KEYS.filter(k=>k!=="DUR").reduce((s,k)=> s+(build[k]-(original[k] ?? build[k])), 0);
     const devCard = `<div class="calc-group">
         <div class="calc-group-head">Career Development</div>
-        <div class="calc-refnote">Development trait: <b>${svgEscape(devSpeedTag(devSpeed))}</b> (devSpeed ×${devSpeed.toFixed(2)}, rolled once at the Combine — hidden from you at the time, revealed here, and persistent across the career). Every attribute except Durability drifts a little each season based on age, how much this build actually played that year, and this trait — mental attributes (Anticipation, Decision Making, Clutch) grow the longest and hold up best late; physical attributes (Arm, Mobility, Improvisation) peak early and fade the soonest, same as real QB aging. Breakouts and busts create exceptional seasons without rewriting the player's future development rate. Net change since draft day: <b>${totalDelta>0?"+":""}${totalDelta}</b> points across all eleven developable attributes.</div>
+        <div class="calc-refnote">Development trait: <b>${svgEscape(devSpeedTag(devSpeed))}</b> (devSpeed ×${devSpeed.toFixed(2)}, rolled once at the Combine — hidden from you at the time, revealed here, and persistent across the career). Every attribute except Durability drifts a little each season based on age, how much this build actually played that year, and this trait — the mental tools (Pitch Recognition, Plate Approach, Clutch) grow the longest and hold up best late; the physical tools (Bat Speed, Speed, Baserunning) peak early and fade the soonest, same as real hitter aging. Breakouts and busts create exceptional seasons without rewriting the player's future development rate. Net change since draft day: <b>${totalDelta>0?"+":""}${totalDelta}</b> points across all eleven developable tools.</div>
         <div class="admin-table-wrap"><table class="calc-ref-table"><thead><tr><th>Attribute</th><th>Draft Day</th><th>Now</th><th>Δ</th></tr></thead><tbody>${devRows}</tbody></table></div>
       </div>`;
 

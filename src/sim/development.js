@@ -32,8 +32,8 @@ export const DEVELOPMENT_PLANS = Object.freeze({
     targetKeys: DEVELOPMENT_ATTRIBUTE_KEYS.filter(key => key !== "DUR"),
   }),
   mechanics: freezePlan({
-    id: "mechanics", label: "Mechanics Lab", icon: "ACC",
-    summary: "Accelerate hitting work, but sacrifice athletic and mental-development time.",
+    id: "mechanics", label: "Hitting Lab", icon: "HIT",
+    summary: "Accelerate cage work on power and contact, but sacrifice athletic and mental-development time.",
     growth: { physical: 0.70, hitting: 1.40, mental: 0.85 },
     decline: { physical: 1, hitting: 0.95, mental: 1 },
     injuryRisk: 1.04, wearDelta: 1, chemistryDelta: -3,
@@ -41,8 +41,8 @@ export const DEVELOPMENT_PLANS = Object.freeze({
     targetKeys: ["DAC", "SHA", "TCH", "PKT"],
   }),
   film: freezePlan({
-    id: "film", label: "Film Room", icon: "IQ",
-    summary: "Build anticipation, decisions, and clutch processing while physical work takes a back seat.",
+    id: "film", label: "Video Room", icon: "IQ",
+    summary: "Build pitch recognition, plate approach, and clutch processing while physical work takes a back seat.",
     growth: { physical: 0.65, hitting: 0.80, mental: 1.50 },
     decline: { physical: 1, hitting: 0.95, mental: 0.85 },
     injuryRisk: 0.96, wearDelta: -1, chemistryDelta: -2,
@@ -51,7 +51,7 @@ export const DEVELOPMENT_PLANS = Object.freeze({
   }),
   athletic: freezePlan({
     id: "athletic", label: "Athletic Camp", icon: "PHY",
-    summary: "Chase arm and movement gains through a harder workload with real injury and wear costs.",
+    summary: "Chase bat speed, arm, and foot-speed gains through a harder workload with real injury and wear costs.",
     growth: { physical: 1.55, hitting: 0.70, mental: 0.65 },
     decline: { physical: 1.15, hitting: 1, mental: 1 },
     injuryRisk: 1.18, wearDelta: 4, chemistryDelta: -4,
@@ -59,7 +59,7 @@ export const DEVELOPMENT_PLANS = Object.freeze({
     targetKeys: ["ARM", "REL", "MOB", "IMP"],
   }),
   chemistry: freezePlan({
-    id: "chemistry", label: "Chemistry Camp", icon: "TEAM",
+    id: "chemistry", label: "Clubhouse Camp", icon: "TEAM",
     summary: "Trade individual growth for timing, trust, and a small on-field team edge this season.",
     growth: { physical: 0.80, hitting: 0.80, mental: 0.85 },
     decline: { physical: 1, hitting: 1, mental: 1 },
