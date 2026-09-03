@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
-// GitHub Pages serves this repo from a /gridiron-export/ subpath, but the Capacitor native app
+// GitHub Pages serves this repo from a /diamond-lab/ subpath, but the Capacitor native app
 // (and local dev) needs asset paths rooted at "/" -- the deploy workflow sets DEPLOY_TARGET=pages
 // only when building for Pages, everything else (npm run dev/build/android) is unaffected.
 const isPagesDeploy = process.env.DEPLOY_TARGET === "pages";
@@ -12,7 +12,7 @@ const isPagesDeploy = process.env.DEPLOY_TARGET === "pages";
 const buildTime = new Date().toISOString();
 
 export default defineConfig({
-  base: isPagesDeploy ? "/gridiron-export/" : "/",
+  base: isPagesDeploy ? "/diamond-lab/" : "/",
   define: {
     __BUILD_TIME__: JSON.stringify(buildTime),
   },
@@ -21,9 +21,9 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["favicon-32.png", "apple-touch-icon.png"],
       manifest: {
-        name: "Gridiron Lab",
-        short_name: "Gridiron Lab",
-        description: "Build a quarterback, take him through the Combine, and simulate his whole career.",
+        name: "Diamond Lab",
+        short_name: "Diamond Lab",
+        description: "Build a hitter, take him through the Showcase, and simulate his whole career.",
         theme_color: "#12181B",
         background_color: "#12181B",
         display: "standalone",

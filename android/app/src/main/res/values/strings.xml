@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Gridiron Lab</string>
-    <string name="title_activity_main">Gridiron Lab</string>
-    <string name="package_name">com.gridironlab.app</string>
-    <string name="custom_url_scheme">com.gridironlab.app</string>
+    <string name="app_name">Diamond Lab</string>
+    <string name="title_activity_main">Diamond Lab</string>
+    <string name="package_name">com.diamondlab.app</string>
+    <string name="custom_url_scheme">com.diamondlab.app</string>
 </resources>

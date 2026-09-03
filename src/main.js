@@ -1279,7 +1279,7 @@ import {
   // key LIST survives, copied into a Trophy Room entry's `achievements` array). Same storage
   // convention as Trophy Room (safeStorage-wrapped localStorage + an in-memory session mirror so a
   // blocked-storage context still behaves correctly for the life of this page load).
-  const ACHIEVEMENTS_GLOBAL_KEY = "gridironlab.achievementsGlobal";
+  const ACHIEVEMENTS_GLOBAL_KEY = "diamondlab.achievementsGlobal";
   let _sessionAchievementsGlobal = null;
   function loadGlobalAchievementsRaw(){
     if(_sessionAchievementsGlobal) return Object.assign({}, _sessionAchievementsGlobal);
@@ -1371,20 +1371,20 @@ import {
   function loadBest(){
     if(_sessionBest) return Object.assign({}, _sessionBest);
     if(!store) return {};
-    try{ return JSON.parse(store.getItem("gridironlab.qb.best")||"{}"); }catch(e){ return {}; }
+    try{ return JSON.parse(store.getItem("diamondlab.qb.best")||"{}"); }catch(e){ return {}; }
   }
   function saveBest(obj){
     _sessionBest = Object.assign({}, obj);
     if(!store) return;
-    try{ store.setItem("gridironlab.qb.best", JSON.stringify(obj)); }catch(e){}
+    try{ store.setItem("diamondlab.qb.best", JSON.stringify(obj)); }catch(e){}
   }
 
   // ----- Trophy Room: a local leaderboard across every completed career on this browser, not just
-  // the single "best" HOF tier gridironlab.qb.best already tracks -- lets a player who's run a dozen
+  // the single "best" HOF tier diamondlab.qb.best already tracks -- lets a player who's run a dozen
   // builds actually compare them (most rings, highest yards, best rating, biggest paycheck), same
   // "browser-local, no real accounts" constraint as the last-build profile above. Capped at 60
   // entries, dropping the OLDEST first, so this can't grow without bound over a long play history.
-  const TROPHY_ROOM_KEY = "gridironlab.trophyroom";
+  const TROPHY_ROOM_KEY = "diamondlab.trophyroom";
   const TROPHY_ROOM_CAP = 60;
   let _sessionTrophyRoom = null;
   function loadTrophyRoom(){
@@ -1751,7 +1751,7 @@ import {
   function loadLastBuildProfile(){
     if(_sessionLastBuild) return _sessionLastBuild;
     if(!store) return null;
-    try{ const raw = store.getItem("gridironlab.lastbuild"); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
+    try{ const raw = store.getItem("diamondlab.lastbuild"); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
   }
   function saveLastBuildProfile(picks){
     // cs.picks holds live player object references (whole QBS entries) -- only the handful of
@@ -1762,7 +1762,7 @@ import {
     const obj = { picks: serial, savedAt: Date.now() };
     _sessionLastBuild = obj;
     if(!store) return;
-    try{ store.setItem("gridironlab.lastbuild", JSON.stringify(obj)); }catch(e){}
+    try{ store.setItem("diamondlab.lastbuild", JSON.stringify(obj)); }catch(e){}
   }
   function relativeTimeAgo(ms){
     const diffSec = Math.max(0, Math.round((Date.now()-ms)/1000));
@@ -1818,11 +1818,11 @@ import {
   // retiredQbIds registry (Section 5's target schema). See syncQbRegistryFromLegacy for what
   // building it actually involves.
   const SAVE_SCHEMA_VERSION = 3;
-  const SOLO_ACTIVE_CAREER_KEY = "gridironlab.activeCareer";
+  const SOLO_ACTIVE_CAREER_KEY = "diamondlab.activeCareer";
   // Multiplayer Parallel Universe Mode (MULTIPLAYER_MODE_SPEC.md section 12.3): solo play always
   // uses the plain key above, completely untouched -- a multiplayer session (Create/Join Private
   // Match, or resuming one from the "Active Multiplayer Matches" list) points this at a namespaced
-  // key instead, `gridironlab.activeCareer.mp.<matchId>.<slot>`, so a device can hold any number of
+  // key instead, `diamondlab.activeCareer.mp.<matchId>.<slot>`, so a device can hold any number of
   // concurrent multiplayer matches (plus one ordinary solo save) without any of them colliding.
   // Every read/write in this file already goes through saveActiveCareer/loadActiveCareer/
   // clearActiveCareer, which all read this ONE variable -- switching it is the entire mechanism.
@@ -2027,12 +2027,12 @@ import {
     isEnabled(){
       if(_sessionKeyMoments!==null) return _sessionKeyMoments;
       if(!store) return false;
-      try{ return store.getItem("gridironlab.keymoments")==="on"; }catch(e){ return false; }
+      try{ return store.getItem("diamondlab.keymoments")==="on"; }catch(e){ return false; }
     },
     setEnabled(v){
       _sessionKeyMoments = !!v;
       if(!store) return;
-      try{ store.setItem("gridironlab.keymoments", v?"on":"off"); }catch(e){}
+      try{ store.setItem("diamondlab.keymoments", v?"on":"off"); }catch(e){}
     },
   };
 
@@ -2042,7 +2042,7 @@ import {
      backgrounded is unnecessary since nothing loops; a single header toggle covers it. ----- */
   const SFX = (()=>{
     let ctx = null, enabled = true;
-    try{ const saved = store && store.getItem("gridironlab.sound"); if(saved==="off") enabled=false; }catch(e){}
+    try{ const saved = store && store.getItem("diamondlab.sound"); if(saved==="off") enabled=false; }catch(e){}
     function getCtx(){
       if(!enabled) return null;
       if(!ctx){ try{ const AC = window.AudioContext || window.webkitAudioContext; if(AC) ctx = new AC(); }catch(e){ ctx = null; } }
@@ -2064,7 +2064,7 @@ import {
     }
     return {
       isEnabled(){ return enabled; },
-      setEnabled(v){ enabled=v; try{ store && store.setItem("gridironlab.sound", v?"on":"off"); }catch(e){} },
+      setEnabled(v){ enabled=v; try{ store && store.setItem("diamondlab.sound", v?"on":"off"); }catch(e){} },
       draftHorn(){
         // a quick three-note brass-ish stab, landing on the tonic — "you're drafted"
         tone(220, 0.00, 0.22, { type:"sawtooth", gain:0.09 });
@@ -2643,7 +2643,7 @@ import {
   // sync -- two prefixes cover everything: in-progress saves (SOLO_ACTIVE_CAREER_KEY+".mp."), and
   // finished-match results (persisted separately, see finishCareer's multiplayer hook, since
   // clearActiveCareer() removes the in-progress save the instant a career actually ends).
-  const MP_RESULT_KEY_PREFIX = "gridironlab.mpResult.";
+  const MP_RESULT_KEY_PREFIX = "diamondlab.mpResult.";
   function multiplayerResultKey(matchId, slot){ return `${MP_RESULT_KEY_PREFIX}${matchId}.${slot}`; }
   function splitMatchSlotSuffix(rest){
     const lastDot = rest.lastIndexOf(".");

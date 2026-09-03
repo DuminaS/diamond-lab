@@ -9,21 +9,19 @@
     <rect width="512" height="512" fill="#12181B" />
   </g>
 
-  <g transform="translate(256,256) rotate(-22)">
-    <!-- Solid football silhouette, sharpened tips -->
-    <path d="M -158,0
-             C -158,-48 -72,-86 0,-86
-             C 72,-86 158,-48 158,0
-             C 158,48 72,86 0,86
-             C -72,86 -158,48 -158,0 Z"
-          fill="#D4AF37" />
+  <!-- Baseball: gold ball body with dark seam channels and red stitch marks -->
+  <g transform="translate(256,256)">
+    <circle r="150" fill="#D4AF37" />
 
-    <!-- Seam + laces cut out of the gold shape as flat negative space, like the reference -->
-    <rect x="-78" y="-7" width="156" height="14" rx="6" fill="#12181B" />
-    <rect x="-58" y="-19" width="12" height="38" rx="3" fill="#12181B" />
-    <rect x="-32" y="-19" width="12" height="38" rx="3" fill="#12181B" />
-    <rect x="-6"  y="-19" width="12" height="38" rx="3" fill="#12181B" />
-    <rect x="20"  y="-19" width="12" height="38" rx="3" fill="#12181B" />
-    <rect x="46"  y="-19" width="12" height="38" rx="3" fill="#12181B" />
+    <!-- Left seam -->
+    <path d="M -104,-108 C -150,-58 -150,58 -104,108" fill="none" stroke="#12181B" stroke-width="14" stroke-linecap="round" />
+    <!-- Right seam -->
+    <path d="M 104,-108 C 150,-58 150,58 104,108" fill="none" stroke="#12181B" stroke-width="14" stroke-linecap="round" />
+
+    <!-- Stitch marks along both seams -->
+    <g stroke="#B4232A" stroke-width="9" stroke-linecap="round">
+      <path d="M -128,-78 l 26,10 M -140,-40 l 27,7 M -142,0 l 28,0 M -140,40 l 27,-7 M -128,78 l 26,-10" />
+      <path d="M 128,-78 l -26,10 M 140,-40 l -27,7 M 142,0 l -28,0 M 140,40 l -27,-7 M 128,78 l -26,-10" />
+    </g>
   </g>
 </svg>

@@ -1,101 +1,32 @@
-# Gridiron Lab — moving to VS Code + Claude Code
+# Diamond Lab
 
-This folder is a complete, self-contained snapshot of the game plus the full development history,
-packaged so a local Claude Code session picks up right where the Cowork session left off. Three
-files matter:
+A baseball career simulator. Build a hitter by picking his tools in the Showcase, then take him
+through a full MLB career: the draft, 162-game seasons, the postseason, awards, arbitration and
+free agency, injuries, rivalries, a Cooperstown verdict, and an exportable baseball card. There is
+also a two-player Parallel Universe mode (same seeded Showcase, independent careers, one Compare
+screen).
 
-- `src/main.js` / `src/style.css` — the game itself (markup lives in the root `index.html` shell).
-  This is now a Vite project — see "Previewing the game while you work" below for how to run it.
-- `CLAUDE.md` — auto-loaded by Claude Code on startup; a short orientation plus pointers.
-- `PROGRESS.md` — the full round-by-round development log: every decision, formula, and bug fix.
+Diamond Lab is a full conversion of **Gridiron Lab** (a QB-career simulator). It shares that
+project's engine skeleton — the season/playoff/awards/development/HOF machinery — reskinned and
+re-tuned end to end for baseball. Gridiron Lab lives in its own repo and is developed
+independently; nothing here syncs to it.
 
-## 1. Unzip this into a folder you'll keep
+Game logic, UI rendering, and styles all still live in one big IIFE — `src/main.js` — with pure
+simulation math factored into modules under `src/sim/` and static data under `src/data/`. The root
+`index.html` is a slim Vite entry shell (markup only).
 
-Pick a permanent location, e.g. `~/projects/gridiron-lab/`, and unzip the download there.
+## Build / run
 
-## 2. Install VS Code (if you don't have it)
+- `npm install`, then `npm run dev` for a live-reload dev server, `npm run build` for a production
+  build to `dist/`, `npm run preview` to serve that build locally.
+- `npm test` runs the balance guards, a production build, and the full Playwright browser suite.
+  `npm run balance:audit` prints the seeded distribution report.
+- `npm run android` builds, runs `cap sync android`, and opens the native Android project
+  (`android/`). Requires Android Studio + the Android SDK. App id `com.diamondlab.app`.
+- iOS is intentionally not set up (this dev machine is Windows).
 
-Download from https://code.visualstudio.com and install it. Then open this folder: `File > Open
-Folder...` and select the one you just unzipped.
+## Where the history is
 
-## 3. Install Claude Code
-
-Claude Code is a command-line tool; VS Code has an extension that integrates it into the editor.
-
-- Install the CLI: follow the instructions at https://docs.claude.com/en/docs/claude-code — the
-  short version is usually `npm install -g @anthropic-ai/claude-code` (needs Node.js installed
-  first — https://nodejs.org if you don't have it), then run `claude` once from a terminal to log in.
-- Install the VS Code extension: inside VS Code, open the Extensions panel (`Cmd/Ctrl+Shift+X`),
-  search "Claude Code," and install it. It gives you Claude Code in a side panel instead of a
-  separate terminal window, with the same underlying tool.
-
-## 4. Open a terminal in this folder and start Claude Code
-
-In VS Code: `Terminal > New Terminal` (it opens already in this folder). Run:
-
-```
-claude
-```
-
-It will automatically read `CLAUDE.md` for context. From here you can just talk to it the same way
-you were talking to this Cowork session — ask it to read `PROGRESS.md` for more detail on anything,
-make changes, run tests, etc.
-
-## 5. Put it under version control
-
-This preserves history going forward (every future change becomes a commit you can diff or revert),
-which matters a lot once you start restructuring this into a multi-file app. From the terminal in
-this folder:
-
-```
-git init
-git add .
-git commit -m "Import Gridiron Lab from Cowork session"
-```
-
-If you don't already have a GitHub/GitLab account and want a remote backup, create an empty repo
-there and follow its instructions to `git remote add origin ...` and push — Claude Code can also
-walk you through this interactively if you just ask it.
-
-## 6. Previewing the game while you work
-
-This is now a Vite project (Node.js required — see step 3). From a terminal in this folder:
-
-```
-npm install
-npm run dev
-```
-
-That starts a dev server with auto-reload on save (the terminal prints the local URL to open,
-typically `http://localhost:5173`). `npm run build` produces a production build in `dist/`;
-`npm run preview` serves that build locally to sanity-check it before shipping.
-
-## 7. The website (and iOS playtesting)
-
-`npm run build` produces `dist/` — a complete, installable **PWA** (manifest + service worker via
-`vite-plugin-pwa`, auto-updating). Deploy `dist/` to any static host (Cloudflare Pages, Netlify, and
-GitHub Pages all have generous free tiers and can auto-deploy from this git repo on every push) and
-that URL **is** the website. On iOS, a tester visits the URL in Safari and taps Share → "Add to Home
-Screen" to get a home-screen icon that behaves like an app and auto-updates whenever you redeploy —
-no App Store, no TestFlight, no Mac needed. Same deal on Android via Chrome's "Install app" prompt.
-
-## 8. Building the Android app
-
-This project is wrapped with [Capacitor](https://capacitorjs.com) for native Android distribution
-(`android/` folder, app id `com.gridironlab.app`). To build or run the native app you'll need
-**Android Studio** installed (it bundles the JDK; install the Android SDK through it too) —
-download from https://developer.android.com/studio. Once installed:
-
-```
-npm run android
-```
-
-This builds the web app, syncs it into the native project, and opens `android/` in Android Studio,
-where you can run it on an emulator or a connected device. iOS isn't set up yet — that needs a Mac
-(Xcode only runs on macOS).
-
-## What to tell Claude Code first
-
-Once it's running, a good opener is something like: "Read CLAUDE.md and PROGRESS.md, then give me a
-one-paragraph summary of where things stand" — that confirms it has picked up the full context
-before you ask it to change anything.
+`PROGRESS.md` is the full round-by-round development log — every shipped round, the reasoning
+behind every numeric dial, bugs caught and how. The football-era history is preserved below the
+baseball conversion entry. `CLAUDE.md` is the fast-start orientation loaded by Claude Code.

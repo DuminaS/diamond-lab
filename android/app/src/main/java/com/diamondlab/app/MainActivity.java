@@ -1,4 +1,4 @@
-package com.gridironlab.app;
+package com.diamondlab.app;
 
 import com.getcapacitor.BridgeActivity;
 
