@@ -19,7 +19,7 @@ test("championship-finalization-saves-one-ring", async ({ page }) => {
   let previousRings = 0;
   let sawTitle = false;
   for (let season = 0; season < 15; season++) {
-    const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+    const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
     if (!stillActive) break;
 
     const ok = await advanceOneSeason(page);

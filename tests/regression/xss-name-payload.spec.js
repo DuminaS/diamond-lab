@@ -29,11 +29,11 @@ test("name-html-is-rendered-not-executed", async ({ page }) => {
   // it later (Hall of Fame header, retrospective) -- walk to the end of the career quickly via a
   // forced retirement rather than playing it out.
   await page.evaluate(() => {
-    const raw = localStorage.getItem("gridironlab.activeCareer");
+    const raw = localStorage.getItem("diamondlab.activeCareer");
     if (raw) {
       const saved = JSON.parse(raw);
       saved.career.age = 40; // next advanceCareer() call hits the age-cap exit path
-      localStorage.setItem("gridironlab.activeCareer", JSON.stringify(saved));
+      localStorage.setItem("diamondlab.activeCareer", JSON.stringify(saved));
     }
   });
   await page.reload();

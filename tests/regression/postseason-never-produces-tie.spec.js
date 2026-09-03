@@ -18,7 +18,7 @@ test("postseason-never-produces-tie", async ({ page }) => {
 
   let checkedAnyPlayoffRound = false;
   for (let season = 0; season < 10; season++) {
-    const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+    const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
     if (!stillActive) break;
     const ok = await advanceOneSeason(page);
     const saved = await readActiveCareer(page);

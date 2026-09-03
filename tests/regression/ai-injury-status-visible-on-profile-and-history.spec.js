@@ -18,7 +18,7 @@ test("ai-injury-status-visible-on-profile-and-history", async ({ page }) => {
 
   let flagged = null;
   for (let season = 0; season < 12 && !flagged; season++) {
-    const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+    const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
     if (!stillActive) break;
     const ok = await advanceOneSeason(page);
     const saved = await readActiveCareer(page);
@@ -58,7 +58,7 @@ test("ai-injury-status-visible-on-profile-and-history", async ({ page }) => {
   const newsHit = (saved.career.leagueNewsLog || []).find(n =>
     n.teamId === flagged.teamId &&
     n.year === flagged.availability.year &&
-    (n.title === "Starter Injured" || n.title === "Starter Suspended")
+    (n.title === "Regular Hits the IL" || n.title === "Regular Suspended")
   );
   expect(
     newsHit,

@@ -63,7 +63,7 @@ test("key-moment-mini-game-resolves-and-updates-the-record", async ({ page }) =>
 
   let found = false;
   for (let season = 0; season < 12 && !found; season++) {
-    const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+    const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
     if (!stillActive) break;
 
     // Walk to this season's own season card WITHOUT letting anything blow through playoff rounds

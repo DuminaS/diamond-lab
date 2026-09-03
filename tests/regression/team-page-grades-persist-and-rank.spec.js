@@ -17,7 +17,7 @@ test("team-page-grades-persist-and-rank", async ({ page }) => {
   await startCareer(page, { decadeIndex: 3 });
 
   for (let i = 0; i < 3; i++) {
-    const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+    const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
     if (!stillActive) break;
     await advanceOneSeason(page);
   }

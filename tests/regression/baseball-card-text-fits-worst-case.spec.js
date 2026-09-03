@@ -21,26 +21,27 @@ test("baseball card SVG text never exceeds the card's own viewBox for a maximall
     name: "Maximilian Wentworth-Featherstonehaugh III",
     college: "University of Southern California",
     draftYear: 1974,
-    teams: ["San Francisco 49ers","Tampa Bay Buccaneers","New England Patriots","Kansas City Chiefs","Seattle Seahawks","Detroit Lions"],
-    teamIds: ["SF","TB","NE","KC","SEA","DET"],
+    teams: ["San Francisco Giants","Tampa Bay Rays","Boston Red Sox","Kansas City Royals","Seattle Mariners","Detroit Tigers"],
+    teamIds: ["SF","TB","BOS","KC","SEA","DET"],
     mvps: 9, allPros: 12, proBowls: 15,
-    seasons: 22, rings: 6, yards: 78432, td: 612, int: 210, rating: 108.4,
+    seasons: 22, rings: 6, yards: 6234, td: 762, int: 2100, rating: 168.4,
     peakOverall: 99,
     verdict: "First-Ballot Hall of Famer",
     exitReason: "retired",
-    draftLine: "1974: 1st overall by the San Francisco 49ers.",
+    draftLine: "1974: 1st overall by the San Francisco Giants.",
     relationshipLine: "Married a Hollywood actress in a televised ceremony that broke the internet for a week.",
     decade: "1970s",
     completedAt: Date.now(), earnings: 250000000,
-    // Deliberately includes the two longest achievement names in the registry as of Wave 7.
+    // Deliberately includes the longest achievement names in the registry -- "Shot Himself in the
+    // Foot (Literally)" needs a genuine 3rd wrapped line.
     achievements: [
-      "underthelights", "windycitychill", "hauntedbythesamedemon", "coordinatorsnightmare",
-      "backtobackheartbreak", "scandalthensuccess", "deniednotdefeated", "clutchunderpressure",
-      "bayarearesurgence", "jetsredemption", "buffaloclosure", "americasteam",
+      "shotfoot", "rangersfinally", "wrongplacewrongtime", "gotthatdawg",
+      "fiftybombs", "silvercollection", "housealwayswins", "clutchunderpressure",
+      "deniednotdefeated", "videogamenumbers", "vacuumcleaner", "reversethecurse",
     ],
   };
   await page.evaluate((entry) => {
-    localStorage.setItem("gridironlab.trophyroom", JSON.stringify([entry]));
+    localStorage.setItem("diamondlab.trophyroom", JSON.stringify([entry]));
   }, fakeEntry);
   await page.reload();
   await page.click("#trophyRoomBtn");
@@ -97,6 +98,6 @@ test("baseball card SVG text never exceeds the card's own viewBox for a maximall
 
   // The specific line that used to bleed into its neighbor: confirm it now wraps onto its own
   // multiple lines (rendered as several separate <text> elements) rather than one overlong string.
-  const underTheLightsLines = backBounds.filter(b => /Under the|Lights|Without Them/.test(b.text));
-  expect(underTheLightsLines.length, "the long achievement name should wrap across multiple <text> lines").toBeGreaterThanOrEqual(2);
+  const longNameLines = backBounds.filter(b => /Shot|Himself|Foot|Literally/.test(b.text));
+  expect(longNameLines.length, "the long achievement name should wrap across multiple <text> lines").toBeGreaterThanOrEqual(2);
 });

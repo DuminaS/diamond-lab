@@ -18,7 +18,7 @@ async function forceFreeAgencyAndCapture(page, seed, decadeIndex, seasonsFirst, 
   await installSeededRandom(page, seed);
   await startCareer(page, { decadeIndex });
   for (let i = 0; i < seasonsFirst; i++) {
-    const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+    const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
     if (!stillActive) return null;
     await advanceOneSeason(page);
   }
@@ -92,11 +92,11 @@ test("fa-role-matches-post-signing-depth-chart", async ({ page }) => {
     if (!result) continue;
     const awayOffers = result.offers.filter(o => o.teamId);
     const matchingOffers = awayOffers.filter(o => attempt.expectedRole === "competition"
-      ? o.roleLabel?.includes("Camp competition")
-      : !o.roleLabel?.includes("Camp competition"));
+      ? o.roleLabel?.includes("Compete for the job")
+      : !o.roleLabel?.includes("Compete for the job"));
     expect(matchingOffers.length, `expected a deterministic ${attempt.expectedRole} offer`).toBeGreaterThan(0);
     for (const o of matchingOffers) {
-      const isCompetition = o.roleLabel && o.roleLabel.includes("Camp competition");
+      const isCompetition = o.roleLabel && o.roleLabel.includes("Compete for the job");
       if (isCompetition) sawCompetition = true; else sawStarter = true;
 
       const before = await readActiveCareer(page);

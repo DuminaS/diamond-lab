@@ -18,7 +18,7 @@ test("signing a free-agent offer appends a real, correctly-shaped contract_signe
   await startCareer(page, { decadeIndex: 2 });
 
   for (let i = 0; i < 2; i++) {
-    const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+    const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
     if (!stillActive) break;
     await advanceOneSeason(page);
   }

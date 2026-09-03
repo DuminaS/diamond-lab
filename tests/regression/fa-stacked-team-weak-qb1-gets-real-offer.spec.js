@@ -16,7 +16,7 @@ test("fa-stacked-team-weak-qb1-gets-real-offer", async ({ page }) => {
   await startCareer(page, { decadeIndex: 2 });
 
   for (let i = 0; i < 2; i++) {
-    const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+    const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
     if (!stillActive) break;
     await advanceOneSeason(page);
   }
@@ -94,5 +94,8 @@ test("fa-stacked-team-weak-qb1-gets-real-offer", async ({ page }) => {
   }, targetTeamId);
 
   expect(stackedOffer, `expected the stacked team (${targetTeamId}) with its weak QB1 to make a real offer`).toBeTruthy();
-  expect(stackedOffer.roleLabel, "a clear talent upgrade over a genuinely weak incumbent should project as the starter").toContain("Sign as the starter");
+  // A clear talent upgrade over a genuinely weak incumbent projects as the everyday player, not a
+  // spring-training competition ("Sign as the everyday guy" / "Re-sign as the everyday guy").
+  expect(stackedOffer.roleLabel, "a clear talent upgrade over a genuinely weak incumbent should project as the everyday guy").toContain("everyday guy");
+  expect(stackedOffer.roleLabel).not.toContain("Compete for the job");
 });

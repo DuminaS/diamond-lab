@@ -20,7 +20,7 @@ for (const seed of SEEDS) {
 
     const allIssues = [];
     for (let season = 0; season < 25; season++) {
-      const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+      const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
       if (!stillActive) break;
       const ok = await advanceOneSeason(page);
       const saved = await readActiveCareer(page);

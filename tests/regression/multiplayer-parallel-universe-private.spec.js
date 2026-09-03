@@ -136,7 +136,7 @@ test("full lifecycle: create, combine, locked decade, a shortened career, an exp
   const saved = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), mpKey);
   expect(saved.career.multiplayerMatchId).toBeTruthy();
   expect(saved.career.multiplayerSlot).toBe("A");
-  expect(await page.evaluate(() => localStorage.getItem("gridironlab.activeCareer"))).toBeNull(); // never touched the solo key
+  expect(await page.evaluate(() => localStorage.getItem("diamondlab.activeCareer"))).toBeNull(); // never touched the solo key
 
   // Force a quick retirement (same "direct save mutation to reach a scenario deterministically"
   // convention this project's other regression tests already use) rather than playing out a full
@@ -162,11 +162,11 @@ test("full lifecycle: create, combine, locked decade, a shortened career, an exp
   await page.waitForSelector("#mpResultPanel", { state: "visible", timeout: 10_000 });
 
   const resultCodeA = await page.evaluate(() => document.getElementById("mpFinishCodeText").textContent.trim());
-  expect(resultCodeA).toMatch(/^GLR1-/);
+  expect(resultCodeA).toMatch(/^DLR1-/);
   // The in-progress save must be gone (finishCareer's clearActiveCareer), but a separate,
   // still-accessible result record must exist for the "Active Multiplayer Matches" strip.
   expect(await page.evaluate((key) => localStorage.getItem(key), mpKey)).toBeNull();
-  const resultKeys = await page.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith("gridironlab.mpResult.")));
+  const resultKeys = await page.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith("diamondlab.mpResult.")));
   expect(resultKeys.length).toBe(1);
 
   // Build a synthetic but realistically-shaped "Player B" result for the SAME match, using the

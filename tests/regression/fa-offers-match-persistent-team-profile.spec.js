@@ -27,7 +27,7 @@ test("fa-offers-match-persistent-team-profile", async ({ page }) => {
   // A couple of real seasons first, so career.leagueTeamGrades holds real, already-established
   // values (via ensureLeagueTeamGrades/resolvePlayoffs) rather than career-start defaults only.
   for (let i = 0; i < 2; i++) {
-    const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+    const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
     if (!stillActive) break;
     await advanceOneSeason(page);
   }

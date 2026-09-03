@@ -21,7 +21,8 @@ async function forceLastSeasonPlayoffResult(page, round, won) {
   lastSeason.playoffs = {
     made: true,
     done: true,
-    rounds: [{ round, won, opponent: "Test Rival", myScore: won ? 27 : 14, oppScore: won ? 14 : 27 }],
+    rounds: [{ round, won, opponent: "Test Rival", myScore: won ? 6 : 2, oppScore: won ? 2 : 6,
+      box: { comp: 1, att: 4, yards: 4, td: won ? 1 : 0, int: 1, rushAtt: 0, rushYards: 0, rushTd: 0 } }],
   };
   saved.career._coordinatorCarouselCheckedYear = null; // force a fresh check next season
   await writeActiveCareer(page, saved);
@@ -46,7 +47,7 @@ test("a Super Bowl loss can trigger the coordinator carousel", async ({ page }) 
 
   const after = await readActiveCareer(page);
   expect(after.career.coaching, "a deep-run coordinator carousel hit must actually lower coaching").toBeLessThan(coachingBefore);
-  const carouselTxn = after.career.transactions.find(t => t.includes("Coordinator carousel"));
+  const carouselTxn = after.career.transactions.find(t => t.includes("Coaching-staff carousel"));
   expect(carouselTxn, `transactions: ${JSON.stringify(after.career.transactions.slice(-3))}`).toBeTruthy();
 });
 
@@ -70,7 +71,7 @@ test("a Wild Card exit never triggers the coordinator carousel", async ({ page }
   expect(ok).toBe(true);
 
   const after = await readActiveCareer(page);
-  const carouselTxn = after.career.transactions.find(t => t.includes("Coordinator carousel"));
+  const carouselTxn = after.career.transactions.find(t => t.includes("Coaching-staff carousel"));
   expect(carouselTxn, `transactions: ${JSON.stringify(after.career.transactions.slice(-3))}`).toBeFalsy();
 });
 
@@ -89,7 +90,7 @@ test("the carousel check only runs once per year even if re-entered", async ({ p
 
   const afterFirst = await readActiveCareer(page);
   const coachingAfterFirst = afterFirst.career.coaching;
-  const carouselCountAfterFirst = afterFirst.career.transactions.filter(t => t.includes("Coordinator carousel")).length;
+  const carouselCountAfterFirst = afterFirst.career.transactions.filter(t => t.includes("Coaching-staff carousel")).length;
   expect(carouselCountAfterFirst).toBeGreaterThan(0);
 
   // Reload and resume again without changing anything else -- the guard
@@ -101,6 +102,6 @@ test("the carousel check only runs once per year even if re-entered", async ({ p
 
   const afterReload = await readActiveCareer(page);
   expect(afterReload.career.coaching).toBe(coachingAfterFirst);
-  const carouselCountAfterReload = afterReload.career.transactions.filter(t => t.includes("Coordinator carousel")).length;
+  const carouselCountAfterReload = afterReload.career.transactions.filter(t => t.includes("Coaching-staff carousel")).length;
   expect(carouselCountAfterReload).toBe(carouselCountAfterFirst);
 });

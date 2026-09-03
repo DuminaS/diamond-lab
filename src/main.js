@@ -239,11 +239,11 @@ import {
           <div class="sb-quarters" id="pqQuarters-${i}"></div>
           <div class="pr-controls" id="pqControls-${i}"></div>
           <div class="sb-box" id="sbBox-${i}" style="display:none;">
-            <div><div class="sbx-label">Comp/Att</div><div class="sbx-value tabular">${r.box.comp}/${r.box.att}</div></div>
-            <div><div class="sbx-label">Yards</div><div class="sbx-value tabular">${r.box.yards}</div></div>
-            <div><div class="sbx-label">TD</div><div class="sbx-value tabular">${r.box.td}</div></div>
-            <div><div class="sbx-label">INT</div><div class="sbx-value tabular">${r.box.int}</div></div>
-            ${r.box.rushAtt>0?`<div><div class="sbx-label">Rush</div><div class="sbx-value tabular">${r.box.rushAtt}-${r.box.rushYards}${r.box.rushTd?" · "+r.box.rushTd+" TD":""}</div></div>`:""}
+            <div><div class="sbx-label">H/AB</div><div class="sbx-value tabular">${(r.box?.comp)??0}-for-${(r.box?.att)??0}</div></div>
+            <div><div class="sbx-label">Total Bases</div><div class="sbx-value tabular">${(r.box?.yards)??0}</div></div>
+            <div><div class="sbx-label">HR</div><div class="sbx-value tabular">${(r.box?.td)??0}</div></div>
+            <div><div class="sbx-label">K</div><div class="sbx-value tabular">${(r.box?.int)??0}</div></div>
+            ${r.box&&r.box.rushAtt>0?`<div><div class="sbx-label">SB</div><div class="sbx-value tabular">${r.box.rushYards}-for-${r.box.rushAtt}</div></div>`:""}
           </div>
         </div>`;
     }
@@ -3550,14 +3550,16 @@ import {
       // A hitter's box line for this game. Per-game noise averages to 1.0x the season rate over a
       // full slate, so summed game logs land on the same season totals -- this only adds texture.
       // Deliberately NOT tied to this game's run total (unlike the old scoreboard-coupled TD rule):
-      // one bat's HR/hits aren't the team's runs.
+      // one bat's hits/total bases aren't the team's runs. The ONE hard exception is HR: a batter
+      // cannot hit more home runs in a game than his own team scored runs (each HR scores at least
+      // the batter), so gTd is capped at scoreSim.myTotal below.
       const gAtt = Math.max(2, Math.round(attPerGame*(0.55+Math.random()*0.9)));   // PA
       const gComp = clamp(Math.round(gAtt*clamp(comp*(0.35+Math.random()*1.3), 0, 0.9)*perfMult), 0, gAtt);   // hits
       const gYards = Math.max(gComp, Math.round(gAtt*clamp(ypa*(0.3+Math.random()*1.55), 0, 3.2)*perfMult));   // total bases
       const gInt = Math.max(0, Math.round(gAtt*clamp(intRate*(0.2+Math.random()*1.7), 0, 0.9)*(2-perfMult))); // strikeouts
       const gBb = Math.max(0, Math.round(gAtt*clamp(bbRate*(0.25+Math.random()*1.6), 0, 0.7)));               // walks
       const gSacks = Math.max(0, Math.round(gAtt*clamp(sackRate*(0.2+Math.random()*2.0), 0, 0.5)));           // GIDP
-      const gTd = clamp(Math.round(gAtt*clamp(tdRate*(0.15+Math.random()*2.2), 0, 0.5)*perfMult), 0, Math.max(1,gComp)); // HR
+      const gTd = clamp(Math.round(gAtt*clamp(tdRate*(0.15+Math.random()*2.2), 0, 0.5)*perfMult), 0, Math.min(Math.max(1,gComp), scoreSim.myTotal)); // HR — never more than the team's own runs
 
       // Stolen bases: effRush is the SB signal. Attempts per game run ~0..0.9, success ~62-90%.
       const gRushAttPerGame = clamp((effRush-58)*0.010, 0, 0.9);
@@ -5231,8 +5233,14 @@ import {
         return;
       }
       if(step.done){
-        // fewer than 2 teams in the whole conference -- the player was never seeded into a game.
-        playoffs.done = true;
+        // Fewer than 2 teams in the whole league bracket. In the pre-1969 format there is no LCS
+        // at all -- the lone "seed" IS the pennant winner and the league champion. If that's the
+        // player, they advance straight to the World Series; otherwise there was simply no game
+        // for them to play.
+        const bd = season.leagueStandings.bracket;
+        bd.myChampionId = step.champion ? step.champion.id : null;
+        if(step.champion && step.champion.id===career.teamId){ buildSuperBowlRound(playoffs, season); }
+        else { playoffs.done = true; }
         return;
       }
       // a bye round: nothing here involved the player, so it settles on its own -- confirm it
@@ -11008,7 +11016,9 @@ import {
     if(!season.playoffs.made || !season.playoffs.rounds.length) return;
     const actions = document.getElementById("seasonActions");
     const rounds = season.playoffs.rounds;
-    rounds.forEach(r=>{ r._revealedCount = 0; r._keyMomentChecked = false; });
+    // A malformed/legacy round with no inning-by-inning data reveals as an empty box that finalizes
+    // immediately, rather than throwing on r.quarters.length mid-reveal.
+    rounds.forEach(r=>{ if(!Array.isArray(r.quarters)) r.quarters = []; r._revealedCount = 0; r._keyMomentChecked = false; });
     const baseChance = KEY_MOMENT_BASE_TRIGGER_CHANCE;
     function stillCurrent(){ return myToken === _playoffRevealToken; }
 

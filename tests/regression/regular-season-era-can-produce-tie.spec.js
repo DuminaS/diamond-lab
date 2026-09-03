@@ -21,7 +21,7 @@ test("regular-season-era-can-produce-tie", async ({ page }) => {
 
   let foundMyTie = false, foundLeagueTie = false;
   for (let season = 0; season < 15 && !(foundMyTie && foundLeagueTie); season++) {
-    const stillActive = await page.evaluate(() => !!localStorage.getItem("gridironlab.activeCareer"));
+    const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
     if (!stillActive) break;
     const ok = await advanceOneSeason(page);
     const saved = await readActiveCareer(page);

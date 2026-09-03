@@ -172,7 +172,14 @@ export async function advanceOneSeason(page) {
     if (!stillActive) return false; // career ended (retirement/HOF/forced exit)
     const clicked = await page.evaluate(() => {
       const content = document.getElementById("careerContent");
-      const btn = content && content.querySelector(".choice-btn, [id^='pqAck-'], button[id$='Ack'], .fa-accept, button:not([disabled])");
+      if (!content) return false;
+      // Free-agency offer screen: each .fa-offer block leads with a .rival-link button (opens a
+      // profile modal -- never advances the career), so it must be excluded from the generic
+      // button catch-all below or the helper clicks it forever. The .choice-btn.fa-accept the same
+      // card carries ("Sign at Market Value" / "Re-sign...") is a fine auto-pick.
+      const btn = content.querySelector(
+        ".choice-btn:not(.fa-negotiate), [id^='pqAck-'], button[id$='Ack'], .fa-accept, button:not([disabled]):not(.rival-link)"
+      );
       if (btn) { btn.click(); return true; }
       const km = document.getElementById("keyMomentOverlay");
       if (km && km.classList.contains("open")) {
