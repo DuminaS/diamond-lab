@@ -4,7 +4,20 @@ This file is auto-loaded by Claude Code every time it starts in this folder. It'
 context; `PROGRESS.md` in this same folder is the full round-by-round development log — read that
 when you need the detailed "why" behind a specific mechanic, formula, or bug fix.
 
-## Current local status — 2026-09-02
+## Current local status — 2026-09-03
+
+A visual overflow audit (development-plan picker + the exportable baseball card + a broader sweep)
+shipped 2026-09-03: fixed a real achievement-name-wrapping bug on the baseball card's SVG back face
+(`cardWrapLines` in `src/main.js`, now supports 3 lines instead of silently bleeding into the next
+grid cell), added length caps to several previously-uncapped card text fields, replaced the card's
+open-ended team-name text with a fixed-width row of small colored team badges (reusing the
+draft-night reveal's own `teamColors()`/`teamInitials()` treatment -- new `entry.teamIds` field on
+Trophy Room entries, additive/backward-compatible), gave the fixed-position `#buildStamp` corner
+badge a background chip so it can't visually blend into scrolled-under content, and added a
+universal "swipe to see more" hint under every horizontally-scrollable `.table-wrap` table. See the
+newest PROGRESS.md entry for the full list of what was checked and confirmed clean vs. actually
+fixed -- notably the development-plan picker itself and the achievements grid both turned out fine
+already; don't re-litigate those without a new concrete report.
 
 The remediation waves and Android verification are complete. Balance implementation Waves 1-7 are
 implemented locally (all six items on the original "Next balance waves" list, plus a Wave 7 closing

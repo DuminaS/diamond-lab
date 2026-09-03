@@ -1497,18 +1497,42 @@ import {
     return `<text x="${x}" y="${y}" text-anchor="${anchor}" font-family="${font}" font-size="${size}" font-weight="${weight}" fill="${color}"${letterSpacing?` letter-spacing="${letterSpacing}"`:""}>${svgEscape(text)}</text>`;
   }
   function cardTruncate(text, max){ return text.length>max ? text.slice(0,max-1)+"…" : text; }
-  // Wraps a short label onto (at most) 2 lines, breaking at the nearest space at-or-before
-  // maxPerLine rather than mid-word -- several achievement names (e.g. "No One Circles the
-  // Wagons") are too long for a single line at grid-cell width, but read fine split in half.
-  function cardWrapTwoLines(text, maxPerLine){
-    if(text.length<=maxPerLine) return [text];
-    let splitAt = -1;
-    for(let i=Math.min(maxPerLine, text.length-1); i>0; i--){ if(text[i]===" "){ splitAt=i; break; } }
-    if(splitAt===-1) splitAt = maxPerLine;
-    const line1 = text.slice(0,splitAt).trim();
-    let line2 = text.slice(splitAt).trim();
-    if(line2.length>maxPerLine) line2 = line2.slice(0,maxPerLine-1)+"…";
-    return [line1, line2];
+  // Greedy word-wrap onto up to `maxLines` lines of at most `maxPerLine` characters each --
+  // used for the achievement-grid labels on the card back. Balance Wave 6/7 added several longer
+  // achievement names ("Under the Lights, Then Without Them", "Rewriting the Headline") that the
+  // old 2-line-only version (cardWrapTwoLines) mishandled: it split once, and if what remained
+  // after that single split was STILL too long for one line, it just sliced+ellipsized that
+  // overlong remainder WITHOUT re-wrapping it -- rendering one line of unwrapped SVG <text> wider
+  // than the grid cell, which bleeds visibly into the neighboring cell (SVG text never auto-wraps
+  // or clips to a box on its own). This version always emits <=maxLines lines each <=maxPerLine
+  // chars; only if the name genuinely needs MORE than maxLines does the last line take an ellipsis
+  // (folding in whatever words didn't fit), so real names load right up to 3 full lines before any
+  // truncation happens at all -- 3 lines fits this card's own vertical budget (see the row-spacing
+  // math in the caller: startY/cellH leave exactly enough room for a 3-line label without colliding
+  // with the achievement icon in the row below).
+  function cardWrapLines(text, maxPerLine, maxLines=3){
+    const words = text.split(/\s+/).filter(Boolean);
+    const lines = [];
+    let current = "";
+    words.forEach(word=>{
+      const candidate = current ? `${current} ${word}` : word;
+      if(candidate.length<=maxPerLine){ current = candidate; return; }
+      if(current) lines.push(current);
+      if(word.length>maxPerLine){
+        // a single word longer than a whole line on its own: hard-break it across lines
+        let remainder = word;
+        while(remainder.length>maxPerLine){ lines.push(remainder.slice(0,maxPerLine)); remainder = remainder.slice(maxPerLine); }
+        current = remainder;
+      } else {
+        current = word;
+      }
+    });
+    if(current) lines.push(current);
+    if(lines.length<=maxLines) return lines;
+    const kept = lines.slice(0, maxLines-1);
+    const rest = lines.slice(maxLines-1).join(" ");
+    kept.push(rest.length>maxPerLine ? rest.slice(0,maxPerLine-1)+"…" : rest);
+    return kept;
   }
 
   function buildCardFaceSVG(entry, side){
@@ -1526,13 +1550,52 @@ import {
       <rect x="300" y="20" width="84" height="22" rx="11" fill="rgba(0,0,0,0.35)" stroke="${rarity.border}" stroke-width="1"/>
       ${cardCenteredText(342, 35, rarity.label, {size:11, weight:800, color:rarity.border, font:CARD_FONT_DISPLAY, letterSpacing:1, anchor:"middle"})}`;
 
+    // A fixed-size row of small team badges (same gradient+initials treatment as the draft-night
+    // reveal's .dn-badge -- teamColors()/teamInitials(), reused here rather than re-invented) in
+    // place of an open-ended "→"-joined team-name text line. That text line (teamsLine, below) had
+    // no real ceiling: a well-traveled, many-team career could grow it past any truncation length
+    // that still reads cleanly, and a long team name (e.g. "Tampa Bay Buccaneers") multiplied across
+    // several teams made it worse. A badge is a FIXED width regardless of how long the team's name
+    // is, and capping at 5 badges (+N beyond that) bounds the row's total width outright instead of
+    // guessing a character budget. Only used when entry.teamIds exists -- trophy entries saved
+    // before this existed only have team NAMES (entry.teams), which can't be mapped back to a
+    // stable id (team display names change by era and aren't unique across teams), so those fall
+    // back to the original text line exactly as before; this is purely additive for new entries.
+    function cardTeamBadgesSVG(teamIds, teamNames, cy){
+      if(!teamIds || !teamIds.length) return null;
+      const MAX_BADGES = 5;
+      const ids = teamIds.slice(0, MAX_BADGES);
+      const extra = teamIds.length - ids.length;
+      const r = 11, gap = 14, stepW = r*2+gap;
+      const totalW = ids.length*r*2 + (ids.length-1)*gap + (extra>0 ? stepW : 0);
+      let x = 200 - totalW/2 + r;
+      let out = "";
+      ids.forEach((tid,i)=>{
+        if(i>0) out += cardCenteredText(x-stepW/2, cy+4, "→", {size:10, color:CARD_HEX.inkMuted});
+        const [c1,c2] = teamColors(tid);
+        out += `<circle cx="${x}" cy="${cy}" r="${r}" fill="${c1}" stroke="${c2}" stroke-width="1.5"/>`;
+        out += cardCenteredText(x, cy+3, teamInitials(teamNames[i]||tid), {size:8.5, weight:800, color:"#fff", font:CARD_FONT_DISPLAY});
+        x += stepW;
+      });
+      if(extra>0){
+        out += cardCenteredText(x-stepW/2, cy+4, "→", {size:10, color:CARD_HEX.inkMuted});
+        out += `<circle cx="${x}" cy="${cy}" r="${r}" fill="rgba(255,255,255,0.08)" stroke="${CARD_HEX.line}" stroke-width="1"/>`;
+        out += cardCenteredText(x, cy+3, `+${extra}`, {size:8, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY});
+      }
+      return out;
+    }
+
     if(side==="front"){
       const teamsLine = cardTruncate(entry.teams && entry.teams.length ? entry.teams.join(" → ") : "—", 44);
+      const teamBadgeRow = cardTeamBadgesSVG(entry.teamIds, entry.teams, 128);
       const trophyBits = [];
       if(entry.mvps) trophyBits.push(`${entry.mvps}x MVP`);
       if(entry.allPros) trophyBits.push(`${entry.allPros}x All-Pro`);
       if(entry.proBowls) trophyBits.push(`${entry.proBowls}x Pro Bowl`);
-      const trophyLine = trophyBits.length ? trophyBits.join("  ·  ") : "No accolades logged";
+      // Uncapped, a max-decorated (GOAT-tier) career's trophy line can genuinely run long --
+      // e.g. "9x MVP  ·  12x All-Pro  ·  15x Pro Bowl" -- cap it defensively the same way teamsLine
+      // just above already is.
+      const trophyLine = cardTruncate(trophyBits.length ? trophyBits.join("  ·  ") : "No accolades logged", 48);
       const statBoxes = [
         ["SEASONS", entry.seasons],
         ["RINGS", entry.rings],
@@ -1552,8 +1615,17 @@ import {
       return `<svg viewBox="0 0 400 560" xmlns="http://www.w3.org/2000/svg">
           ${bg}
           ${cardCenteredText(200, 82, cardTruncate(entry.name,22), {size:nameSize, weight:800, font:CARD_FONT_DISPLAY, letterSpacing:0.5})}
-          ${cardCenteredText(200, 106, `${entry.college||"—"} · Class of ${entry.draftYear}`, {size:13, color:CARD_HEX.inkMuted})}
-          ${cardCenteredText(200, 128, teamsLine, {size:12, color:CARD_HEX.goldStrong})}
+          ${(()=>{
+            // Truncate the COLLEGE name if the combined line is too long, never the "Class of
+            // YYYY" suffix -- the draft year is the more load-bearing half of this line, and a
+            // flat cardTruncate(combinedString,40) could just as easily eat into it instead (a
+            // real case: "University of Southern California · Class of 1974" cut to "...· Cla…",
+            // silently dropping the year).
+            const classSuffix = ` · Class of ${entry.draftYear}`;
+            const collegeBudget = Math.max(10, 40-classSuffix.length);
+            return cardCenteredText(200, 106, `${cardTruncate(entry.college||"—", collegeBudget)}${classSuffix}`, {size:13, color:CARD_HEX.inkMuted});
+          })()}
+          ${teamBadgeRow || cardCenteredText(200, 128, teamsLine, {size:12, color:CARD_HEX.goldStrong})}
           <circle cx="200" cy="210" r="58" fill="rgba(212,175,55,0.08)" stroke="${CARD_HEX.gold}" stroke-width="2.5"/>
           ${cardCenteredText(200, 202, "PEAK OVERALL", {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:1})}
           ${cardCenteredText(200, 238, String(entry.peakOverall||Math.round(entry.rating)), {size:42, weight:800, color:CARD_HEX.gold, font:CARD_FONT_DISPLAY})}
@@ -1577,7 +1649,7 @@ import {
     const achHtml = shown.length ? shown.map((def,i)=>{
       const col = i%GRID_COLS, row = Math.floor(i/GRID_COLS);
       const cx = startX + col*cellW, cy = startY + row*cellH;
-      const lines = cardWrapTwoLines(def.name, 15);
+      const lines = cardWrapLines(def.name, 15, 3);
       const labelHtml = lines.map((line,li)=> cardCenteredText(cx, cy+30+li*11, line, {size:8, weight:700, color:CARD_HEX.ink})).join("");
       return `${cardAchievementGlyphSVG(def, cx, cy)}${labelHtml}`;
     }).join("") : cardCenteredText(200, 150, "No achievements earned this career.", {size:12, color:CARD_HEX.inkMuted});
@@ -1600,7 +1672,7 @@ import {
         ${achHtml}
         ${overflowHtml}
         ${infoHtml}
-        ${cardCenteredText(200, 540, `${entry.name} — ${entry.decade}`, {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:1})}
+        ${cardCenteredText(200, 540, cardTruncate(`${entry.name} — ${entry.decade}`, 42), {size:10, weight:700, color:CARD_HEX.inkMuted, font:CARD_FONT_DISPLAY, letterSpacing:1})}
       </svg>`;
   }
 
@@ -10928,7 +11000,10 @@ import {
 
     const t = career.totals;
     const cardTeams = [];
-    career.seasonLog.forEach(s=>{ if(cardTeams[cardTeams.length-1]!==s.teamName) cardTeams.push(s.teamName); });
+    const cardTeamIds = [];
+    career.seasonLog.forEach(s=>{
+      if(cardTeams[cardTeams.length-1]!==s.teamName){ cardTeams.push(s.teamName); cardTeamIds.push(s.teamId); }
+    });
     const trophyEntry = {
       id: `${Date.now()}_${Math.round(Math.random()*1e6)}`,
       name: career.name, college: career.college,
@@ -10941,6 +11016,7 @@ import {
       rating: passerRating(t.comp, t.att, t.yards, t.td, t.int),
       peakOverall: Math.max(0, ...career.seasonLog.map(s=>s.overall||0)),
       teams: cardTeams,
+      teamIds: cardTeamIds,
       achievements: (career.achievements ? Object.keys(career.achievements.unlocked).filter(k=>career.achievements.unlocked[k]) : []),
       draftLine: career.transactions[0] || null,
       relationshipLine: career.relationship

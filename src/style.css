@@ -332,8 +332,17 @@
   .tg-impact{ font-size:0.7rem; color:var(--ink-muted); line-height:1.4; margin-top:0.35rem; }
   .tg-rank{ font-family:var(--mono); font-size:0.62rem; letter-spacing:0.04em; color:var(--ink-muted); margin-top:0.15rem; text-transform:uppercase; }
 
-  /* ===== Build stamp (dev/debug aid: confirms which build is actually live, see vite.config.js) ===== */
-  #buildStamp{ position:fixed; right:0.5rem; bottom:0.3rem; z-index:400; font-size:0.65rem; color:var(--ink-muted); opacity:0.55; pointer-events:none; font-family:monospace; }
+  /* ===== Build stamp (dev/debug aid: confirms which build is actually live, see vite.config.js) =====
+     Fixed to the viewport corner, so whatever happens to be scrolled underneath it (a card border,
+     a button, body text) shows through -- found during a visual overflow audit sitting directly on
+     top of the offseason plan picker's first card on a narrow viewport. A small matching background
+     chip keeps it legible against ANY content without needing to reason about what might be under it
+     at any given scroll position. */
+  #buildStamp{
+    position:fixed; right:0.5rem; bottom:0.3rem; z-index:400; font-size:0.65rem; color:var(--ink-muted);
+    opacity:0.75; pointer-events:none; font-family:monospace; background:var(--bg); padding:0.1rem 0.4rem;
+    border-radius:3px; line-height:1.4;
+  }
 
   /* ===== Achievement toast (Steam-style "Achievement Unlocked" popup) ===== */
   #achievementToastContainer{ position:fixed; right:1rem; bottom:1rem; z-index:500; display:flex; flex-direction:column-reverse; gap:0.5rem; pointer-events:none; max-width:min(300px,calc(100vw - 2rem)); }
@@ -439,6 +448,22 @@
   .trophy-item.badge-count .trophy-year{ font-size: 1.1rem; }
 
   .table-wrap{ overflow-x: auto; margin-top: 0.75rem; border: 1px solid var(--line); border-radius: 4px; }
+  /* Found during a visual overflow audit: every data table under .table-wrap (career-table,
+     league-table, the Trophy Room table, admin tables) sets a real min-width and relies on
+     overflow-x:auto to let it scroll on a narrow phone screen rather than wrap or shrink -- by
+     design (a name/number column genuinely needs its own width, not a squeeze). But with no visual
+     cue that scrolling is even possible, a name trailing off the right edge (e.g. a depth chart's
+     QB2/QB3, "Landon So…") reads exactly like broken, cut-off text even though the rest is one
+     swipe away. One universal, markup-free hint covers every table that uses this wrapper. Shown
+     only on narrower viewports, where a table exceeding its container is actually likely; on wider
+     screens most of these tables already fit without scrolling, so the hint would be pure noise. */
+  @media (max-width: 700px){
+    .table-wrap::after{
+      content: "⇄ swipe to see more"; display:block; text-align:center; font-family: var(--mono);
+      font-size: 0.6rem; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 0.3rem 0; border-top: 1px solid var(--line); background: var(--surface);
+    }
+  }
   table.career-table{ width: 100%; border-collapse: collapse; font-size: 0.82rem; min-width: 640px; }
   table.career-table th, table.career-table td{ padding: 0.5rem 0.7rem; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
   table.career-table th:first-child, table.career-table td:first-child{ text-align: left; }

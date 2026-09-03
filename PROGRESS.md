@@ -684,6 +684,111 @@ ledger's own precedent and still its closest analog, has never had dedicated UI 
 consumed through achievements, which do have UI. Time-window achievements phrased in real-world
 elapsed time remain out of scope for the same reason as Wave 6 (no wall-clock tracking exists).
 
+## 2026-09-03 — Visual overflow audit: development-plan picker, baseball card, table scroll affordance
+
+User request: text was reported not fitting its box on the offseason development-plan picker and
+the exportable "baseball card" trading-card visual, plus a general ask to sweep every visual for
+text bleeding out of / being cut off by its container, with "malleable font size and placements"
+(and a suggestion to reuse the draft-night team badge on the cards) as the fix direction.
+
+### Method
+
+Screenshot- and DOM-measurement-driven, not eyeballing: a disposable Playwright script (deleted
+after use, per this project's own testing-methodology norm) walked the offseason plan picker, the
+baseball card (front + back, fed a deliberately worst-case fabricated Trophy Room entry -- a very
+long name, a long college, 5-6 teams, a maxed-out trophy count, and several of the longest Wave 6/7
+achievement names), the season hub's every tab, FA offer cards, the generic Team page, and the
+Trophy Room/depth-chart tables, at both desktop and a 390px mobile viewport. Two measurement
+techniques did the actual work no eyeball ever could: (1) `scrollWidth/scrollHeight` vs.
+`clientWidth/clientHeight` DOM overflow detection for ordinary HTML/CSS, and (2) SVG `getBBox()`
+measurement against the card's own 0-400 viewBox AND, critically, against each achievement-grid
+CELL's own 88px width specifically -- the real bug (see below) stayed comfortably inside the whole
+card's bounds while still bleeding into the ADJACENT cell, which a whole-card-only check would never
+have caught. Confirmed the fix-verification test actually catches the original bug by temporarily
+reintroducing the old buggy function, watching the new test fail with the exact real numbers
+(a 106px-wide line against an 88px cell budget), then restoring the fix -- the same
+revert-reproduce-reapply discipline used for every other bug found this session.
+
+### What the plan picker actually looked like: no bug found
+
+The offseason development-plan picker (`.offseason-plan-choice`) turned out fine at both desktop
+and mobile widths across all 6 plans' real summary/meta text -- `.choice-btn` is a plain flex-column
+block with no fixed height, so it already grows with content. Nothing to fix here; the report's
+symptom was real, but traced to a DIFFERENT nearby element (see the build-stamp bug below), not this
+picker's own cards.
+
+### Real bugs found and fixed
+
+1. **Achievement-grid label wrapping on the baseball card (`cardWrapTwoLines`, now
+   `cardWrapLines`)**: the old function only ever produced 2 lines. For a name needing a genuine
+   3rd line -- Balance Wave 6 added "Under the Lights, Then Without Them" (36 chars) -- it split
+   once, found the remainder ("Lights, Then Without Them") STILL too long for one line, and
+   rendered that 106px-wide overlong remainder as a single un-wrapped SVG `<text>` anyway (SVG text
+   never auto-wraps or clips to a box on its own), which visibly bled into the neighboring
+   achievement's 88px-wide cell. Rewrote as a proper greedy word-wrap supporting up to 3 lines (the
+   card's own vertical row-spacing math allows exactly 3 without colliding with the next row's
+   icon) with the last line only ellipsized if a name genuinely needs a 4th -- real names now load
+   fully wrapped, no truncation at all for anything that fits in 3 lines.
+2. **Several other card fields had no length cap at all**: the trophy-count line
+   ("9x MVP · 12x All-Pro · 15x Pro Bowl" for a maxed-out career), the college/draft-class line, and
+   the back face's name+decade footer. Added `cardTruncate` to all three. The college/class-year
+   line specifically truncates the COLLEGE portion only, never the "Class of YYYY" suffix (an
+   earlier naive `cardTruncate` of the whole combined string cut into the year itself for the pool's
+   longest college name, "University of Southern California").
+3. **Team display replaced with the suggested draft-night badge**: the front face's "→"-joined
+   team-name text line (`teamsLine`, `cardTruncate`d at a guessed 44-char budget) is open-ended in a
+   way no character budget guess fully closes -- a well-traveled career with several long team names
+   keeps pushing on that guess. Reused the exact draft-night reveal's own gradient+initials badge
+   treatment (`teamColors()`/`teamInitials()`, not reinvented) as a new `cardTeamBadgesSVG` -- a
+   FIXED-width row of up to 5 small colored circles (plus a "+N" badge beyond that), which can never
+   overflow regardless of how long any team's name is. Needed a new `entry.teamIds` field on the
+   Trophy Room entry (paired with the existing `entry.teams` display-name array) since team display
+   names change by era and aren't reliably mappable back to a stable id -- old, already-saved Trophy
+   Room entries have no `teamIds` and fall back to the original text line exactly as before (purely
+   additive, no migration needed).
+4. **`#buildStamp` (the dev/debug build-timestamp corner badge) overlapping real content**: fixed to
+   the viewport corner with no background, so whatever scrolled underneath it on a narrow phone
+   (a card border, a button, body text) showed through and visually collided with it -- caught
+   sitting directly on top of the plan picker's first card. Gave it a small matching background chip
+   so it stays legible against anything without needing to reason about what might be under it.
+5. **Tables that rely on horizontal scroll gave no visual cue that scrolling was possible**: every
+   `.table-wrap` table (career-table, league-table, the Trophy Room table, admin tables) sets a real
+   `min-width` and relies on `overflow-x:auto` on a narrow phone by design (a name/number column
+   genuinely needs its own width) -- but with zero affordance, a name trailing off the right edge
+   (the generic Team page's own depth chart: "Landon So…", "Truett…") reads exactly like broken,
+   cut-off text even though the rest is one swipe away. Added one universal, markup-free CSS rule (a
+   "⇄ swipe to see more" hint below any `.table-wrap` table, shown only under 700px) that covers
+   every table using this wrapper at once.
+
+### Confirmed NOT a bug (checked, not assumed)
+
+- The `.sb-delta` "+3" overall-change badge intentionally pokes slightly outside its parent's
+  padding box (a `position:absolute; right:-0.35rem` floating pill, like a notification badge) --
+  the DOM scanner flagged it as "overflow" but it's a deliberate, small, correctly-rendered design,
+  confirmed by actually looking at the screenshot rather than trusting the raw scrollWidth signal.
+- The achievements grid (`buildAchievementsTabHTML`/`buildGlobalAchievementsHTML`, all 85 entries
+  including every long Wave 6/7 name) is a plain flexible HTML/CSS card (`.pb-card`, no fixed
+  height, no `overflow:hidden`) -- confirmed zero overflow via the DOM scanner across all 85 cards
+  at mobile width. This is a genuinely different, safer render path from the SVG card and needed no
+  changes.
+- The FA offer cards, season hub's every tab, and the generic Team page's five grade cards all
+  scanned clean at mobile width with real (not synthetic) long team names and role text.
+
+### Verification
+
+`npm test`: 35/35 balance tests, production build clean, 49/49 Playwright (48 prior + 1 new --
+`tests/regression/baseball-card-text-fits-worst-case.spec.js`, which measures per-cell SVG text
+width for a maximally decorated worst-case entry and is confirmed to actually fail against the old
+bug, not just pass against the fix).
+
+### Not done this pass (stated plainly)
+
+This was a targeted audit (the two explicitly-reported components plus a broad but not
+exhaustive sweep of the main gameplay screens), not a pixel-perfect certification of literally every
+visual in the app -- the admin/dev-only calculator screen, the rare-event/infraction narrative
+cards, and the Playoff Tree bracket's own node cards (still the pre-overhaul renderer per the
+still-open "Playoff Tree overhaul" plan) weren't separately re-audited this pass.
+
 ## Testing methodology (established pattern, reuse every round)
 - jsdom in `/tmp/gtest`, debug hooks (`window.__debug`) injected only into throwaway copies (`index.debugN.html`), never the real file. Latest debug build: `index.debug24.html` (Round 4, item 3).
 - `grep -c "__debug" index.html` must return 0 on the real file before every publish.
