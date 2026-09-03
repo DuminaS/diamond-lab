@@ -4010,15 +4010,17 @@ import {
   // than a full second team-personality system. One tag is rolled per playoff opponent and
   // stamped onto that round's data so both the paced quarter reveal and the Key Moment mini-game
   // can reference the exact same read on this specific opponent.
+  // Pitcher archetypes for the clutch-at-bat mini-game. Ids are load-bearing (PLAY_CALLS'
+  // countersTendencyId map + the balance tests key off them); only labels/blurbs are baseball.
   const OPPONENT_TENDENCIES = [
-    { id:"runheavy", label:"Run-Heavy Ball Control", blurb:"They'd rather grind the clock on the ground than let this turn into a shootout." },
-    { id:"blitzheavy", label:"Blitz-Happy Front", blurb:"They send extra rushers early and dare him to beat it in a hurry." },
-    { id:"lockdowncorners", label:"Lockdown Perimeter Corners", blurb:"Their corners play tight, physical man coverage on the outside." },
-    { id:"preventlate", label:"Prevent Shell Once Ahead", blurb:"Get a lead on them and they'll drop everyone back, conceding the underneath stuff." },
-    { id:"turnoverhunting", label:"Turnover-Hunting Secondary", blurb:"Aggressive, high-risk safeties who jump routes looking for a takeaway." },
-    { id:"physicalfront", label:"Physical, Wear-You-Down Front Seven", blurb:"Their front seven hits like it's already the fourth quarter on the first snap." },
-    { id:"disciplinedzone", label:"Disciplined Zone Shell", blurb:"Patient zone coverage that rarely bites on a double move." },
-    { id:"suddenchange", label:"Feasts on Sudden-Change Possessions", blurb:"Give them a short field off a turnover and they'll make it hurt fast." },
+    { id:"runheavy", label:"Fastball-Heavy, Comes Right At You", blurb:"He'll challenge you with the heater — velocity over deception, pitch after pitch." },
+    { id:"blitzheavy", label:"Pounds the Zone Early", blurb:"First-pitch strikes, gets ahead, and makes you hit his pitch on his count." },
+    { id:"lockdowncorners", label:"Lives on the Black", blurb:"Paints both edges and expands the zone the moment you start chasing." },
+    { id:"preventlate", label:"Nibbles With a Lead", blurb:"Give his team a lead and he won't give you anything to hit — he'll pitch around you all day." },
+    { id:"turnoverhunting", label:"Chase-Bait Specialist", blurb:"Sliders and splits just off the plate, daring you to expand the zone." },
+    { id:"physicalfront", label:"Overpowering Fastball, Late Life", blurb:"It rides up and gets on you late — he'll blow it right past a slow bat." },
+    { id:"disciplinedzone", label:"Crafty Command Lefty", blurb:"Mixes everything, changes eye level, and never shows the same pattern twice." },
+    { id:"suddenchange", label:"Bears Down With Runners On", blurb:"Coasts until there's a runner in scoring position, then finds another gear." },
   ];
   function pickOpponentTendency(){ return pick(OPPONENT_TENDENCIES); }
 
@@ -10523,14 +10525,14 @@ import {
   // indirect, observational clue instead -- genuine deduction rather than just re-reading the
   // scouting-report line already shown on the round card.
   const TENDENCY_SUBTLE_CLUES = {
-    runheavy: "Their front seven has stayed in base personnel on nearly every snap tonight.",
-    blitzheavy: "The pocket has collapsed unusually fast on early downs all game.",
-    lockdowncorners: "Nothing has connected outside the numbers all night.",
-    preventlate: "Every completion in the fourth quarter has come up short of the sticks.",
-    turnoverhunting: "Their safeties keep creeping toward the ball right before the snap.",
-    physicalfront: "Every hit has landed a beat after the whistle should've saved him.",
-    disciplinedzone: "Nobody's beaten a double move on them all game.",
-    suddenchange: "The one short field they got all game turned into seven points in under a minute.",
+    runheavy: "The gun hasn't read below 96 once tonight, and it's all four-seamers.",
+    blitzheavy: "He's thrown a first-pitch strike to almost every hitter he's faced.",
+    lockdowncorners: "Barely anything he's thrown for a strike has caught the middle third.",
+    preventlate: "Since his team took the lead, he hasn't been in the zone with two strikes.",
+    turnoverhunting: "Half the swings against him tonight have been at pitches in the other batter's box.",
+    physicalfront: "Three different hitters have been late on the fastball and fouled it straight back.",
+    disciplinedzone: "He hasn't thrown the same pitch twice in a row in two full innings.",
+    suddenchange: "Bases empty he's been around the zone; every time a runner reached, the stuff jumped.",
   };
   // Situational flavor is independent of the tendency clue -- varying down/distance/score/clock
   // context across ~18 entries in three difficulty tiers gives "many scenarios," while the clue
@@ -10551,24 +10553,24 @@ import {
   // that module's own comment for the worked "controlclock vs. a trailing, needScore situation"
   // example).
   const KEY_MOMENT_SITUATIONS = [
-    { id:"km_e1", difficulty:"easy", text:"1st-and-10 to open the fourth quarter. Plenty of clock left to find something that works." },
-    { id:"km_e2", difficulty:"easy", text:"2nd-and-6 early in the fourth, comfortably up two scores. No need to force anything — just keep the chains moving." },
-    { id:"km_e3", difficulty:"easy", text:"3rd-and-4 in your own territory, midway through the fourth. A conversion here keeps the drive breathing." },
-    { id:"km_e4", difficulty:"easy", text:"1st-and-10 after a big return on the kickoff to open the fourth sets you up in plus territory." },
-    { id:"km_e5", difficulty:"easy", text:"2nd-and-3 near midfield early in the fourth, game still very much in reach either way." },
-    { id:"km_e6", difficulty:"easy", text:"3rd-and-2, a short-yardage look, fourth quarter." },
-    { id:"km_m1", difficulty:"medium", text:"3rd-and-7 in the fourth, the game within a possession, under six minutes left." },
-    { id:"km_m2", difficulty:"medium", text:"2nd-and-11 early in the fourth after a negative play, needing to answer before the defense pins its ears back." },
-    { id:"km_m3", difficulty:"medium", text:"1st-and-10 starting a two-minute drill to force overtime, trailing late in the fourth." },
-    { id:"km_m4", difficulty:"medium", text:"3rd-and-5 in the red zone, fourth quarter — a field goal isn't enough here." },
-    { id:"km_m5", difficulty:"medium", text:"2nd-and-8 in the fourth, on a drive that has to end in points to stay alive." },
-    { id:"km_m6", difficulty:"medium", text:"3rd-and-3 in the fourth with a delay-of-game penalty already burning a timeout." },
-    { id:"km_h1", difficulty:"hard", text:"4th-and-3 from your own 40 in the fourth, under two minutes left, trailing by three." },
-    { id:"km_h2", difficulty:"hard", text:"3rd-and-11 late in the fourth, no tomorrow if this drive stalls out." },
-    { id:"km_h3", difficulty:"hard", text:"4th-and-goal from the 4, down four, final minute of the fourth." },
-    { id:"km_h4", difficulty:"hard", text:"2nd-and-19 in the fourth after back-to-back penalties, no timeouts left, trailing late." },
-    { id:"km_h5", difficulty:"hard", text:"3rd-and-1 at your own goal line in the fourth, protecting a one-point lead with 90 seconds on the clock." },
-    { id:"km_h6", difficulty:"hard", text:"4th-and-1 to seal it in the fourth, up three, under a minute to go." },
+    { id:"km_e1", difficulty:"easy", text:"Leadoff at-bat in the 7th, the game still very much in the balance either way." },
+    { id:"km_e2", difficulty:"easy", text:"Up three in the 7th, leading off the inning. Nothing to chase here — just have a good at-bat." },
+    { id:"km_e3", difficulty:"easy", text:"Two down in the 7th, a runner on second, game within reach. This is the at-bat that keeps the inning alive." },
+    { id:"km_e4", difficulty:"easy", text:"Runner on first, nobody out, 7th inning, the score close." },
+    { id:"km_e5", difficulty:"easy", text:"Runner on third, one out, 7th inning — a ball in the air or on the ground brings him home." },
+    { id:"km_e6", difficulty:"easy", text:"Runner on third, two out, 7th — you have to put this in play to get him in." },
+    { id:"km_m1", difficulty:"medium", text:"Bottom of the 8th, tie game, two out, runner on second. The whole inning is this at-bat." },
+    { id:"km_m2", difficulty:"medium", text:"Down three in the 8th, bases empty, two out. A solo shot barely dents it — you need to start something big." },
+    { id:"km_m3", difficulty:"medium", text:"Trailing by one in the 8th, runner on first, one out. You need to move him and find a way to get the run in." },
+    { id:"km_m4", difficulty:"medium", text:"Down one in the 8th, two out, runner on second — a walk doesn't help, a base hit ties it." },
+    { id:"km_m5", difficulty:"medium", text:"Trailing by two in the 7th, runner on first, nobody out. The offense has to answer this inning." },
+    { id:"km_m6", difficulty:"medium", text:"Tie game, 9th inning, two out, the winning run standing on second." },
+    { id:"km_h1", difficulty:"hard", text:"Bottom of the 9th, down one, two out, tying run on second. Last swing of the season if this doesn't work." },
+    { id:"km_h2", difficulty:"hard", text:"Down four in the 9th, two out, bases loaded. Nothing but a grand slam keeps the season alive." },
+    { id:"km_h3", difficulty:"hard", text:"Bottom of the 9th, down one, two out, runner on third. A ball out of the infield ties it; anything less ends it." },
+    { id:"km_h4", difficulty:"hard", text:"Down three in the 9th, two out, two on. A single makes it interesting — you need to get all of one." },
+    { id:"km_h5", difficulty:"hard", text:"Up one in the 9th, runner on first, one out — the worst thing you can do here is roll into a double play." },
+    { id:"km_h6", difficulty:"hard", text:"Up two in the 9th, runner on third, two out — a productive out ices it, a strikeout leaves the door cracked." },
   ].map(s=> ({ ...s, flags: KEY_MOMENT_SITUATION_FLAGS[s.id] || [] }));
   // Higher-stakes rounds skew the situation pool toward the harder tiers -- the deeper the run,
   // the less hand-holding the mini-game gives.
@@ -10588,9 +10590,9 @@ import {
   // The clue's directness IS the difficulty lever: easy names the tendency outright, medium
   // describes it without naming it, hard gives only an indirect observational detail.
   function keyMomentClue(tendency, difficulty){
-    if(difficulty==="easy") return `Your coordinator has seen it clearly all game: <b>${svgEscape(tendency.label)}</b> — ${svgEscape(tendency.blurb)}`;
-    if(difficulty==="medium") return `The scouting report keeps coming back to the same read: ${svgEscape(tendency.blurb)}`;
-    return `Nobody in the box is certain yet, but the tape from earlier tonight hinted at it: ${svgEscape(TENDENCY_SUBTLE_CLUES[tendency.id] || tendency.blurb)}`;
+    if(difficulty==="easy") return `Your hitting coach has seen it clearly all night: <b>${svgEscape(tendency.label)}</b> — ${svgEscape(tendency.blurb)}`;
+    if(difficulty==="medium") return `The advance report keeps coming back to the same read: ${svgEscape(tendency.blurb)}`;
+    return `Nobody in the dugout is certain yet, but the tape from earlier tonight hinted at it: ${svgEscape(TENDENCY_SUBTLE_CLUES[tendency.id] || tendency.blurb)}`;
   }
   // Four options, three distinct outcome tiers, RANKED by the shared keyMomentCallScore for THIS
   // exact tendency+situation pairing rather than one fixed call always being "good." The true
@@ -10649,21 +10651,22 @@ import {
   // been applied -- it is the single source of truth for who won this round from this point on,
   // and everything downstream (bracket advancement, the Super Bowl, awards) reads it, never the
   // pre-swing baseline.
+  // `pts` is RUNS now. On a good read they're the player's; on a bad read they read as the
+  // opponent answering in their half of the inning (the rally died and the game turned there).
   const KEY_MOMENT_SCORE_TYPES = [
-    { pts:7, type:"touchdown", w:0.40 },
-    { pts:3, type:"field goal", w:0.35 },
-    { pts:6, type:"touchdown", w:0.13 },
-    { pts:8, type:"touchdown", w:0.09 },
-    { pts:2, type:"safety", w:0.03 },
+    { pts:1, type:"an RBI single", w:0.36 },
+    { pts:2, type:"a two-run double", w:0.24 },
+    { pts:1, type:"a sacrifice fly", w:0.12 },
+    { pts:3, type:"a three-run homer", w:0.16 },
+    { pts:4, type:"a grand slam", w:0.04 },
+    { pts:1, type:"a bases-loaded walk", w:0.08 },
   ];
-  // Meh's pool: a defensible-but-not-sharp read still lets the defense win the down, but it's
-  // never a touchdown-class breakdown -- worst case a field goal, and better than even odds the
-  // drive just stalls for nothing at all. This is what actually separates Meh from Bad: Bad always
-  // costs a real score, Meh usually costs nothing and never costs more than a field goal.
+  // Meh's pool: a defensible-but-not-sharp at-bat. Usually nothing comes of it, worst case a
+  // single run trickles across. Bad always costs a real crooked number; Meh usually costs nothing.
   const KEY_MOMENT_MEH_SCORE_TYPES = [
-    { pts:0, type:"stalled drive", w:0.45 },
-    { pts:3, type:"field goal", w:0.40 },
-    { pts:2, type:"safety", w:0.15 },
+    { pts:0, type:"a hard-hit out", w:0.55 },
+    { pts:1, type:"a run on the play", w:0.30 },
+    { pts:1, type:"a productive groundout", w:0.15 },
   ];
   function pickKeyMomentScoreType(){
     const r = Math.random();
@@ -10677,69 +10680,59 @@ import {
     for(const s of KEY_MOMENT_MEH_SCORE_TYPES){ acc += s.w; if(r<acc) return s; }
     return KEY_MOMENT_MEH_SCORE_TYPES[0];
   }
+  // The Key Moment fires right after the 6th inning reveals (see revealOneQuarter's
+  // `_revealedCount===6` check) -- it's always the at-bat ENTERING the 7th, so the run swing lands
+  // on that inning (index 6, the next unrevealed one). Whether the game then needs extra innings
+  // is re-derived FRESH from the swung total every time, never inherited from the pre-swing sim.
+  const KM_SWING_INNING_IDX = 6;
+  const REGULATION_INNINGS = 9;
   function applyKeyMomentSwing(round, quality){
-    // The Key Moment always fires right after Q3 -- i.e. it's always deciding what happens
-    // ENTERING the fourth quarter -- so the swing only ever lands on Q4 itself (index 3). What
-    // used to happen next was the actual bug behind "won 16-13 but the game still said sim to
-    // OT, then lost in OT": simulateGameScore() decides, back when the round is first generated
-    // (long before the player ever sees a single quarter), whether regulation ends tied and an
-    // OT segment gets baked into round.quarters. The old swing code then added its points to
-    // EVERY quarter from Q4 onward, OT included, without ever asking whether that OT segment
-    // still made any sense given the new Q4 total -- so a read that turned a tied Q4 into a
-    // clean regulation win still dragged the box score through a leftover, already-decided
-    // phantom OT possession (and the reverse: a read that tied up a Q4 that used to be decisive
-    // had no OT segment at all to actually settle it). Whether the game reaches overtime is now
-    // re-derived FRESH from the swung Q4 total, every time, instead of ever being inherited from
-    // the old pre-swing simulation.
     const good = quality==="good";
     const picked = good || quality==="bad" ? pickKeyMomentScoreType() : pickKeyMomentMehScoreType();
     const scoreType = picked.type;
     const dMy = good ? picked.pts : 0;
     const dOpp = good ? 0 : picked.pts;
 
-    const q4 = round.quarters[3];
-    q4.myTotal += dMy; q4.oppTotal += dOpp;
-    q4.myQ = (q4.myQ||0) + dMy; q4.oppQ = (q4.oppQ||0) + dOpp;
+    const swingInn = round.quarters[KM_SWING_INNING_IDX] || round.quarters[round.quarters.length-1];
+    swingInn.myTotal += dMy; swingInn.oppTotal += dOpp;
+    swingInn.myQ = (swingInn.myQ||0) + dMy; swingInn.oppQ = (swingInn.oppQ||0) + dOpp;
+    // every inning after the swing carries the new running total forward
+    for(let i=KM_SWING_INNING_IDX+1; i<round.quarters.length; i++){
+      round.quarters[i].myTotal += dMy; round.quarters[i].oppTotal += dOpp;
+    }
     round.myScore += dMy; round.oppScore += dOpp;
 
-    const hadOT = round.quarters.length > 4;
-    const stillTied = q4.myTotal === q4.oppTotal;
+    const lastInn = round.quarters[round.quarters.length-1];
+    const hadExtras = round.quarters.length > REGULATION_INNINGS;
+    const stillTied = lastInn.myTotal === lastInn.oppTotal;
     let otNote = "";
 
-    if(hadOT && !stillTied){
-      // Regulation used to need overtime; this read just decided it before OT ever had to
-      // happen. The leftover OT segment (and whatever points it had already tacked on) never
-      // actually happened -- drop it and re-sync the score off Q4 alone.
-      round.quarters.length = 4;
-      round.myScore = q4.myTotal; round.oppScore = q4.oppTotal;
-      otNote = "That decided it in regulation — no overtime needed after all.";
-    } else if(!hadOT && stillTied){
-      // Regulation used to be decisive; this read just tied it back up. Roll a brand new
-      // overtime possession off the same team strengths the round was generated with -- a
-      // correct read that only manages to tie the game sends it to a fair extra possession,
-      // same as it would in a real game; a blown/lesser read that ties it up hands that extra
-      // possession to the defense, same fairness rule the old tiebreak used (a good read should
-      // never come out net-negative from a moment it otherwise won).
-      const otTd = Math.random()<0.7;
-      const otPts = otTd?6:3;
-      let otMy=0, otOpp=0;
-      if(good) otMy = otPts;
-      else if(Math.random() < 0.5 + ((round._offOverall??65)-(round._defOffense??round._defOverall??65))*0.01) otMy = otPts;
-      else otOpp = otPts;
-      round.quarters.push({ q:"OT", myQ: otMy, oppQ: otOpp, myTotal: q4.myTotal+otMy, oppTotal: q4.oppTotal+otOpp });
-      round.myScore = q4.myTotal+otMy; round.oppScore = q4.oppTotal+otOpp;
-      otNote = good ? "Tied it up, then took it in overtime." : "Tied it up, but the defense finished it in overtime.";
-    } else if(hadOT && stillTied){
-      // Still tied after the swing (only possible on a true no-op, e.g. a stalled-drive Meh
-      // outcome with zero points) -- the existing OT segment's own scoring is untouched.
-      round.myScore = round.quarters[round.quarters.length-1].myTotal;
-      round.oppScore = round.quarters[round.quarters.length-1].oppTotal;
+    if(hadExtras && !stillTied){
+      // The game used to need extra innings; this at-bat just decided it in regulation. Drop the
+      // extra frames that never had to happen and re-sync the score off the 9th.
+      round.quarters.length = REGULATION_INNINGS;
+      const nine = round.quarters[REGULATION_INNINGS-1];
+      round.myScore = nine.myTotal; round.oppScore = nine.oppTotal;
+      otNote = "That decided it in nine — no extra innings needed after all.";
+    } else if(!hadExtras && stillTied){
+      // The game used to end in nine; this at-bat just tied it back up. Play a fair extra frame:
+      // a good read that only manages to tie sends it to extras and wins there; a blown read that
+      // ties it up hands the other side the walk-off chance.
+      let exMy=0, exOpp=0;
+      if(good) exMy = 1;
+      else if(Math.random() < 0.5 + ((round._offOverall??65)-(round._defOffense??round._defOverall??65))*0.01) exMy = 1;
+      else exOpp = 1;
+      round.quarters.push({ q:"10", myQ: exMy, oppQ: exOpp, myTotal: lastInn.myTotal+exMy, oppTotal: lastInn.oppTotal+exOpp });
+      round.myScore = lastInn.myTotal+exMy; round.oppScore = lastInn.oppTotal+exOpp;
+      otNote = good ? "Tied it up, then won it in extras." : "Tied it up, but they walked it off in extras.";
+    } else if(hadExtras && stillTied){
+      round.myScore = lastInn.myTotal;
+      round.oppScore = lastInn.oppTotal;
     }
 
-    // keep the box score's touchdown count consistent with a touchdown-type swing in the
-    // player's own favor -- attributed to the QB as a passing score, capped the same way
-    // generateGameBoxScore caps it.
-    if(dMy>0 && scoreType==="touchdown" && round.box) round.box.td = clamp((round.box.td||0)+1, 0, 6);
+    // keep the box score's HR count consistent with a homer-type swing in the player's own favor,
+    // capped the same way generateGameBoxScore caps it.
+    if(dMy>0 && /homer|slam/.test(scoreType) && round.box) round.box.td = clamp((round.box.td||0)+1, 0, 4);
     round.won = round.myScore > round.oppScore;
     return { dMy, dOpp, scoreType, otNote };
   }
@@ -10763,7 +10756,7 @@ import {
       overlay.innerHTML = `
         <div class="km-card">
           <div class="km-eyebrow">${roundDisplayLabel(round.round, season.year)} · Key Moment <span class="km-difficulty">${situation.difficulty}</span></div>
-          <h3 id="keyMomentHeading">Fourth quarter. This possession decides it.</h3>
+          <h3 id="keyMomentHeading">Late innings. This at-bat decides it.</h3>
           <div class="km-situation">${svgEscape(situation.text)}</div>
           <div class="km-clue">${keyMomentClue(tendency, situation.difficulty)}</div>
           <div class="km-options">${options.map(o=>`<button type="button" class="km-option" data-call="${o.id}">${svgEscape(o.label)}</button>`).join("")}</div>
@@ -10798,8 +10791,8 @@ import {
       career.keyMomentRecord = career.keyMomentRecord || { good:0, meh:0, bad:0 };
       career.keyMomentRecord[quality] = (career.keyMomentRecord[quality]||0) + 1;
       recordLedgerEvent("key_moment", { teamId: career.teamId, opponentId: round.oppId||null, choiceId: chosenId, outcomeId: executedQuality, severity: quality, metadata:{round: round.round, flippedResult} });
-      const verbPhrase = executedQuality==="good" ? "Delivered" : executedQuality==="meh" ? "Settled for a lesser read" : "Came up short";
-      career.transactions.push(`${season.year}: ${verbPhrase} in a key moment vs. the ${round.opponent} (${roundDisplayLabel(round.round, season.year)}).`);
+      const verbPhrase = executedQuality==="good" ? "Delivered" : executedQuality==="meh" ? "Settled for a lesser at-bat" : "Came up short";
+      career.transactions.push(`${season.year}: ${verbPhrase} in a clutch at-bat vs. the ${round.opponent} (${roundDisplayLabel(round.round, season.year)}).`);
       overlay.querySelectorAll(".km-option").forEach(btn=>{
         btn.disabled = true;
         if(btn.dataset.call===bestCall.id) btn.classList.add("correct");
@@ -10809,14 +10802,14 @@ import {
       const outcomeEl = document.createElement("div");
       outcomeEl.className = "km-outcome " + (executedQuality==="good" ? "good" : executedQuality==="meh" ? "meh" : "bad");
       outcomeEl.innerHTML = slipped
-        ? `Right read — but it didn't come out clean under the pressure. The defense makes just enough to hold it below what it should've been.`
+        ? `Right read — but it didn't come out clean under the pressure. He gets just enough of it to fall short of what it should've been.`
         : saved
-        ? `Wrong read — but he made something happen anyway. Pure talent bailing out a bad call.`
+        ? `Wrong guess — but the bat speed bails him out anyway. Pure talent salvaging a bad approach.`
         : quality==="good"
-        ? `Right read. The play works exactly as drawn up.`
+        ? `Right read. He was on it the whole way and put his best swing on it.`
         : quality==="meh"
-        ? `Not the sharpest read — it doesn't blow up on you, but it doesn't answer the defense either.`
-        : `Wrong read. The defense was sitting on it.`;
+        ? `Not the sharpest at-bat — it doesn't blow up on him, but it doesn't beat the pitcher either.`
+        : `Wrong read. The pitcher had him set up for it the whole at-bat.`;
       const whyEl = document.createElement("div");
       whyEl.className = "km-why";
       whyEl.textContent = describeKeyMomentReasoning(bestCall, tendency, situation);
@@ -10829,8 +10822,8 @@ import {
         flipEl = document.createElement("div");
         flipEl.className = "km-effect km-flip " + (round.won ? "good" : "bad");
         flipEl.textContent = round.won
-          ? "That's the whole game. The read just won it."
-          : "That's the whole game. The read just lost it.";
+          ? "That's the whole game. The at-bat just won it."
+          : "That's the whole game. The at-bat just lost it.";
       }
       const continueBtn = document.createElement("button");
       continueBtn.type = "button";

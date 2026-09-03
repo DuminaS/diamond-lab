@@ -114,7 +114,23 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [ ] the 5 team grades (O-Line/Weapons/Defense/Coaching/Front Office) still football-named — Phase 7/10
 - [ ] achievement hint text ("passing touchdowns") — Phase 8
 
-### Phase 6 — Key Moments (batter vs pitcher)
+### Phase 6 — Key Moments: the clutch at-bat  ✅
+- [x] sim/keyMoments.js PLAY_CALLS → 8 batter approaches (sit dead-red / ambush / spit on the
+      corners / take your walk / two-strike protect / A-swing / work a deep count / stay within
+      yourself). Ids + goodWhen/badWhen kept so the balance tests + counter map hold.
+- [x] OPPONENT_TENDENCIES → 8 pitcher archetypes (fastball-heavy / pounds the zone early / lives on
+      the black / nibbles with a lead / chase-bait / overpowering FB late life / crafty command
+      lefty / bears down with runners on). Ids unchanged.
+- [x] TENDENCY_SUBTLE_CLUES → observational pitcher tells; KEY_MOMENT_SITUATIONS → 18 late-inning
+      at-bat scenarios matching each id's flags (flag names kept, baseball meaning documented)
+- [x] keyMomentClue → hitting coach / advance report / dugout tape
+- [x] KEY_MOMENT_SCORE_TYPES → runs (RBI single / two-run double / three-run homer / grand slam /
+      bases-loaded walk); MEH → hard-hit out / run on the play
+- [x] applyKeyMomentSwing → swing lands on the 7th inning (index 6, matches the post-6th checkpoint),
+      extra-innings re-derive, HR box-score sync; heading "Late innings. This at-bat decides it."
+- [x] verified live: KM renders, clue/options/outcome all baseball, resolves with no page error;
+      key-moments.node.mjs 6/6
+
 ### Phase 7 — awards / records / HOF (Cooperstown)
 ### Phase 8 — achievements
 ### Phase 9 — multiplayer (matchCode DLR1, score weights)
