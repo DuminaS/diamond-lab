@@ -504,6 +504,107 @@ Item 5 of the "Next balance waves" list (a structured event ledger and declarati
 the current 39 achievements toward 250) remains entirely unstarted -- this was the last remaining
 item on that list before it.
 
+## 2026-09-02 — Balance implementation Wave 6: structured event ledger, declarative achievement rules
+
+Scope: item 5 of the "Next balance waves" list -- "Structured event ledger and declarative expansion
+from the current 39 achievements toward 250." Realistically scoped from the start, the same way every
+prior wave was: this ships the real infrastructure (a genuine event ledger + a genuine declarative
+rule engine) plus a real, substantial content batch, not a literal run at 250 entries in one pass.
+
+### What shipped
+
+- **`career.eventLedger`** (new, `src/main.js`): a flat, append-only, career-long timeline of
+  narrative-scale events, ADDED ALONGSIDE the existing `career.lifeEventLog` (never replacing it, so
+  the ~9 dark-humor achievements that already key off `lifeEventLog`'s `achievementId` field keep
+  working completely unchanged). Each entry is
+  `{ eventId, year, seasonIndex, sequenceIndex, teamId, opponentId, choiceId, outcomeId, severity,
+  metadata }` -- `teamId`/`opponentId` are always real, stable team codes (e.g. `"BUF"`), never a
+  rendered display name, and `sequenceIndex` is one shared, monotonic, career-long counter across
+  every event type (what multi-step chain achievements order against). Written by one new helper,
+  `recordLedgerEvent(eventId, opts)`, and wired into every narrative-scale event site that already
+  existed: the 8 pre-existing `lifeEventLog.push` call sites (relationship/lifepath/rivalry/
+  two-time-loser/locker-room/infraction/positive/organization events), contract signings
+  (`signFreeAgentOffer`, Wave 4's `CONTRACT_STRUCTURES`), the coordinator carousel
+  (`applyCoordinatorCarouselIfDue`, Wave 4), Key Moment resolutions (`triggerKeyMoment`, Wave 3, incl.
+  whether it flipped a playoff result), sim-initiated and player-requested trades (all three
+  `requestTrade` outcomes: granted/denied/released), championship wins AND losses
+  (`finalizePlayoffOutcome`), and individual season awards (MVP/Pro Bowl/All-Pro, logged right after
+  `resolveSeasonMVP`/`resolveSeasonAllProAndProBowl` actually decide them -- NOT right after the
+  season object is pushed, which is too early; see Bug found below). Old saves lazily backfill an
+  empty ledger via `migrateDevelopmentAgency` (no way to retroactively reconstruct a save's earlier
+  seasons, and every ledger-based achievement is new content, not a rewrite of anything an old save
+  could already have earned).
+- **`src/sim/achievementRules.js`** (new pure module, unit-tested headlessly like `ratings.js`/
+  `development.js`/`keyMoments.js`/`awards.js`): the declarative half. `seasonRule`/
+  `consecutiveSeasonRule` express conditions over the existing, already-rich `career.seasonLog`
+  (teamId, teamOverall, awards, playoffs) as a predicate + a count/streak-length; `eventCountRule`/
+  `sequenceRule`/`ledgerStep` express conditions over the new `career.eventLedger` the same way, with
+  `sequenceRule` additionally enforcing real ORDER (via `sequenceIndex`) and an optional
+  `withinSeasons` time window -- the "counts, ordering, time windows, opponent relationships, and
+  team-specific conditions" the brief asked for. `allOf`/`anyOf`/`not` compose rules so a whole
+  achievement condition stays one declarative expression instead of a bespoke closure.
+- **4 existing achievements migrated** to the new builders as a proof-of-concept (`wagons`,
+  `buffalobills`, `wiretowire`, `juggernaut`) -- each is mathematically identical to its old
+  `maxConsecutive(...)>=n` inline check, just expressed as `consecutiveSeasonRule(pred, n)(career)`
+  now, zero behavior change, zero risk. The other ~35 pre-existing achievements are deliberately left
+  as their original imperative closures -- force-migrating a large, already-tested, working registry
+  wholesale was judged not worth the risk for this wave, consistent with "migrate a small subset,
+  don't rewrite everything that already works."
+- **26 new achievements** (39 -> 65 total), organized in four new groups: 8 team-specific
+  (Buffalo/Cleveland/Detroit/Minnesota/Pittsburgh/Jets/49ers/Patriots, using real team-id filters over
+  `seasonLog` -- e.g. `buffaloclosure` requires 4 straight Bills title-game losses THEN a Bills win,
+  `purplepain` requires 3+ Vikings title-game losses and never a Vikings win), 10 tied to the newer
+  Wave 2-5 systems specifically (earned breakthroughs, contract structures, the coordinator carousel,
+  Key Moment tallies, a Key-Moment decision that flips a Super Bowl either direction), 5 multi-step
+  ledger chains using `sequenceRule` (a title-game loss followed by a later win; two straight losses
+  then a win; a scandal followed by an MVP within 3 seasons or a championship later; a denied trade
+  request followed by an MVP within 2 seasons), and 3 broader career-shape reads of the ledger's
+  transaction history (3+ team changes; 2+ re-signings with the same team; 3+ trade requests).
+
+### Bug found and fixed during this wave's own build
+
+Initially wrote the season-awards ledger-logging call (`award_won` for MVP/Pro Bowl/All-Pro)
+immediately after `career.seasonLog.push(season)` -- but `resolveSeasonMVP`/
+`resolveSeasonAllProAndProBowl` (the functions that actually mutate `season.awards` to add those
+labels) aren't called until several lines later, once every QB in the league has that year's season
+locked in. Logging at the original spot meant `season.awards` was always still empty at that point,
+so no `award_won` ledger entry could ever be created, silently disabling `scandalthensuccess` and
+`deniednotdefeated`. Caught by re-reading the surrounding code before writing tests (not by a failing
+test) -- fixed by moving the logging call to right after the `resolveSeasonMVP`/
+`resolveSeasonAllProAndProBowl` calls instead.
+
+### Verification
+
+`tests/balance/achievement-rules.node.mjs` (new, 10 tests): every rule builder's own semantics in
+isolation (streak-vs-total, filter-field-optionality, real ordering vs. "both happened somewhere",
+the `withinSeasons` window, empty-ledger safety, `allOf`/`not` composition using the exact shape
+`purplepain` uses). `tests/regression/event-ledger-and-declarative-achievements.spec.js` (new, 2
+Playwright tests): a real free-agent signing (reusing the Wave 5 FA-offer flow) appends a real,
+correctly-shaped `contract_signed` ledger entry with the right `teamId`/`choiceId`/`outcomeId`; a
+fabricated-but-structurally-valid `championship_lost` -> `championship_won` ledger sequence, written
+directly to a save the same way other regression tests reach specific scenarios, actually unlocks
+`redemptionarc` through the real `checkAchievements()` path (called unconditionally inside
+`generateSeason()`) after one ordinary `advanceOneSeason()` -- proving the whole chain end-to-end,
+not just each layer's own unit tests. `npm test`: 30/30 balance tests (20 prior + 10 new), production
+build clean, 46/46 Playwright (44 prior + 2 new; no reseeds needed -- this wave's new
+`Math.random()` calls only happen inside code paths, like Key Moments and coordinator-carousel rolls,
+that already existed and were already probabilistic).
+
+### Not done this wave (stated plainly)
+
+This is 65 achievements, not 250 -- the brief's own number was never realistic for one wave, and
+this was scoped the same way every prior wave was (real infrastructure + a real batch, not a
+sprint to a headline count). Specifically still open: the ~35 pre-Wave-6 achievements were not
+force-migrated to the new declarative builders (a deliberate, low-risk choice, not an oversight);
+opponent-team-specific achievements (e.g. "beat the same rival in back-to-back championship games")
+aren't buildable yet because a playoff round's opponent is only known by display name, not by a
+stable team id -- `season.playoffs.rounds[i]` would need an `oppId`-equivalent field added before
+that category can exist (the "Playoff Tree overhaul" plan file already flags this same gap for an
+unrelated reason); no UI surfaces `career.eventLedger` directly to the player anywhere (it's
+achievement-engine-internal, same visibility level as `career.lifeEventLog` always had); and this
+wave didn't attempt time-window achievements phrased in real-world elapsed time (only in-career
+season counts), since nothing in this codebase tracks wall-clock time during a career.
+
 ## Testing methodology (established pattern, reuse every round)
 - jsdom in `/tmp/gtest`, debug hooks (`window.__debug`) injected only into throwaway copies (`index.debugN.html`), never the real file. Latest debug build: `index.debug24.html` (Round 4, item 3).
 - `grep -c "__debug" index.html` must return 0 on the real file before every publish.

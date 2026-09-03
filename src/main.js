@@ -15,6 +15,10 @@ import {
 } from "./sim/keyMoments.js";
 import { evaluateSeasonAwardScores, expectedWinPctForTeamOverall } from "./sim/awards.js";
 import {
+  maxConsecutive as ruleMaxConsecutive, seasonRule, consecutiveSeasonRule, eventCountRule, sequenceRule, ledgerStep,
+  allOf, anyOf, not as ruleNot,
+} from "./sim/achievementRules.js";
+import {
   DEVELOPMENT_PLAN_LIST,
   advanceDevelopmentSeason,
   applyOffseasonPlanResources,
@@ -712,11 +716,10 @@ import {
      can still fire on the very last tick). The Baseball Card's back face shows every achievement
      actually earned in that career -- not a curated equip loadout -- via entry.achievements
      (see saveTrophyRoomEntry in finishCareer). */
-  function maxConsecutive(list, pred){
-    let max=0, cur=0;
-    list.forEach(x=>{ if(pred(x)){ cur++; max=Math.max(max,cur); } else cur=0; });
-    return max;
-  }
+  // maxConsecutive/seasonRule/consecutiveSeasonRule/eventCountRule/sequenceRule/ledgerStep are the
+  // pure declarative rule-builder primitives (src/sim/achievementRules.js, Balance Wave 6) -- kept
+  // as bare imports (not re-wrapped) so achievement `check` closures below can call them directly.
+  const maxConsecutive = ruleMaxConsecutive;
   function wonTitle(s){ return !!(s.playoffs && s.playoffs.wonRing); }
   // Reached the actual title game (internal round label is always "Super Bowl", every era -- see
   // buildSuperBowlRound) and did NOT come away with the ring. Pre-1966 seasons can win their ring
@@ -732,6 +735,31 @@ import {
   // which stamps it onto the career.lifeEventLog entry it pushes) specifically so the dark-humor
   // achievements below can hook a specific scandal/easter-egg event without matching on title text.
   function hadLifeEvent(achievementId){ return (career.lifeEventLog||[]).some(e=>e.achievementId===achievementId); }
+
+  // Balance Wave 6: career.eventLedger is a NEW, structured, career-long timeline -- added ALONGSIDE
+  // career.lifeEventLog (never replacing it, so the dark-humor achievements above keep working
+  // unchanged) specifically so achievement rules can be DATA (an eventId + a few stable-id filters
+  // + a count or an ordering) instead of a hand-rolled scanning closure. Every field but eventId is
+  // optional and stable-id-based on purpose -- teamId/opponentId are real team codes (e.g. "BUF"),
+  // never a rendered display name, so a team-specific achievement never breaks if flavor text
+  // changes. sequenceIndex is one shared, monotonic, career-long counter across every event type,
+  // which is what sequenceRule (achievementRules.js) orders multi-step achievements against.
+  function recordLedgerEvent(eventId, opts={}){
+    if(!career.eventLedger) career.eventLedger = [];
+    career._eventSequenceCounter = (career._eventSequenceCounter||0)+1;
+    career.eventLedger.push({
+      eventId,
+      year: career.year,
+      seasonIndex: career.seasonLog.length,
+      sequenceIndex: career._eventSequenceCounter,
+      teamId: opts.teamId!==undefined ? opts.teamId : (career.teamId||null),
+      opponentId: opts.opponentId!==undefined ? opts.opponentId : null,
+      choiceId: opts.choiceId!==undefined ? opts.choiceId : null,
+      outcomeId: opts.outcomeId!==undefined ? opts.outcomeId : null,
+      severity: opts.severity!==undefined ? opts.severity : null,
+      metadata: opts.metadata!==undefined ? opts.metadata : null,
+    });
+  }
 
   function badgeIconSVG(key){
     return `<svg viewBox="0 0 24 24" class="pb-icon-svg" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${BADGE_ICONS[key]||BADGE_ICONS.star}</svg>`;
@@ -821,14 +849,18 @@ import {
       check: ()=> career.seasonLog.filter(s=>s.wearBreakdown).length>=2 },
 
     // ----- dynasties, droughts, and history-flavored streaks -----
+    // wagons/buffalobills migrated to the Balance Wave 6 declarative rule builders as a proof-of-
+    // concept -- consecutiveSeasonRule(pred,n)(career) is exactly maxConsecutive(seasonLog,pred)>=n,
+    // so this is byte-for-byte the same condition, just expressed as data (a predicate + a count)
+    // instead of an inline maxConsecutive call.
     { key:"wagons", name:"No One Circles the Wagons", icon:"crown",
       blurb:"Four straight championships. The league simply couldn't answer.",
       hint:"Win the championship in four consecutive seasons.",
-      check: ()=> maxConsecutive(career.seasonLog, wonTitle)>=4 },
+      check: ()=> consecutiveSeasonRule(wonTitle, 4)(career) },
     { key:"buffalobills", name:"Quiet Like the Buffalo Bills", icon:"snow",
       blurb:"Four straight trips to the big game. Four straight times the confetti was the wrong color.",
       hint:"Reach the championship game four seasons in a row without ever winning it.",
-      check: ()=> maxConsecutive(career.seasonLog, reachedTitleGameAndLost)>=4 },
+      check: ()=> consecutiveSeasonRule(reachedTitleGameAndLost, 4)(career) },
     { key:"snakebitten", name:"Snake Bitten", icon:"gem",
       blurb:"So close, so many times, and never once close enough.",
       hint:"Reach the championship game 3+ times across your career without ever winning one.",
@@ -861,7 +893,7 @@ import {
     { key:"wiretowire", name:"Wire to Wire", icon:"infinity",
       blurb:"The best player in the league, two years running.",
       hint:"Win MVP in back-to-back seasons.",
-      check: ()=> maxConsecutive(career.seasonLog, s=>(s.awards||[]).includes("MVP"))>=2 },
+      check: ()=> consecutiveSeasonRule(s=>(s.awards||[]).includes("MVP"), 2)(career) },
     { key:"faceoftheleague", name:"Face of the League", icon:"star",
       blurb:"The league ran through him for the better part of a decade.",
       hint:"Win MVP three or more times across your career.",
@@ -869,7 +901,7 @@ import {
     { key:"juggernaut", name:"Juggernaut", icon:"shield",
       blurb:"Three straight years fielding one of the best rosters in football.",
       hint:"Keep your team grade at 90 or higher for three consecutive seasons.",
-      check: ()=> maxConsecutive(career.seasonLog, s=>s.teamOverall>=90)>=3 },
+      check: ()=> consecutiveSeasonRule(s=>s.teamOverall>=90, 3)(career) },
     { key:"onemanteam", name:"One-Man Team", icon:"mountain",
       blurb:"Carried a bad roster to individual honors again and again.",
       hint:"Make Pro Bowl or All-Pro three or more times on a bottom-tier (under 45 grade) team.",
@@ -928,6 +960,159 @@ import {
       blurb:"Lost to the same guy twice — once on the scoreboard, once at home.",
       hint:"Have your partner get caught up in a scandal with a bitter rival.",
       check: ()=> hadLifeEvent("two_time_loser") },
+
+    // ----- Balance Wave 6: team-specific declarative achievements -----
+    // Each reads career.seasonLog (already a rich, structured, per-season record -- teamId,
+    // teamOverall, awards, playoffs) through the achievementRules.js rule builders, so the LOGIC is
+    // data (a predicate + a count/ordering) rather than a bespoke scan -- the actual "declarative"
+    // half of this wave. A couple (clevelandfirst, jetsredemption, bayarearesurgence) still read as
+    // a short hand-written closure because the exact ordering they need (first-ever win at 20+
+    // seasons; a stat threshold that must hold BEFORE a later award) doesn't reduce cleanly to the
+    // current rule vocabulary -- that's an honest limit of this wave's engine, not an oversight.
+    { key:"buffaloclosure", name:"Buffalo Closure", icon:"snow",
+      blurb:"Four straight heartbreaks in Buffalo, and then, finally, the one that counted.",
+      hint:"Lose four straight championship games with the Bills, then eventually win one with them.",
+      check: ()=> allOf(
+        consecutiveSeasonRule(s=>s.teamId==="BUF"&&reachedTitleGameAndLost(s), 4),
+        seasonRule(s=>s.teamId==="BUF"&&wonTitle(s), 1),
+      )(career) },
+    { key:"clevelandfirst", name:"Cleveland, Finally", icon:"sunrise",
+      blurb:"Two decades of waiting, and the city finally gets its parade.",
+      hint:"Win the Browns' first championship of your career after 20+ seasons with no ring at all.",
+      check: ()=>{
+        const idx = career.seasonLog.findIndex(s=>s.teamId==="CLE"&&wonTitle(s));
+        return idx>=20 && career.seasonLog.slice(0,idx).every(s=>!wonTitle(s));
+      } },
+    { key:"motorcitymiracle", name:"Motor City Miracle", icon:"gem",
+      blurb:"Nobody outside the city gave this Detroit team a single chance. They didn't need one.",
+      hint:"Win a championship with the Lions in a season that started with a team grade under 50.",
+      check: ()=> seasonRule(s=>s.teamId==="DET"&&s.teamOverall<50&&wonTitle(s), 1)(career) },
+    { key:"purplepain", name:"Purple Pain", icon:"compass",
+      blurb:"Minnesota gets there. Minnesota just never, ever finishes it.",
+      hint:"Reach the championship game 3+ times with the Vikings without ever winning one there.",
+      check: ()=> allOf(
+        seasonRule(s=>s.teamId==="MIN"&&reachedTitleGameAndLost(s), 3),
+        ruleNot(seasonRule(s=>s.teamId==="MIN"&&wonTitle(s), 1)),
+      )(career) },
+    { key:"steeltown", name:"Steel Town", icon:"shield",
+      blurb:"Pittsburgh doesn't rebuild. Pittsburgh reloads.",
+      hint:"Win two or more championships with the Steelers.",
+      check: ()=> seasonRule(s=>s.teamId==="PIT"&&wonTitle(s), 2)(career) },
+    { key:"jetsredemption", name:"Broadway Reboot", icon:"star",
+      blurb:"Buried on the bench once. Impossible to bench by the end.",
+      hint:"Earn Pro Bowl, All-Pro, or MVP with the Jets in a later season after logging real bench time with them.",
+      check: ()=>{
+        const bIdx = career.seasonLog.findIndex(s=>s.teamId==="NYJ"&&(s.missedGamesBackup||0)>0);
+        if(bIdx===-1) return false;
+        return career.seasonLog.slice(bIdx+1).some(s=>s.teamId==="NYJ"&&((s.awards||[]).includes("Pro Bowl")||(s.awards||[]).includes("All-Pro")||(s.awards||[]).includes("MVP")));
+      } },
+    { key:"bayarearesurgence", name:"Bay Area Resurgence", icon:"mountain",
+      blurb:"Walked into a rebuild in the Bay. Walked out with a real contender.",
+      hint:"Improve the 49ers' team grade by 30+ points from your first season there to a later one.",
+      check: ()=>{
+        const sf = career.seasonLog.filter(s=>s.teamId==="SF");
+        if(sf.length<2) return false;
+        return sf[sf.length-1].teamOverall - sf[0].teamOverall >= 30;
+      } },
+    { key:"patriotway", name:"The Patriot Way", icon:"crown",
+      blurb:"Five straight years of one of the best rosters in football, all under one hood in Foxborough.",
+      hint:"Keep a 85+ team grade for 5 consecutive seasons with the Patriots.",
+      check: ()=> consecutiveSeasonRule(s=>s.teamId==="NE"&&s.teamOverall>=85, 5)(career) },
+
+    // ----- Balance Wave 6: achievements tied to the newer Development/Contract/Key Moment/
+    // Coordinator-Carousel systems (Waves 2-5), showcasing mechanics the original 39 achievements
+    // predate. Several of these are the first achievements built against career.eventLedger (see
+    // recordLedgerEvent in main.js), the new structured event log this wave adds. -----
+    { key:"earnedit", name:"Earned It", icon:"bolt",
+      blurb:"Not a gift from the dice. A breakthrough he actually played his way into.",
+      hint:"Trigger at least one earned development breakthrough.",
+      check: ()=> (career._earnedBreakthroughCount||0)>=1 },
+    { key:"selfmade", name:"Self-Made", icon:"mountain",
+      blurb:"Every real leap in this career traces back to a Sunday, not a die roll.",
+      hint:"Trigger three or more earned development breakthroughs across a career.",
+      check: ()=> (career._earnedBreakthroughCount||0)>=3 },
+    { key:"betonyourself", name:"Bet on Yourself", icon:"gauge",
+      blurb:"Took the record-setting number every time, cap pressure be damned.",
+      hint:"Sign three or more record-setting contract structures across a career.",
+      check: ()=> eventCountRule({ eventId:"contract_signed", choiceId:"recordSetting" }, 3)(career) },
+    { key:"hometowndiscount", name:"Hometown Discount", icon:"heart",
+      blurb:"Left real money on the table, more than once, to keep the roster around him whole.",
+      hint:"Sign three or more team-friendly contract structures across a career.",
+      check: ()=> eventCountRule({ eventId:"contract_signed", choiceId:"teamFriendly" }, 3)(career) },
+    { key:"capcasualty", name:"Cap Casualty", icon:"chain",
+      blurb:"The record deal looked great on signing day. The front office remembered it two years later.",
+      hint:"Sign a record-setting contract, then get traded within 2 seasons.",
+      check: ()=> sequenceRule(
+        [ledgerStep({ eventId:"contract_signed", choiceId:"recordSetting" }), ledgerStep({ eventId:"traded" })],
+        { withinSeasons:2 },
+      )(career) },
+    { key:"coordinatorsnightmare", name:"Coordinator's Nightmare", icon:"wing",
+      blurb:"His own staff keeps getting head-coaching interviews. It's a compliment that costs him every time.",
+      hint:"Have the coordinator carousel hit your own team's coaching grade twice in a career.",
+      check: ()=> eventCountRule({ eventId:"coordinator_carousel" }, 2)(career) },
+    { key:"icecold", name:"Ice Cold", icon:"clock",
+      blurb:"When it mattered most, the read was wrong more often than it was right.",
+      hint:"Come up short in 8 or more Key Moment decisions across a career.",
+      check: ()=> ((career.keyMomentRecord&&career.keyMomentRecord.bad)||0)>=8 },
+    { key:"clutchgene", name:"Clutch Gene", icon:"target",
+      blurb:"When the possession decides it, he's the one you want holding the ball.",
+      hint:"Deliver 10 or more good Key Moment decisions across a career.",
+      check: ()=> ((career.keyMomentRecord&&career.keyMomentRecord.good)||0)>=10 },
+    { key:"moneymoment", name:"Money Moment", icon:"trophy",
+      blurb:"The right call, executed exactly right, with a Super Bowl hanging on it.",
+      hint:"Deliver a good Key Moment decision that flips the result of a Super Bowl in your favor.",
+      check: ()=> (career.eventLedger||[]).some(e=> e.eventId==="key_moment" && e.severity==="good" && e.metadata && e.metadata.round==="Super Bowl" && e.metadata.flippedResult) },
+    { key:"heartbreaker", name:"Heartbreaker", icon:"flame",
+      blurb:"One wrong read, one Super Bowl, gone.",
+      hint:"Come up short on a Key Moment decision that flips a Super Bowl win into a loss.",
+      check: ()=> (career.eventLedger||[]).some(e=> e.eventId==="key_moment" && e.severity==="bad" && e.metadata && e.metadata.round==="Super Bowl" && e.metadata.flippedResult) },
+
+    // ----- Balance Wave 6: multi-event chains, using career.eventLedger's sequenceIndex to require
+    // real ORDER (not just that both things happened somewhere in the career) -- the kind of
+    // condition the old lifeEventLog-only system had no clean way to express at all. -----
+    { key:"redemptionarc", name:"Redemption Arc", icon:"sunrise",
+      blurb:"Lost the big one once. Made sure it didn't define him.",
+      hint:"Lose a championship game, then win one in a later season.",
+      check: ()=> sequenceRule([ledgerStep({ eventId:"championship_lost" }), ledgerStep({ eventId:"championship_won" })])(career) },
+    { key:"backtobackheartbreak", name:"Third Time's the Charm", icon:"infinity",
+      blurb:"Lost the big one twice running. Didn't let there be a third.",
+      hint:"Lose two straight championship games, then win the next one you reach.",
+      check: ()=> sequenceRule([
+        ledgerStep({ eventId:"championship_lost" }), ledgerStep({ eventId:"championship_lost" }), ledgerStep({ eventId:"championship_won" }),
+      ])(career) },
+    { key:"scandalthensuccess", name:"Rewriting the Headline", icon:"star",
+      blurb:"The tabloids had their story. Then he went and won MVP before they could finish telling it.",
+      hint:"Survive a scandal, then win MVP within 3 seasons.",
+      check: ()=> sequenceRule(
+        [ledgerStep({ eventId:"infraction_event" }), ledgerStep({ eventId:"award_won", outcomeId:"MVP" })],
+        { withinSeasons:3 },
+      )(career) },
+    { key:"cleanslate", name:"Clean Slate", icon:"crown",
+      blurb:"The scandal was real. So, eventually, was the ring.",
+      hint:"Survive a scandal, then win a championship in a later season.",
+      check: ()=> sequenceRule([ledgerStep({ eventId:"infraction_event" }), ledgerStep({ eventId:"championship_won" })])(career) },
+    { key:"deniednotdefeated", name:"Denied, Not Defeated", icon:"gauge",
+      blurb:"They said no to the trade request. He made them regret it fast.",
+      hint:"Get a trade request denied, then win MVP with that same front office within 2 seasons.",
+      check: ()=> sequenceRule(
+        [ledgerStep({ eventId:"trade_requested", outcomeId:"denied" }), ledgerStep({ eventId:"award_won", outcomeId:"MVP" })],
+        { withinSeasons:2 },
+      )(career) },
+
+    // ----- Balance Wave 6: career-shape achievements reading the ledger's broader transaction
+    // history (trades, signings, requests) as a whole rather than one specific chain. -----
+    { key:"wanderlust", name:"Wanderlust", icon:"compass",
+      blurb:"Three different lockers, three different playbooks, one very well-traveled career.",
+      hint:"Change teams (by trade or free-agent signing) three or more times in a career.",
+      check: ()=> (career.eventLedger||[]).filter(e=> e.eventId==="traded" || (e.eventId==="contract_signed" && e.outcomeId==="signed")).length>=3 },
+    { key:"frontofficefavorite", name:"Front Office Favorite", icon:"anchor",
+      blurb:"They kept bringing him back. He kept giving them a reason to.",
+      hint:"Re-sign with the same team two or more times in a career.",
+      check: ()=> eventCountRule({ eventId:"contract_signed", outcomeId:"re-signed" }, 2)(career) },
+    { key:"persistent", name:"Persistent", icon:"paw",
+      blurb:"Asked for a way out three separate times. Never stopped asking.",
+      hint:"Request a trade three or more times across a career.",
+      check: ()=> eventCountRule({ eventId:"trade_requested" }, 3)(career) },
   ];
 
   function achievementDefFor(key){ return ACHIEVEMENTS.find(a=>a.key===key); }
@@ -2333,6 +2518,9 @@ import {
       capPressure: 0,
       _developmentPlanAppliedYear: draftYear,
       _coordinatorCarouselCheckedYear: draftYear,
+      // Balance Wave 6: the structured event ledger -- see recordLedgerEvent's own comment.
+      eventLedger: [],
+      _eventSequenceCounter: 0,
       originalBuild: {...build},
       // Wave 2A (MASTER_REMEDIATION_SPEC.md): the canonical, ID-based QB registry -- see the
       // "Canonical QB registry" block above rivalForTeam for what owns these and how they stay in
@@ -5309,6 +5497,11 @@ import {
     // a surprise coaching hit off a stale/missing playoffs record from before this wave existed.
     if(careerObj.capPressure==null) careerObj.capPressure = 0;
     if(careerObj._coordinatorCarouselCheckedYear==null) careerObj._coordinatorCarouselCheckedYear = careerObj.year;
+    // Balance Wave 6: an old save simply starts its ledger from here forward -- there's no way to
+    // retroactively reconstruct earlier seasons' narrative events, and ledger-based achievements are
+    // additive (new content), not a rewrite of anything an old save could already have earned.
+    if(!careerObj.eventLedger) careerObj.eventLedger = [];
+    if(careerObj._eventSequenceCounter==null) careerObj._eventSequenceCounter = 0;
   }
 
   /* ----- Phase 2 of the QB-entity redesign: real bench mobility and a free-agent pool. A bench
@@ -5712,6 +5905,7 @@ import {
       recomputeMyTeamStrength();
       const teamName = teamNameAt(career.teamId, career.year);
       career.transactions.push(`${career.year}: Coordinator carousel — a deep playoff run cost the ${teamName} an assistant to a head-coaching job elsewhere (Coaching ${before} → ${career.coaching}).`);
+      recordLedgerEvent("coordinator_carousel", { teamId: career.teamId, outcomeId: wonItAll?"won_it_all":"deep_loss", metadata:{coachingBefore:before, coachingAfter:career.coaching} });
     }
   }
 
@@ -5960,6 +6154,14 @@ import {
     // player and every simulated rival -- has this year's season locked in.
     const mvp = resolveSeasonMVP(season, career.year);
     const { proBowl, allPro } = resolveSeasonAllProAndProBowl(season, career.year);
+    // Balance Wave 6: NOW (not right after the push above) season.awards actually reflects whatever
+    // resolveSeasonMVP/resolveSeasonAllProAndProBowl just decided -- log it to the event ledger too
+    // so chain achievements can express "an MVP season eventually followed a scandal" as an ordered
+    // sequenceRule instead of a hand-walked seasonLog scan. Only the three generic award labels ever
+    // pushed onto season.awards besides a championship ring label qualify here.
+    (season.awards||[]).forEach(a=>{
+      if(a==="MVP"||a==="Pro Bowl"||a==="All-Pro") recordLedgerEvent("award_won", { teamId: season.teamId, outcomeId: a });
+    });
 
     // ----- Team quality for NEXT season: legible causes first, small residual noise last. -----
     // Team quality moves through roster churn, regression/rebuild pressure, and explicit league
@@ -6301,6 +6503,7 @@ import {
     career.reputation = clamp(career.reputation + repDelta, 0, 100);
     career.leaguePopularity = clamp((career.leaguePopularity??50) + popDelta, 0, 100);
     career.lifeEventLog.push({ year:career.year, title, severity:"relationship" });
+    recordLedgerEvent("relationship_event", { severity:"relationship" });
     career.transactions.push(`${career.year}: ${title}.`);
     content.innerHTML = eraWrap(decadeForYear(career.year), `
       <div class="ev-eyebrow">${career.year} · Personal Life</div>
@@ -6402,6 +6605,7 @@ import {
     career.reputation = clamp(career.reputation + repDelta, 0, 100);
     career.leaguePopularity = clamp((career.leaguePopularity??50) + Math.round(repDelta*0.7), 0, 100);
     career.lifeEventLog.push({ year:career.year, title:ev.title, severity:"lifepath" });
+    recordLedgerEvent("lifepath_event", { severity:"lifepath", choiceId: ev.id||null });
     career.transactions.push(`${career.year}: ${ev.title}.`);
     content.innerHTML = eraWrap(decadeForYear(career.year), `
       <div class="ev-eyebrow">${career.year} · Off the Field</div>
@@ -6461,6 +6665,7 @@ import {
     const rec = ensureRivalryRecord(rival.id);
     rec.score = clamp(rec.score + (ev.tone==="toxic" ? 6 : -4), 0, 100);
     career.lifeEventLog.push({ year:career.year, title:ev.title, severity:"rivalry" });
+    recordLedgerEvent("rivalry_event", { opponentId: rival.teamId||null, severity:"rivalry", choiceId: ev.id||null });
     career.transactions.push(`${career.year}: ${ev.title} — vs. ${rival.name}.`);
     content.innerHTML = eraWrap(decadeForYear(career.year), `
       <div class="ev-eyebrow">${career.year} · Rivalry</div>
@@ -6507,6 +6712,7 @@ import {
     career.leaguePopularity = clamp((career.leaguePopularity??50) + popDelta, 0, 100);
     rec.score = clamp(rec.score + 30, 0, 100);
     career.lifeEventLog.push({ year:career.year, title, severity:"rivalry", legendary:true, achievementId:"two_time_loser" });
+    recordLedgerEvent("rivalry_event", { opponentId: rival.teamId||null, severity:"rivalry", outcomeId:"two_time_loser", metadata:{legendary:true} });
     career.transactions.push(`${career.year}: ${title}.`);
     content.innerHTML = eraWrap(decadeForYear(career.year), `
       <div class="ev-eyebrow">${career.year} · Personal Life</div>
@@ -6736,6 +6942,7 @@ import {
     const delta = good ? randInt(choice.goodDelta[0], choice.goodDelta[1]) : randInt(choice.badDelta[0], choice.badDelta[1]);
     adjustTeamStrength(career.teamId, delta, 0);
     career.lifeEventLog.push({ year:career.year, title:ev.title, severity: good?"locker-good":"locker-bad" });
+    recordLedgerEvent("locker_room_event", { severity: good?"locker-good":"locker-bad", outcomeId: good?"good":"bad", metadata:{delta} });
     career.transactions.push(`${career.year}: ${ev.title} — ${good?"handled it well":"handled it poorly"} (team grade ${fmtDelta(delta)}).`);
     content.innerHTML = eraWrap(decadeForYear(career.year), `
         <div class="ev-eyebrow">${career.year} · Locker Room</div>
@@ -6847,6 +7054,7 @@ import {
     career.fanSupport = clamp((career.fanSupport ?? 50) + Math.round(repHit*0.5), 0, 100);
     career.leaguePopularity = clamp((career.leaguePopularity ?? 50) + Math.round(repHit*0.7), 0, 100);
     career.lifeEventLog.push({ year:career.year, title:ev.title, severity:ev.severity, legendary: !!ev.legendary, achievementId: ev.achievementId||null });
+    recordLedgerEvent("infraction_event", { severity: ev.severity, outcomeId: ev.achievementId||null, metadata:{legendary: !!ev.legendary} });
 
     if(ev.severity==="career-end"){
       career.transactions.push(`${career.year}: ${ev.title} — banned from the league.`);
@@ -6912,6 +7120,7 @@ import {
     }
     if(ev.cutShield) career._cutShieldSeasons = 1;
     career.lifeEventLog.push({ year:career.year, title:ev.title, severity:"positive" });
+    recordLedgerEvent("positive_event", { severity:"positive", choiceId: ev.id||null });
     career.transactions.push(`${career.year}: ${ev.title}.`);
     const boostsText = ev.boosts && ev.boosts.length
       ? ev.boosts.map(b=> `${(ATTR_BY_KEY[b.key]||{}).label||b.key} ${fmtDelta(b.delta)} for ${ev.seasons} season${ev.seasons===1?"":"s"}`).join(" · ")
@@ -6964,6 +7173,7 @@ import {
     if(ev.setFlag) career[ev.setFlag] = true;
     if(ev.cutShield) career._cutShieldSeasons = 1;
     career.lifeEventLog.push({ year:career.year, title:ev.title, severity:"organization" });
+    recordLedgerEvent("organization_event", { severity:"organization", choiceId: ev.id||null });
     career.transactions.push(`${career.year}: ${ev.title}${schemeNote?" — new offensive scheme installed":""}.`);
     // tone follows the actual rolled outcome, not just a fixed per-event label -- a swingy event
     // like "New GM Takes Over" (strengthDelta:[-8,10]) reads as good or bad card styling based on
@@ -7355,6 +7565,7 @@ import {
     const _oldTeamId = career.teamId;
     career.teamId = team.id; career.seasonsWithTeam = 0;
     handOffTeamProfile(_oldTeamId, team.id);
+    recordLedgerEvent("traded", { teamId: team.id, opponentId: _oldTeamId, outcomeId:"sim_initiated" });
     // Wave 1: material transaction -- checkpoint the new team assignment right away.
     saveActiveCareer({ phase:"decision", eventId:"traded" });
     const content = document.getElementById("careerContent");
@@ -7396,6 +7607,7 @@ import {
     if(effOverall < 45 && Math.random() < 0.35*releaseMult){
       career.reputation = clamp(career.reputation - 6, 0, 100);
       career.transactions.push(`${career.year}: Requested a trade out of the ${oldTeam} — released instead.`);
+      recordLedgerEvent("trade_requested", { teamId: career.teamId, outcomeId:"released_instead" });
       content.innerHTML = eraWrap(decade, `
         <div class="ev-eyebrow">${career.year} · Front Office</div>
         <h3>They didn't shop him. They cut him.</h3>
@@ -7414,6 +7626,7 @@ import {
       const _oldTeamId = career.teamId;
       career.teamId = team.id; career.seasonsWithTeam = 0;
       handOffTeamProfile(_oldTeamId, team.id);
+      recordLedgerEvent("trade_requested", { teamId: team.id, opponentId: _oldTeamId, outcomeId:"granted" });
       // Wave 1: material transaction -- checkpoint the new team assignment right away.
       saveActiveCareer({ phase:"decision", eventId:"trade_requested_granted" });
       content.innerHTML = eraWrap(decade, `
@@ -7428,6 +7641,7 @@ import {
 
     career.reputation = clamp(career.reputation - 2, 0, 100);
     career.transactions.push(`${career.year}: Requested a trade out of the ${oldTeam} — denied.`);
+    recordLedgerEvent("trade_requested", { teamId: career.teamId, outcomeId:"denied" });
     content.innerHTML = eraWrap(decade, `
       <div class="ev-eyebrow">${career.year} · Front Office</div>
       <h3>Request denied.</h3>
@@ -7865,6 +8079,7 @@ import {
     }
     const tier = o.role==="competition" ? "backup" : (meta.tier==="minimum"?"minimum":meta.tier);
     career.contract = { apy: signedApy, years: signedYears, tier };
+    recordLedgerEvent("contract_signed", { teamId:o.teamId, choiceId: structure.id, outcomeId: o.isHome?"re-signed":"signed", metadata:{apy:signedApy, years:signedYears} });
     // Wave 1: a signing is exactly the kind of material, hard-to-redo decision the spec calls out
     // by name -- checkpoint it immediately, before whatever comes next (an injury check, then the
     // season itself) has a chance to get interrupted.
@@ -9861,6 +10076,7 @@ import {
       season.keyMomentDevelopmentDelta = Number(season.keyMomentDevelopmentDelta || 0) + developmentDelta;
       career.keyMomentRecord = career.keyMomentRecord || { good:0, meh:0, bad:0 };
       career.keyMomentRecord[quality] = (career.keyMomentRecord[quality]||0) + 1;
+      recordLedgerEvent("key_moment", { teamId: career.teamId, choiceId: chosenId, outcomeId: executedQuality, severity: quality, metadata:{round: round.round, flippedResult} });
       const verbPhrase = executedQuality==="good" ? "Delivered" : executedQuality==="meh" ? "Settled for a lesser read" : "Came up short";
       career.transactions.push(`${season.year}: ${verbPhrase} in a key moment vs. the ${round.opponent} (${roundDisplayLabel(round.round, season.year)}).`);
       overlay.querySelectorAll(".km-option").forEach(btn=>{
@@ -10161,6 +10377,9 @@ import {
       // shield) rather than making champions flatly uncuttable, which would be its own kind of
       // unrealistic.
       career._cutShieldSeasons = Math.max(career._cutShieldSeasons||0, 2);
+      recordLedgerEvent("championship_won", { teamId: season.teamId, outcomeId: preSBEra?"conf_champ":"super_bowl", metadata:{year: season.year, ringLabel} });
+    } else if(reachedTitleGameAndLost(season)){
+      recordLedgerEvent("championship_lost", { teamId: season.teamId, metadata:{year: season.year} });
     }
     checkAchievements();
     const badgesPanel = document.getElementById("tabpanel-badges");
