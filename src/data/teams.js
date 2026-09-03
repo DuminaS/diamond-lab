@@ -1,70 +1,109 @@
-// Wave 9 (MASTER_REMEDIATION_SPEC.md): Stage 1 of incremental modularization -- pure team,
-// division-alignment, and playoff-format data extracted verbatim from src/main.js's single
-// monolithic IIFE. Byte-for-byte identical to what main.js already had (moved, not rewritten); no
-// logic lives here, no embedded functions, no reference to any other main.js-internal state -- see
-// the spec's own "no circular dependencies" / "add imports/exports around pure functions first"
-// rules for why this had to be genuinely pure before it could move.
+// Diamond Lab (baseball conversion of Gridiron Lab): the 30 MLB franchises, league/division
+// alignment by year, and postseason format by year. Pure data -- no logic, no embedded functions,
+// no reference to any main.js-internal state.
+//
+// INTERNAL CODE NOTE: the two leagues are stored under the opaque keys "AFC" (= American League)
+// and "NFC" (= National League), inherited from the Gridiron Lab skeleton. Dozens of bracket /
+// standings / award lookups key off those exact literals, so they are NEVER renamed -- only
+// remapped at the display layer (see leagueLabel() in main.js). Same rule for the internal
+// playoff-round literals "Wild Card" / "Divisional" / "Conference Championship" / "Super Bowl",
+// which display as Wild Card Series / Division Series / League Championship Series / World Series.
 
-  export const TEAMS = [{"id":"ARI","start":1960,"names":[{"from":1960,"to":1987,"name":"St. Louis Cardinals"},{"from":1988,"to":1993,"name":"Phoenix Cardinals"},{"from":1994,"to":9999,"name":"Arizona Cardinals"}]},{"id":"ATL","start":1966,"names":[{"from":1966,"to":9999,"name":"Atlanta Falcons"}]},{"id":"BAL","start":1996,"names":[{"from":1996,"to":9999,"name":"Baltimore Ravens"}]},{"id":"BUF","start":1960,"names":[{"from":1960,"to":9999,"name":"Buffalo Bills"}]},{"id":"CAR","start":1995,"names":[{"from":1995,"to":9999,"name":"Carolina Panthers"}]},{"id":"CHI","start":1960,"names":[{"from":1960,"to":9999,"name":"Chicago Bears"}]},{"id":"CIN","start":1968,"names":[{"from":1968,"to":9999,"name":"Cincinnati Bengals"}]},{"id":"CLE","start":1960,"names":[{"from":1960,"to":9999,"name":"Cleveland Browns"}]},{"id":"DAL","start":1960,"names":[{"from":1960,"to":9999,"name":"Dallas Cowboys"}]},{"id":"DEN","start":1960,"names":[{"from":1960,"to":9999,"name":"Denver Broncos"}]},{"id":"DET","start":1960,"names":[{"from":1960,"to":9999,"name":"Detroit Lions"}]},{"id":"GB","start":1960,"names":[{"from":1960,"to":9999,"name":"Green Bay Packers"}]},{"id":"HOU","start":2002,"names":[{"from":2002,"to":9999,"name":"Houston Texans"}]},{"id":"IND","start":1960,"names":[{"from":1960,"to":1983,"name":"Baltimore Colts"},{"from":1984,"to":9999,"name":"Indianapolis Colts"}]},{"id":"JAX","start":1995,"names":[{"from":1995,"to":9999,"name":"Jacksonville Jaguars"}]},{"id":"KC","start":1960,"names":[{"from":1960,"to":1962,"name":"Dallas Texans"},{"from":1963,"to":9999,"name":"Kansas City Chiefs"}]},{"id":"LV","start":1960,"names":[{"from":1960,"to":1981,"name":"Oakland Raiders"},{"from":1982,"to":1994,"name":"Los Angeles Raiders"},{"from":1995,"to":2019,"name":"Oakland Raiders"},{"from":2020,"to":9999,"name":"Las Vegas Raiders"}]},{"id":"LAC","start":1960,"names":[{"from":1960,"to":1960,"name":"Los Angeles Chargers"},{"from":1961,"to":2016,"name":"San Diego Chargers"},{"from":2017,"to":9999,"name":"Los Angeles Chargers"}]},{"id":"LAR","start":1960,"names":[{"from":1960,"to":1994,"name":"Los Angeles Rams"},{"from":1995,"to":2015,"name":"St. Louis Rams"},{"from":2016,"to":9999,"name":"Los Angeles Rams"}]},{"id":"MIA","start":1966,"names":[{"from":1966,"to":9999,"name":"Miami Dolphins"}]},{"id":"MIN","start":1961,"names":[{"from":1961,"to":9999,"name":"Minnesota Vikings"}]},{"id":"NE","start":1960,"names":[{"from":1960,"to":1970,"name":"Boston Patriots"},{"from":1971,"to":9999,"name":"New England Patriots"}]},{"id":"NO","start":1967,"names":[{"from":1967,"to":9999,"name":"New Orleans Saints"}]},{"id":"NYG","start":1960,"names":[{"from":1960,"to":9999,"name":"New York Giants"}]},{"id":"NYJ","start":1960,"names":[{"from":1960,"to":1962,"name":"New York Titans"},{"from":1963,"to":9999,"name":"New York Jets"}]},{"id":"PHI","start":1960,"names":[{"from":1960,"to":9999,"name":"Philadelphia Eagles"}]},{"id":"PIT","start":1960,"names":[{"from":1960,"to":9999,"name":"Pittsburgh Steelers"}]},{"id":"SF","start":1960,"names":[{"from":1960,"to":9999,"name":"San Francisco 49ers"}]},{"id":"SEA","start":1976,"names":[{"from":1976,"to":9999,"name":"Seattle Seahawks"}]},{"id":"TB","start":1976,"names":[{"from":1976,"to":9999,"name":"Tampa Bay Buccaneers"}]},{"id":"TEN","start":1960,"names":[{"from":1960,"to":1996,"name":"Houston Oilers"},{"from":1997,"to":1998,"name":"Tennessee Oilers"},{"from":1999,"to":9999,"name":"Tennessee Titans"}]},{"id":"WAS","start":1960,"names":[{"from":1960,"to":2019,"name":"Washington Redskins"},{"from":2020,"to":2021,"name":"Washington Football Team"},{"from":2022,"to":9999,"name":"Washington Commanders"}]}];
-  /* ----- team color pairs for the draft night reveal card. Publicly-known brand colors only —
-     no logos or crests are reproduced, just a stylized primary/secondary gradient + initials
-     badge, to keep the visual flourish without touching trademarked artwork. ----- */
-  export const TEAM_COLORS = {
-    ARI:["#97233F","#000000"], ATL:["#A71930","#000000"], BAL:["#241773","#9E7C0C"], BUF:["#00338D","#C60C30"],
-    CAR:["#0085CA","#101820"], CHI:["#0B162A","#C83803"], CIN:["#FB4F14","#000000"], CLE:["#311D00","#FF3C00"],
-    DAL:["#041E42","#869397"], DEN:["#FB4F14","#002244"], DET:["#0076B6","#B0B7BC"], GB:["#203731","#FFB612"],
-    HOU:["#03202F","#A71930"], IND:["#002C5F","#A2AAAD"], JAX:["#101820","#D7A22A"], KC:["#E31837","#FFB81C"],
-    LV:["#000000","#A5ACAF"], LAC:["#0080C6","#FFC20E"], LAR:["#003594","#FFA300"], MIA:["#008E97","#F58220"],
-    MIN:["#4F2683","#FFC62F"], NE:["#002244","#C60C30"], NO:["#101820","#D3BC8D"], NYG:["#0B2265","#A71930"],
-    NYJ:["#125740","#000000"], PHI:["#004C54","#A5ACAF"], PIT:["#FFB612","#101820"], SF:["#AA0000","#B3995D"],
-    SEA:["#002244","#69BE28"], TB:["#D50A0A","#34302B"], TEN:["#0C2340","#4B92DB"], WAS:["#5A1414","#FFB612"],
-  };
-  /* ----- league structure: divisional alignment and playoff format both change by YEAR, not
-     just by decade, tracking real NFL history — expansion, relocation, and realignment all
-     shift who's in the league and how the bracket is built.
-     - 2002-present matches the real 4-division/conf map used today.
-     - 1970-2001 matches the real 3-division/conf map (AFC East/Central/West, NFC East/Central/
-       West) that ran from the AFL-NFL merger to the 2002 Houston Texans realignment.
-     - Pre-1970 is simplified: the AFL and "NFL" are modeled as two broad conferences with one
-       East/West split each, standing in for the real pre-merger structure (which itself went
-       through several irregular, non-geographic division schemes — Century, Capitol, Coastal —
-       in its final seasons). Baltimore, Cleveland, and Pittsburgh — all AFC teams today — were
-       NFL teams before the 1970 merger, so they're modeled on the "NFL" side for the 1960s. ----- */
-  export const DIVISIONS = [
-    { conf:"AFC", name:"East",  teams:["BUF","MIA","NE","NYJ"] },
-    { conf:"AFC", name:"North", teams:["BAL","CIN","CLE","PIT"] },
-    { conf:"AFC", name:"South", teams:["HOU","IND","JAX","TEN"] },
-    { conf:"AFC", name:"West",  teams:["DEN","KC","LV","LAC"] },
-    { conf:"NFC", name:"East",  teams:["DAL","NYG","PHI","WAS"] },
-    { conf:"NFC", name:"North", teams:["CHI","DET","GB","MIN"] },
-    { conf:"NFC", name:"South", teams:["ATL","CAR","NO","TB"] },
-    { conf:"NFC", name:"West",  teams:["ARI","LAR","SF","SEA"] },
+  export const TEAMS = [
+    // ---- American League ("AFC") ----
+    {"id":"BAL","start":1960,"names":[{"from":1960,"to":9999,"name":"Baltimore Orioles"}]},
+    {"id":"BOS","start":1960,"names":[{"from":1960,"to":9999,"name":"Boston Red Sox"}]},
+    {"id":"NYY","start":1960,"names":[{"from":1960,"to":9999,"name":"New York Yankees"}]},
+    {"id":"TB","start":1998,"names":[{"from":1998,"to":2007,"name":"Tampa Bay Devil Rays"},{"from":2008,"to":9999,"name":"Tampa Bay Rays"}]},
+    {"id":"TOR","start":1977,"names":[{"from":1977,"to":9999,"name":"Toronto Blue Jays"}]},
+    {"id":"CWS","start":1960,"names":[{"from":1960,"to":9999,"name":"Chicago White Sox"}]},
+    {"id":"CLE","start":1960,"names":[{"from":1960,"to":2021,"name":"Cleveland Indians"},{"from":2022,"to":9999,"name":"Cleveland Guardians"}]},
+    {"id":"DET","start":1960,"names":[{"from":1960,"to":9999,"name":"Detroit Tigers"}]},
+    {"id":"KC","start":1969,"names":[{"from":1969,"to":9999,"name":"Kansas City Royals"}]},
+    {"id":"MIN","start":1960,"names":[{"from":1960,"to":1960,"name":"Washington Senators"},{"from":1961,"to":9999,"name":"Minnesota Twins"}]},
+    {"id":"HOU","start":1962,"names":[{"from":1962,"to":1964,"name":"Houston Colt .45s"},{"from":1965,"to":9999,"name":"Houston Astros"}]},
+    {"id":"LAA","start":1961,"names":[{"from":1961,"to":1964,"name":"Los Angeles Angels"},{"from":1965,"to":1996,"name":"California Angels"},{"from":1997,"to":2004,"name":"Anaheim Angels"},{"from":2005,"to":9999,"name":"Los Angeles Angels"}]},
+    {"id":"OAK","start":1960,"names":[{"from":1960,"to":1967,"name":"Kansas City Athletics"},{"from":1968,"to":9999,"name":"Oakland Athletics"}]},
+    {"id":"SEA","start":1977,"names":[{"from":1977,"to":9999,"name":"Seattle Mariners"}]},
+    {"id":"TEX","start":1961,"names":[{"from":1961,"to":1971,"name":"Washington Senators"},{"from":1972,"to":9999,"name":"Texas Rangers"}]},
+    // ---- National League ("NFC") ----
+    {"id":"ATL","start":1960,"names":[{"from":1960,"to":1965,"name":"Milwaukee Braves"},{"from":1966,"to":9999,"name":"Atlanta Braves"}]},
+    {"id":"MIA","start":1993,"names":[{"from":1993,"to":2011,"name":"Florida Marlins"},{"from":2012,"to":9999,"name":"Miami Marlins"}]},
+    {"id":"NYM","start":1962,"names":[{"from":1962,"to":9999,"name":"New York Mets"}]},
+    {"id":"PHI","start":1960,"names":[{"from":1960,"to":9999,"name":"Philadelphia Phillies"}]},
+    {"id":"WSN","start":1969,"names":[{"from":1969,"to":2004,"name":"Montreal Expos"},{"from":2005,"to":9999,"name":"Washington Nationals"}]},
+    {"id":"CHC","start":1960,"names":[{"from":1960,"to":9999,"name":"Chicago Cubs"}]},
+    {"id":"CIN","start":1960,"names":[{"from":1960,"to":1989,"name":"Cincinnati Reds"},{"from":1990,"to":9999,"name":"Cincinnati Reds"}]},
+    {"id":"MIL","start":1969,"names":[{"from":1969,"to":1969,"name":"Seattle Pilots"},{"from":1970,"to":9999,"name":"Milwaukee Brewers"}]},
+    {"id":"PIT","start":1960,"names":[{"from":1960,"to":9999,"name":"Pittsburgh Pirates"}]},
+    {"id":"STL","start":1960,"names":[{"from":1960,"to":9999,"name":"St. Louis Cardinals"}]},
+    {"id":"ARI","start":1998,"names":[{"from":1998,"to":9999,"name":"Arizona Diamondbacks"}]},
+    {"id":"COL","start":1993,"names":[{"from":1993,"to":9999,"name":"Colorado Rockies"}]},
+    {"id":"LAD","start":1960,"names":[{"from":1960,"to":9999,"name":"Los Angeles Dodgers"}]},
+    {"id":"SD","start":1969,"names":[{"from":1969,"to":9999,"name":"San Diego Padres"}]},
+    {"id":"SF","start":1960,"names":[{"from":1960,"to":9999,"name":"San Francisco Giants"}]},
   ];
-  export const DIVISIONS_1970_2001 = [
-    { conf:"AFC", name:"East",    teams:["BUF","MIA","NE","NYJ","IND"] },
-    { conf:"AFC", name:"Central", teams:["PIT","CLE","CIN","TEN","JAX","BAL"] },
-    { conf:"AFC", name:"West",    teams:["DEN","KC","LV","LAC","SEA"] },
-    { conf:"NFC", name:"East",    teams:["DAL","NYG","PHI","WAS","ARI"] },
-    { conf:"NFC", name:"Central", teams:["CHI","DET","GB","MIN","TB"] },
-    { conf:"NFC", name:"West",    teams:["LAR","SF","ATL","NO","CAR"] },
+
+  /* ----- team color pairs for the draft-night reveal card. Publicly-known brand colors only --
+     a stylized primary/secondary gradient + initials badge, no logos or trademarked artwork. ----- */
+  export const TEAM_COLORS = {
+    BAL:["#DF4601","#000000"], BOS:["#BD3039","#0C2340"], NYY:["#0C2340","#C4CED4"], TB:["#092C5C","#8FBCE6"],
+    TOR:["#134A8E","#1D2D5C"], CWS:["#27251F","#C4CED4"], CLE:["#0C2340","#E31937"], DET:["#0C2340","#FA4616"],
+    KC:["#004687","#BD9B60"], MIN:["#002B5C","#D31145"], HOU:["#002D62","#EB6E1F"], LAA:["#BA0021","#003263"],
+    OAK:["#003831","#EFB21E"], SEA:["#0C2C56","#005C5C"], TEX:["#003278","#C0111F"],
+    ATL:["#CE1141","#13274F"], MIA:["#00A3E0","#EF3340"], NYM:["#002D72","#FF5910"], PHI:["#E81828","#002D72"],
+    WSN:["#AB0003","#14225A"], CHC:["#0E3386","#CC3433"], CIN:["#C6011F","#000000"], MIL:["#12284B","#FFC52F"],
+    PIT:["#FDB827","#27251F"], STL:["#C41E3A","#0C2340"], ARI:["#A71930","#E3D4AD"], COL:["#333366","#C4CED4"],
+    LAD:["#005A9C","#EF3E42"], SD:["#2F241D","#FFC425"], SF:["#FD5A1E","#27251F"],
+  };
+
+  /* ----- league structure by year -----
+     - 2013-present: 6 divisions of 5, matches today's map (HOU in AL West, MIL in NL Central).
+     - 1994-2012: 3 divisions per league, unbalanced (AL West 4, NL Central 6) -- HOU/MIL both NL.
+     - 1969-1993: 2 divisions per league (East/West), no wild card.
+     - pre-1969: no divisions -- one pennant race per league, modeled as a single division so the
+       bracket collapses straight to a 1-vs-1 World Series. ----- */
+  export const DIVISIONS = [
+    { conf:"AFC", name:"East",    teams:["BAL","BOS","NYY","TB","TOR"] },
+    { conf:"AFC", name:"Central", teams:["CWS","CLE","DET","KC","MIN"] },
+    { conf:"AFC", name:"West",    teams:["HOU","LAA","OAK","SEA","TEX"] },
+    { conf:"NFC", name:"East",    teams:["ATL","MIA","NYM","PHI","WSN"] },
+    { conf:"NFC", name:"Central", teams:["CHC","CIN","MIL","PIT","STL"] },
+    { conf:"NFC", name:"West",    teams:["ARI","COL","LAD","SD","SF"] },
+  ];
+  export const DIVISIONS_1994_2012 = [
+    { conf:"AFC", name:"East",    teams:["BAL","BOS","NYY","TB","TOR"] },
+    { conf:"AFC", name:"Central", teams:["CWS","CLE","DET","KC","MIN"] },
+    { conf:"AFC", name:"West",    teams:["LAA","OAK","SEA","TEX"] },
+    { conf:"NFC", name:"East",    teams:["ATL","MIA","NYM","PHI","WSN"] },
+    { conf:"NFC", name:"Central", teams:["CHC","CIN","HOU","MIL","PIT","STL"] },
+    { conf:"NFC", name:"West",    teams:["ARI","COL","LAD","SD","SF"] },
+  ];
+  export const DIVISIONS_1969_1993 = [
+    // MIL was in the AL from 1970-1997; HOU in the NL from 1962. Filtering by availability year
+    // handles the rest (COL/MIA/ARI/TB not born yet, KC/SD/WSN/SEA arrive 1969/1977).
+    { conf:"AFC", name:"East", teams:["BAL","BOS","NYY","TOR","DET","CLE","MIL"] },
+    { conf:"AFC", name:"West", teams:["CWS","KC","MIN","LAA","OAK","SEA","TEX"] },
+    { conf:"NFC", name:"East", teams:["ATL","NYM","PHI","WSN","CHC","PIT","STL"] },
+    { conf:"NFC", name:"West", teams:["CIN","HOU","LAD","SD","SF"] },
   ];
   export const DIVISIONS_PRE_1970 = [
-    { conf:"AFC", name:"East", teams:["BUF","MIA","NE","NYJ","TEN"] },
-    { conf:"AFC", name:"West", teams:["DEN","KC","LV","LAC","CIN"] },
-    { conf:"NFC", name:"East", teams:["CLE","DAL","NYG","PHI","PIT","ARI","WAS","ATL"] },
-    { conf:"NFC", name:"West", teams:["IND","CHI","DET","GB","LAR","MIN","SF","NO"] },
+    { conf:"AFC", name:"League", teams:["BAL","BOS","NYY","CWS","CLE","DET","MIN","OAK","LAA","TEX"] },
+    { conf:"NFC", name:"League", teams:["ATL","NYM","PHI","CHC","CIN","PIT","STL","LAD","SF","HOU"] },
   ];
-  /* Playoff format by year: how many wild-card slots get added on top of the division winners,
-     and how many wild-card-round GAMES are played (seedsPerConf - 2*wcGames = teams that bye
-     straight through to the Divisional round). Tracks the real expansion history of the NFL
-     playoff bracket, including the odd 1978-89 shape (only the two wild cards played each
-     other in the "Wild Card" round; all three division winners waited for the Divisional
-     round). */
+
+  /* Postseason format by year -- `wildcards` slots added on top of the division winners, and
+     `wcGames` wild-card-round games played (seedsPerConf - 2*wcGames teams bye to the Division
+     Series). Tracks real MLB expansion of the bracket.
+     - pre-1969: pennant winners only, straight to the World Series.
+     - 1969-1993: LCS then WS (2 division winners per league).
+     - 1994-2011: added the Division Series + 1 wild card (4 teams, no bye, 1v4/2v3).
+     - 2012-2021: 2nd wild card, the two WCs play a one-game playoff.
+     - 2022-present: 3rd wild card; 12-team field, top 2 seeds per league bye. */
   export const PLAYOFF_ERAS = [
-    { from:1900, to:1969, wildcards:0, wcGames:0 },   // pre-merger: division/conference champs only, no wild cards existed
-    { from:1970, to:1977, wildcards:1, wcGames:2 },   // all 4 teams play in, no byes
-    { from:1978, to:1989, wildcards:2, wcGames:1 },   // the 2 wild cards play each other; 3 division winners wait
-    { from:1990, to:2001, wildcards:3, wcGames:2 },   // 3rd wild card added; top 2 seeds bye
-    { from:2002, to:2019, wildcards:2, wcGames:2 },   // realignment to 4 divisions/conf; top 2 seeds bye
-    { from:2020, to:9999, wildcards:3, wcGames:3 },   // 7th seed added; only the #1 seed byes
+    { from:1900, to:1968, wildcards:0, wcGames:0 },
+    { from:1969, to:1993, wildcards:0, wcGames:0 },
+    { from:1994, to:2011, wildcards:1, wcGames:0 },
+    { from:2012, to:2021, wildcards:2, wcGames:1 },
+    { from:2022, to:9999, wildcards:3, wcGames:2 },
   ];

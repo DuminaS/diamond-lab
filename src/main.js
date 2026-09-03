@@ -1,10 +1,10 @@
 import { showRewardedAd } from "./ads/rewardedAd.js";
 import { openDialog, closeDialog } from "./ui/dialog.js";
-import { TEAMS, TEAM_COLORS, DIVISIONS, DIVISIONS_1970_2001, DIVISIONS_PRE_1970, PLAYOFF_ERAS } from "./data/teams.js";
-import { QBS } from "./data/qbs.js";
+import { TEAMS, TEAM_COLORS, DIVISIONS, DIVISIONS_1994_2012, DIVISIONS_1969_1993, DIVISIONS_PRE_1970, PLAYOFF_ERAS } from "./data/teams.js";
+import { PLAYERS as QBS } from "./data/players.js";
 import { SCHEMES } from "./data/schemes.js";
 import { shuffle, pick, clamp, randInt, lerp, svgEscape, fmtPct, safeNum, fmtMoney, fmtDelta, recordLine } from "./utils/index.js";
-import { BADGE_ICONS, MODERN_NFL_RECORDS, TROPHY_ICONS } from "./data/awards.js";
+import { BADGE_ICONS, MLB_RECORDS, TROPHY_ICONS } from "./data/awards.js";
 import { FOOTBALL_OVERALL_WEIGHTS as OVERALL_WEIGHTS, chooseDraftTeam, evaluateProspect } from "./sim/ratings.js";
 import {
   KEY_MOMENT_BASE_TRIGGER_CHANCE,
@@ -536,7 +536,9 @@ import {
   function randomHometown(){ const h = pick(HOMETOWNS); return { city:h[0], state:h[1] }; }
 
   function divisionsForYear(year){
-    const table = year>=2002 ? DIVISIONS : (year>=1970 ? DIVISIONS_1970_2001 : DIVISIONS_PRE_1970);
+    const table = year>=2013 ? DIVISIONS
+      : (year>=1994 ? DIVISIONS_1994_2012
+      : (year>=1969 ? DIVISIONS_1969_1993 : DIVISIONS_PRE_1970));
     const avail = new Set(teamsAvailable(year).map(t=>t.id));
     return table
       .map(d=>({ conf:d.conf, name:d.name, teams:d.teams.filter(id=>avail.has(id)) }))
@@ -5402,21 +5404,23 @@ import {
      not a certified stat-encyclopedia, which is fine for a flavor badge like this. ----- */
   function checkSeasonRecords(season){
     const broken = [];
-    if(season.yards > MODERN_NFL_RECORDS.seasonPassYards.value) broken.push({ key:"yards", ...MODERN_NFL_RECORDS.seasonPassYards });
-    if(season.td > MODERN_NFL_RECORDS.seasonPassTd.value) broken.push({ key:"td", ...MODERN_NFL_RECORDS.seasonPassTd });
-    if(season.rating > MODERN_NFL_RECORDS.seasonRating.value) broken.push({ key:"rating", ...MODERN_NFL_RECORDS.seasonRating });
-    if(season.rushYards > MODERN_NFL_RECORDS.seasonRushYards.value) broken.push({ key:"rushYards", ...MODERN_NFL_RECORDS.seasonRushYards });
+    if(season.hr > MLB_RECORDS.seasonHR.value) broken.push({ key:"hr", ...MLB_RECORDS.seasonHR });
+    if(season.rbi > MLB_RECORDS.seasonRBI.value) broken.push({ key:"rbi", ...MLB_RECORDS.seasonRBI });
+    if(season.hits > MLB_RECORDS.seasonHits.value) broken.push({ key:"hits", ...MLB_RECORDS.seasonHits });
+    if(season.opsPlus > MLB_RECORDS.seasonOPSplus.value) broken.push({ key:"opsPlus", ...MLB_RECORDS.seasonOPSplus });
+    if(season.sb > MLB_RECORDS.seasonSB.value) broken.push({ key:"sb", ...MLB_RECORDS.seasonSB });
     return broken;
   }
   function checkCareerRecords(totals){
     const broken = [];
-    if(totals.yards > MODERN_NFL_RECORDS.careerPassYards.value) broken.push({ key:"yards", ...MODERN_NFL_RECORDS.careerPassYards });
-    if(totals.td > MODERN_NFL_RECORDS.careerPassTd.value) broken.push({ key:"td", ...MODERN_NFL_RECORDS.careerPassTd });
+    if(totals.hr > MLB_RECORDS.careerHR.value) broken.push({ key:"hr", ...MLB_RECORDS.careerHR });
+    if(totals.hits > MLB_RECORDS.careerHits.value) broken.push({ key:"hits", ...MLB_RECORDS.careerHits });
+    if(totals.rbi > MLB_RECORDS.careerRBI.value) broken.push({ key:"rbi", ...MLB_RECORDS.careerRBI });
     return broken;
   }
   function recordBadgeHtml(rec){
     const shownVal = rec.value>=1000 ? rec.value.toLocaleString() : rec.value;
-    return `<span class="record-badge" title="Modern NFL Record: ${svgEscape(rec.label)} — previously ${svgEscape(rec.holder)} (${shownVal})">★ NFL Record</span>`;
+    return `<span class="record-badge" title="MLB Record: ${svgEscape(rec.label)} — held by ${svgEscape(rec.holder)} (${shownVal})">★ MLB Record</span>`;
   }
 
   /* ----- Sim-historical-best tracking -- distinct from MODERN_NFL_RECORDS above: that one checks
