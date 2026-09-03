@@ -184,6 +184,20 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [ ] 2 MP Playwright regressions fail on RNG seed drift (rookie-season injury interstitial,
       hardcoded GLR1 prefix assertion) — Phase 11 re-seeding
 
-### Phase 10 — UI / copy / CSS
+### Phase 10 — UI / copy / CSS  ✅ (core; deep prose residue tracked)
+- [x] index.html full copy pass (menu, showcase setup, draft, results explainers, summary,
+      trophy room, achievements, MP screens, footer)
+- [x] 5 team grades relabeled (Rotation/Lineup/Defense & Bullpen/Coaching Staff/Front Office)
+- [x] season card stat widgets → AVG/OBP/SLG · HR · Hits · OPS+ (+ PA/SB/BB/K mini row)
+- [x] TREND_STATS + Career Trends table + League tab leaderboard → baseball columns/sorters
+- [x] rival profile + box-score modal + estimateSingleGameStatLine → batting lines
+- [x] gradeFor flavors, baseball card face, Scheme tab → Approach, dev-plan names
+- [x] eraChrome news-desk chrome (Phase 9)
+- [x] bug fix: 1B/2B/3B/HR split (6 HR / 80 doubles seasons) — HR now a share of power output
+- [ ] admin Stat Calculator tab labels still football-ish (Comp%/Y-A/TD%) — admin-only, low priority
+- [ ] buildStandingsTabHTML / buildPlayoffTreeTabHTML deep labels — spot-check in Phase 11
+- [ ] renderYardTicks / .yardline CSS class names kept (internal, not user text)
+- [ ] CSS: no football content strings; .era-* chrome kept
+
 ### Phase 11 — tests
 ### Phase 12 — docs / final build
