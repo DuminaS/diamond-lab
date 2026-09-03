@@ -60,11 +60,11 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [ ] per-game gameLog HR/TB sums drift from reconciled season line (schedule tab cosmetic)
 - [ ] season-rate tuning sweep (project norm) — coefficients are first-pass
 
-### Phase 3 — season sim
-- [ ] stat pipeline (PA/AB/H split/BB/K/RBI/R/SB → AVG/OBP/SLG/OPS/OPS+)
-- [ ] schedule/standings (162g, series), simpleWinProb (low hitter influence)
-- [ ] playoffs (round literals, best-of-N series, reveal)
-- [ ] offense/defense grade → lineup / pitching-staff grade
+### Phase 3 — remaining (game-score engine)
+- [ ] simulateRegulationScore / scoreForQuarter / resolveOvertime → 9-inning run scoring
+      (myRuns/oppRuns per inning, extra innings), feeds animatePlayoffQuarters + box scores
+- [ ] simpleWinProb / buildSeasonSchedule — 162g series structure, standings tiebreakers
+- [ ] regularSeasonOffenseGrade / opponentDefenseGrade → lineup vs. pitching-staff grade
 
 ### Phase 4 — player entity / roster / league
 ### Phase 5 — contracts / FA / injuries / events
