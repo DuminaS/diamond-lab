@@ -131,7 +131,29 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [x] verified live: KM renders, clue/options/outcome all baseball, resolves with no page error;
       key-moments.node.mjs 6/6
 
-### Phase 7 — awards / records / HOF (Cooperstown)
+### Phase 7 — awards / records / Cooperstown  ✅
+- [x] award label strings: "Pro Bowl"→"All-Star", "First-Team All-Pro"→"Silver Slugger",
+      "Second-Team All-Pro"→"All-MLB Second Team"; MVP unchanged. internal proBowl/allPro field
+      names kept (opaque). ledger award_won check updated.
+- [x] new: resolveSeasonStatTitlesAndROY → Batting Title / Home Run Title / RBI Title / Rookie of
+      the Year (comparative, league-wide, off qbsById); maybeAwardGoldGlove → player-only self-check
+      (ARM × position defWeight, DH excluded)
+- [x] SIM_BEST_METRICS → HR / RBI / OPS+ / Hits / SB
+- [x] confLabel → American/National League; superBowlDisplayName → "World Series";
+      roundDisplayLabel → Wild Card Series / Division Series / ALCS-NLCS / World Series
+- [x] ring: preSBEra logic removed (World Series always existed); "World Series Champion"
+- [x] computeHofScore retuned (OPS+ quality, lower accolade weights, hits/HR/RBI volume cap);
+      tiers → First-Ballot HOF / HOF / Hall of Very Good / Longtime Regular / Journeyman / Cup of
+      Coffee; notes → Cooperstown/writers/big-league framing
+- [x] buildHofNarrative + buildTrophyCaseHTML → baseball text (HR/OPS+/AVG, October, clubhouse,
+      bronze plaque, Silver Slugger / All-Star)
+- [x] career longevity fix: rookie contract 4→6 yrs (MLB team control), STARTER_CAREER_MEAN_YEARS
+      9.5→12, age caps 23-48→25-44, agingVetThreshold base 32→34, waiverCheck now compares to a
+      neutral-build edge instead of a flat football-scale threshold (young players were racking up
+      a badStreak and getting cut by year 4), performanceTier thresholds lowered for the hitter scale
+- [ ] rival contract terms bumped (elite 5-9 yrs) — light
+- [ ] test helper advanceOneSeason stalls at the FA offer screen (multi-choice) — Phase 11
+
 ### Phase 8 — achievements
 ### Phase 9 — multiplayer (matchCode DLR1, score weights)
 ### Phase 10 — UI / copy / CSS

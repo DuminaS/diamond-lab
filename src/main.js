@@ -582,12 +582,12 @@ import {
   /* ----- QOL: era-accurate conference/round display names -----
      Internal codes ("AFC"/"NFC") and internal round labels ("Wild Card", "Divisional",
      "Conference Championship", "Super Bowl") are used throughout for LOGIC (bracket
-     dispatch, ROUND_DIFFICULTY_WEIGHTS lookups, isSB checks, etc.) and must never change --
-     these are pure display-layer wrappers used only at render sites. Real history: the AFL
-     and NFL were separate leagues through the 1969 season and merged into the AFC/NFC for
-     1970; Super Bowl I was played after the 1966 season, so seasons 1966+ get the real
-     roman-numeral Super Bowl name, while the fictional pre-1966 cross-league finale our
-     bracket still simulates is relabeled as a non-canonical "NFL-AFL Championship Game". */
+     dispatch, ROUND_DIFFICULTY_WEIGHTS lookups, isSB checks, etc.) and must NEVER change --
+     these are pure display-layer wrappers used only at render sites. In baseball terms:
+     AFC = American League, NFC = National League; and the rounds display as Wild Card Series /
+     Division Series / League Championship Series (ALCS/NLCS) / World Series. The pre-1969 eras
+     had no Division Series (one pennant winner per league straight to the World Series), which
+     the bracket already handles via PLAYOFF_ERAS. */
   function toRoman(num){
     const vals = [[1000,"M"],[900,"CM"],[500,"D"],[400,"CD"],[100,"C"],[90,"XC"],[50,"L"],[40,"XL"],[10,"X"],[9,"IX"],[5,"V"],[4,"IV"],[1,"I"]];
     let n = Math.max(1, Math.round(num)), out = "";
@@ -595,17 +595,17 @@ import {
     return out;
   }
   function confLabel(conf, year){
-    if(year<1970) return conf==="AFC" ? "AFL" : "NFL";
-    return conf;
+    return conf==="AFC" ? "American League" : "National League";
   }
-  function superBowlDisplayName(year){
-    return year>=1966 ? `Super Bowl ${toRoman(year-1965)}` : "NFL-AFL Championship Game";
-  }
+  function confShort(conf){ return conf==="AFC" ? "AL" : "NL"; }
+  function superBowlDisplayName(year){ return "World Series"; }
   function roundDisplayLabel(internalRound, year){
-    if(internalRound==="Super Bowl") return superBowlDisplayName(year);
-    if(internalRound==="Conference Championship" && year<1970){
-      return `${confLabel(conferenceOf(career.teamId, year), year)} Championship`;
+    if(internalRound==="Super Bowl") return "World Series";
+    if(internalRound==="Conference Championship"){
+      return `${confShort(conferenceOf(career.teamId, year))} Championship Series`;
     }
+    if(internalRound==="Divisional") return "Division Series";
+    if(internalRound==="Wild Card") return "Wild Card Series";
     return internalRound;
   }
   function pickTeamByStrength(year, excludeId, lo, hi){
@@ -1499,9 +1499,9 @@ import {
   const CARD_FONT_BODY = "Libre Franklin, -apple-system, Segoe UI, sans-serif";
   const CARD_RARITY = {
     "Out of the League": { border:"#5b564f", label:"COMMON" },
-    "Camp Arm": { border:"#5b564f", label:"COMMON" },
+    "Cup of Coffee": { border:"#5b564f", label:"COMMON" },
     "Journeyman": { border:"#8a8377", label:"COMMON" },
-    "Longtime Starter": { border:"#B08D2E", label:"UNCOMMON" },
+    "Longtime Regular": { border:"#B08D2E", label:"UNCOMMON" },
     "Hall of Very Good": { border:"#c9cdd6", label:"RARE" },
     "Hall of Famer": { border:"#D4AF37", label:"LEGENDARY" },
     "First-Ballot Hall of Famer": { border:"#E8C860", label:"HOLO" },
@@ -2107,7 +2107,7 @@ import {
       },
       retirement(tier){
         // ordinal tiers, worst to best — richer/longer chime the more storied the career
-        const order = ["Out of the League","Camp Arm","Journeyman","Longtime Starter","Hall of Very Good","Hall of Famer","First-Ballot Hall of Famer"];
+        const order = ["Out of the League","Cup of Coffee","Journeyman","Longtime Regular","Hall of Very Good","Hall of Famer","First-Ballot Hall of Famer"];
         const idx = Math.max(0, order.indexOf(tier));
         if(idx<=1){
           // quiet, a little wistful — a short descending pair
@@ -2806,10 +2806,10 @@ import {
   }
   function veteranAPY(decade, tier){ return CONTRACT_SCALE[decade].vet[tier]; }
   function performanceTier(effOverall){
-    if(effOverall>=82) return "elite";
-    if(effOverall>=70) return "good";
-    if(effOverall>=58) return "average";
-    if(effOverall>=46) return "backup";
+    if(effOverall>=80) return "elite";
+    if(effOverall>=68) return "good";
+    if(effOverall>=56) return "average";
+    if(effOverall>=44) return "backup";
     return "minimum";
   }
   // Rival/depth-chart contract economics -- reuses the exact same CONTRACT_SCALE tiers the
@@ -2818,11 +2818,11 @@ import {
   function rollRivalContract(decade, talent){
     const tier = performanceTier(talent);
     const apy = Math.round(veteranAPY(decade, tier) * (0.85 + Math.random()*0.3));
-    const years = tier==="elite" ? randInt(4,6) : tier==="good" ? randInt(3,5) : tier==="average" ? randInt(2,4) : randInt(1,3);
+    const years = tier==="elite" ? randInt(5,9) : tier==="good" ? randInt(3,6) : tier==="average" ? randInt(2,4) : randInt(1,3);
     return { apy, years, tier };
   }
   function rollRookieDepthContract(decade, round){
-    return { apy: rookieAPY(decade, round), years: 4, tier: "rookie" };
+    return { apy: rookieAPY(decade, round), years: 6, tier: "rookie" };
   }
   // "Stuck on a big contract" proxy (user's own framing) -- a team won't bench/replace a starter
   // while this is still positive unless he's declined sharply or is clearly past his prime (see
@@ -3053,7 +3053,7 @@ import {
       seasonLog: [],
       totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, sacks:0, proBowls:0, allPros:0, mvps:0, rings:0, earnings:0, rushYards:0, rushTd:0,
         bb:0, ab:0, hbp:0, sf:0, doubles:0, triples:0, sb:0, cs:0, rbi:0, runs:0 },
-      contract: { apy: rookieApy, years: 4, tier: "rookie" },
+      contract: { apy: rookieApy, years: 6, tier: "rookie" },
       badStreak: 0,
       forcedOut: false,
       exitReason: null,
@@ -5449,23 +5449,87 @@ import {
         const bonus = rankedEligible[slots.perConf];
         if(bonus) selected.push(bonus);
       }
-      selected.forEach(r=>{ r.awards.push("Pro Bowl"); r.totals.proBowls++; seated.add(r); });
+      selected.forEach(r=>{ r.awards.push("All-Star"); r.totals.proBowls++; seated.add(r); });
     });
 
     const eligiblePool = rows.filter(r=>r.allProEligible);
     const field = (eligiblePool.length ? eligiblePool : rows).slice().sort((a,b)=> b.allProScore-a.allProScore);
     const firstTeam = field[0];
     const secondTeam = field.find(r=>r!==firstTeam);
-    [["First-Team All-Pro", firstTeam], ["Second-Team All-Pro", secondTeam]].forEach(([label, r])=>{
+    [["Silver Slugger", firstTeam], ["All-MLB Second Team", secondTeam]].forEach(([label, r])=>{
       if(!r) return;
       r.awards.push(label);
       r.totals.allPros++;
-      if(!seated.has(r)){ r.awards.push("Pro Bowl"); r.totals.proBowls++; seated.add(r); }
+      if(!seated.has(r)){ r.awards.push("All-Star"); r.totals.proBowls++; seated.add(r); }
     });
 
     const myRow = rows[0];
-    return { proBowl: myRow.awards.includes("Pro Bowl"),
-      allPro: myRow.awards.includes("First-Team All-Pro") ? "First-Team" : myRow.awards.includes("Second-Team All-Pro") ? "Second-Team" : null };
+    return { proBowl: myRow.awards.includes("All-Star"),
+      allPro: myRow.awards.includes("Silver Slugger") ? "First-Team" : myRow.awards.includes("All-MLB Second Team") ? "Second-Team" : null };
+  }
+
+  // League-wide statistical titles (batting average, home runs, RBI) plus Rookie of the Year,
+  // resolved the same comparative way MVP is -- one winner per year across the player + every
+  // simulated hitter in career.qbsById. A title needs a real qualifying season (roughly 3.1 PA
+  // per team game); ROY needs a real first-year season. Titles/ROY only ever push a label onto
+  // season.awards (no totals field of their own yet) -- the Trophy Room counts them off the label.
+  function resolveSeasonStatTitlesAndROY(season, year){
+    const rows = [{ isMine:true, awards: season.awards, s: season, draftYear: career.draftYear }];
+    Object.values(career.qbsById||{}).forEach(r=>{
+      const s = (r.seasons||[]).find(x=>x.year===year);
+      if(s) rows.push({ isMine:false, awards: s.awards, s, draftYear: r.draftYear });
+    });
+    const games = (LEAGUE[decadeForYear(year)]||LEAGUE["2000s"]).games;
+    const qualified = rows.filter(r=> (r.s.pa||0) >= games*3.1);
+    const pool = qualified.length ? qualified : rows;
+    const titleFor = (getVal, label) => {
+      const best = Math.max(...pool.map(r=> getVal(r.s)||0));
+      if(!(best>0)) return;
+      pool.filter(r=> Math.abs((getVal(r.s)||0)-best) < 1e-9).forEach(r=>{
+        if(!r.awards.includes(label)) r.awards.push(label);
+      });
+    };
+    titleFor(s=>s.avg, "Batting Title");
+    titleFor(s=>s.hr, "Home Run Title");
+    titleFor(s=>s.rbi, "RBI Title");
+
+    // Rookie of the Year: best OPS+ among genuine first-year players this season. One league-wide
+    // winner, kept simple. A "rookie season" is the earliest year in that player's season log
+    // with real playing time.
+    const rookieRows = [];
+    const playerFirstPlayedYear = (career.seasonLog.find(s=>s.games>0)||{}).year;
+    if(playerFirstPlayedYear === year && (season.pa||0) >= 200) rookieRows.push({ awards: season.awards, opsPlus: season.opsPlus||0 });
+    Object.values(career.qbsById||{}).forEach(r=>{
+      const s = (r.seasons||[]).find(x=>x.year===year);
+      if(!s || (s.pa||0) < 200) return;
+      const firstYear = Math.min(...r.seasons.filter(x=>(x.games||0)>0).map(x=>x.year));
+      if(firstYear === year) rookieRows.push({ awards: s.awards, opsPlus: s.opsPlus||0 });
+    });
+    if(rookieRows.length){
+      const best = Math.max(...rookieRows.map(r=>r.opsPlus));
+      if(best > 60) rookieRows.filter(r=>r.opsPlus===best).forEach(r=>{
+        if(!r.awards.includes("Rookie of the Year")) r.awards.push("Rookie of the Year");
+      });
+    }
+  }
+
+  // Gold Glove: a player-only self-check (the sim doesn't model rival fielding). Chance scales
+  // with the fielding-relevant tools for the player's position -- Arm Strength always, plus Speed
+  // for the up-the-middle spots -- gated on a real full-ish season. A DH can't win one.
+  function maybeAwardGoldGlove(season){
+    if(season.awards.includes("Gold Glove")) return;
+    const posDef = (POSITIONS.find(p=>p.key===career.position) || { defWeight:0.5 });
+    if(posDef.defWeight <= 0) return; // DH
+    if((season.pa||0) < 380) return;
+    const eff = eraEffective(season.age, season.decade);
+    const upTheMiddle = ["C","2B","SS","CF"].includes(career.position);
+    const defScore = eff.ARM*posDef.defWeight + (upTheMiddle ? (eff.MOB-50)*0.35 : 0) + (eff.IMP-50)*0.15;
+    const chance = clamp((defScore - 58) * 0.012, 0, 0.34);
+    if(Math.random() < chance){
+      season.awards.push("Gold Glove");
+      career.transactions.push(`${season.year}: Wins a Gold Glove at ${positionLabel(career.position)}.`);
+      recordLedgerEvent("award_won", { teamId: season.teamId, outcomeId: "Gold Glove" });
+    }
   }
 
   /* ----- Modern-day NFL record tracking -- a Playtester request: flag it with a badge/star when
@@ -5510,10 +5574,11 @@ import {
     return all;
   }
   const SIM_BEST_METRICS = [
-    { key:"yards", label:"Passing Yards" },
-    { key:"td", label:"Passing TDs" },
-    { key:"rating", label:"Passer Rating" },
-    { key:"rushYards", label:"Rushing Yards" },
+    { key:"hr", label:"Home Runs" },
+    { key:"rbi", label:"RBI" },
+    { key:"opsPlus", label:"OPS+" },
+    { key:"hits", label:"Hits" },
+    { key:"sb", label:"Stolen Bases" },
   ];
   function checkSimHistoricalBest(season){
     const all = collectAllSimSeasons();
@@ -6858,13 +6923,15 @@ import {
     // player and every simulated rival -- has this year's season locked in.
     const mvp = resolveSeasonMVP(season, career.year);
     const { proBowl, allPro } = resolveSeasonAllProAndProBowl(season, career.year);
+    resolveSeasonStatTitlesAndROY(season, career.year);
+    maybeAwardGoldGlove(season);
     // Balance Wave 6: NOW (not right after the push above) season.awards actually reflects whatever
     // resolveSeasonMVP/resolveSeasonAllProAndProBowl just decided -- log it to the event ledger too
     // so chain achievements can express "an MVP season eventually followed a scandal" as an ordered
     // sequenceRule instead of a hand-walked seasonLog scan. Only the three generic award labels ever
     // pushed onto season.awards besides a championship ring label qualify here.
     (season.awards||[]).forEach(a=>{
-      if(a==="MVP"||a==="Pro Bowl"||a==="All-Pro") recordLedgerEvent("award_won", { teamId: season.teamId, outcomeId: a });
+      if(a==="MVP"||a==="All-Star"||a==="Silver Slugger"||a==="Rookie of the Year") recordLedgerEvent("award_won", { teamId: season.teamId, outcomeId: a });
     });
 
     // ----- Team quality for NEXT season: legible causes first, small residual noise last. -----
@@ -7934,8 +8001,8 @@ import {
   // neutralEffective). DUR=10 -- the literal floor of the scale, not just "low" -- lands ~2.5 standard
   // deviations below the mean, matching a real-world true outlier; DUR=99 lands ~2.5 above it, checked
   // against the longest QB career ever actually played (George Blanda, 26 seasons) as a sanity ceiling.
-  const STARTER_CAREER_MEAN_YEARS = 9.5;
-  const STARTER_CAREER_STDDEV_YEARS = 4.5;
+  const STARTER_CAREER_MEAN_YEARS = 12;
+  const STARTER_CAREER_STDDEV_YEARS = 5;
   const DUR_NEUTRAL = 65, DUR_FLOOR = 10, DUR_CEIL = 99, DUR_EXTREME_Z = 2.5;
   function durabilityCareerYears(dur){
     const d = clamp(dur, DUR_FLOOR, DUR_CEIL);
@@ -7946,11 +8013,11 @@ import {
     // his drafted rookie season before the numbers can end it; a true DUR=10 build then faces the
     // hard cap the very next offseason, which is exactly the "one and done" outcome that grade
     // implies. Ceiling of 26 matches Blanda's real record rather than inventing a fictional max.
-    return clamp(STARTER_CAREER_MEAN_YEARS + z*STARTER_CAREER_STDDEV_YEARS, 1, 26);
+    return clamp(STARTER_CAREER_MEAN_YEARS + z*STARTER_CAREER_STDDEV_YEARS, 2, 24);
   }
   function durabilityAgeCap(){
     const dur = build ? build.DUR : DUR_NEUTRAL;
-    return clamp(Math.round(22 + durabilityCareerYears(dur)), 23, 48);
+    return clamp(Math.round(22 + durabilityCareerYears(dur)), 25, 44);
   }
   // Roster-cut "aging vet" scrutiny (waiverCheck) and career-arc flavor text (renderSeasonCard)
   // both need a THIS-BUILD-relative "starting to look old" age, but scaling it 1:1 with the hard
@@ -7962,7 +8029,7 @@ import {
   // years later, but nothing like the full spread of the underlying durability curve.
   function agingVetThreshold(){
     const cap = durabilityAgeCap();
-    return Math.round(32 + (cap-32)*0.4);
+    return Math.round(34 + (cap-34)*0.4);
   }
 
   /* ----- career loop control -----
@@ -8045,14 +8112,10 @@ import {
     season.postseasonFinalized = true;
     const playoffs = season.playoffs;
     if(!playoffs || !playoffs.made) return;
-    const preSBEra = season.year < 1966;
-    const wonConfChamp = preSBEra && playoffs.rounds.some(r=> r.round==="Conference Championship" && r.won);
-    const wonRing = preSBEra ? wonConfChamp : playoffs.wonSuperBowl;
+    const wonRing = playoffs.wonSuperBowl;
     playoffs.wonRing = wonRing;
     if(wonRing){
-      playoffs.ringLabel = preSBEra
-        ? `${confLabel(conferenceOf(career.teamId, season.year), season.year)} Champion`
-        : "Super Bowl Champion";
+      playoffs.ringLabel = "World Series Champion";
       season.awards.push(playoffs.ringLabel);
     }
   }
@@ -8121,8 +8184,16 @@ import {
     // min-DUR build identically -- a durable build gets treated like a reliable veteran for
     // longer, a fragile one starts looking like a decline case earlier.
     const nearEndAge = agingVetThreshold();
-    const badThreshold = career.age>=nearEndAge ? 56 : 50;
-    if(effOverall<badThreshold) career.badStreak = (career.badStreak||0)+1; else career.badStreak = 0;
+    // Compare to a neutral (65-everywhere) build run through the SAME age/era adjustment rather
+    // than a flat number -- otherwise the hitter-overall scale (heavily weighted to the mental
+    // group, which ages up slowly) makes every young player read as "below the bar" and rack up a
+    // badStreak that gets them cut by year 4. `edge` is how far this build sits above/below
+    // replacement level right now; `badThreshold` is expressed on that edge scale.
+    const schemeIdW = career.teamScheme ? career.teamScheme[career.teamId] : null;
+    const neutralOverallW = weighted(neutralEffective(career.age, decade, schemeIdW), OVERALL_WEIGHTS);
+    const edge = effOverall - neutralOverallW;
+    const badThreshold = career.age>=nearEndAge ? -2 : -8;
+    if(edge<badThreshold) career.badStreak = (career.badStreak||0)+1; else career.badStreak = 0;
     // real rosters get younger as a QB ages late in his window regardless of how well he's still
     // playing — succession planning, cap crunches, a coaching change — so even a still-productive
     // build faces meaningfully rising churn risk late in a career, not just a hard wall at the cap.
@@ -8153,7 +8224,7 @@ import {
     // "named captain, cut right after" complaint.
     const captainShield = career._cutShieldSeasons>0 ? 0.09 : 0;
     if(career._cutShieldSeasons>0) career._cutShieldSeasons--;
-    const cutChance = clamp((badThreshold-effOverall)*0.025 + career.badStreak*0.06 + ageRisk + repRisk + turmoilRisk
+    const cutChance = clamp(Math.max(0, badThreshold-edge)*0.02 + career.badStreak*0.06 + ageRisk + repRisk + turmoilRisk
       - stabilityRelief - gmRelief - gmSkillRelief - fanRelief - popRelief - captainShield, 0.02, 0.75);
     if(career.seasonNumber>=3 && Math.random()<cutChance){ renderWaivedEvent(effOverall, decade); return; }
     expansionDraftCheck();
@@ -9532,7 +9603,7 @@ import {
     const rows = [{
       name: career.name, teamId: career.teamId, age: season.age, mine:true, games: season.games,
       att: season.att, pct: season.pct, yards: season.yards, td: season.td, int: season.int,
-      rating: season.rating, awards: season.awards,
+      rating: season.rating, rbi: season.rbi, hits: season.hits, sb: season.sb, awards: season.awards,
     }];
     (career.leagueRivals||[]).forEach(r=>{
       const s = r.seasons.find(x=>x.year===year);
@@ -9547,7 +9618,7 @@ import {
       const t = TEAMS.find(x=>x.id===r.teamId);
       if(t && t.start>year) return;
       rows.push({ name:r.name, teamId:r.teamId, age:s.age, mine:false, games:s.games, att:s.att, pct:s.pct,
-        yards:s.yards, td:s.td, int:s.int, rating:s.rating, awards:s.awards, isRival:r.isRival, id:r.id });
+        yards:s.yards, td:s.td, int:s.int, rating:s.rating, rbi:s.rbi, hits:s.hits, sb:s.sb, awards:s.awards, isRival:r.isRival, id:r.id });
     });
     // A bench player who actually started games this season (games>0 -- simulatePlayerSeasonStats
     // rolls a missed-games chance for everyone, so most seasons ARE 0-game no-ops here) is now
@@ -9565,7 +9636,7 @@ import {
         const s = p.seasons.find(x=>x.year===year);
         if(!s || !(s.games>0)) return;
         rows.push({ name:p.name, teamId:p.teamId, age:s.age, mine:false, games:s.games, att:s.att, pct:s.pct,
-          yards:s.yards, td:s.td, int:s.int, rating:s.rating, awards:s.awards, isBench:true, id:p.id });
+          yards:s.yards, td:s.td, int:s.int, rating:s.rating, rbi:s.rbi, hits:s.hits, sb:s.sb, awards:s.awards, isBench:true, id:p.id });
       });
     });
     rows.sort((a,b)=> b.rating-a.rating);
@@ -9615,11 +9686,12 @@ import {
     const year = season.year;
     const rows = computeSeasonAwardRows(season);
     const mvpCandidates = rows.filter(r=>r.awards.includes("MVP")); // already rating-sorted
-    const proBowlers = rows.filter(r=>r.awards.includes("Pro Bowl"));
-    const firstTeamAllPro = rows.filter(r=>r.awards.includes("First-Team All-Pro"));
-    const secondTeamAllPro = rows.filter(r=>r.awards.includes("Second-Team All-Pro"));
+    const allStars = rows.filter(r=>r.awards.includes("All-Star"));
+    const silverSluggers = rows.filter(r=>r.awards.includes("Silver Slugger"));
+    const allMlbSecond = rows.filter(r=>r.awards.includes("All-MLB Second Team"));
+    const roy = rows.filter(r=>r.awards.includes("Rookie of the Year"));
 
-    const statLine = r => `${r.yards.toLocaleString()} yds · ${r.td} TD · ${r.int} INT · ${r.rating.toFixed(1)} rating`;
+    const statLine = r => `${r.td} HR · ${r.rbi!=null?r.rbi+" RBI · ":""}${(r.pct||0).toFixed(3).replace(/^0/,"")} AVG · ${Math.round(r.rating)} OPS+`;
     const rowLine = r => `${svgEscape(r.name)}${r.mine?" (you)":""} — ${svgEscape(teamNameAt(r.teamId, year))} — ${statLine(r)}`;
 
     const mvpHtml = mvpCandidates.length ? `
@@ -9627,7 +9699,7 @@ import {
         <div class="award-hero-label">${year} Most Valuable Player${mvpCandidates.length>1?"s (Co-MVP)":""}</div>
         ${mvpCandidates.map(mvpRow => `
           <div class="award-hero-name">${svgEscape(mvpRow.name)}${mvpRow.mine?" (you)":""}</div>
-          <div class="award-hero-sub">QB · ${svgEscape(teamNameAt(mvpRow.teamId, year))}</div>
+          <div class="award-hero-sub">${svgEscape(teamNameAt(mvpRow.teamId, year))}</div>
           <div class="award-hero-stat">${statLine(mvpRow)}</div>
         `).join(mvpCandidates.length>1 ? '<div style="height:0.6rem;"></div>' : "")}
       </div>` : `
@@ -9650,9 +9722,10 @@ import {
 
     return `<div class="award-ceremony">
         ${mvpHtml}
-        ${listSection("First-Team All-Pro", firstTeamAllPro)}
-        ${listSection("Second-Team All-Pro", secondTeamAllPro)}
-        ${listSection("Pro Bowl", proBowlers)}
+        ${roy.length ? listSection("Rookie of the Year", roy) : ""}
+        ${listSection("Silver Slugger", silverSluggers)}
+        ${listSection("All-MLB Second Team", allMlbSecond)}
+        ${listSection("All-Star", allStars)}
       </div>`;
   }
 
@@ -11073,14 +11146,10 @@ import {
     // season's Conference Championship round, regardless of how the fictional finale afterward
     // turns out. From 1966 on, only an actual (correctly-numbered) Super Bowl win counts, same
     // as before.
-    const preSBEra = season.year < 1966;
-    const wonConfChamp = preSBEra && playoffs.rounds.some(r=> r.round==="Conference Championship" && r.won);
-    const wonRing = preSBEra ? wonConfChamp : playoffs.wonSuperBowl;
+    const wonRing = playoffs.wonSuperBowl;
     playoffs.wonRing = wonRing;
     if(wonRing){
-      const ringLabel = preSBEra
-        ? `${confLabel(conferenceOf(career.teamId, season.year), season.year)} Champion`
-        : "Super Bowl Champion";
+      const ringLabel = "World Series Champion";
       playoffs.ringLabel = ringLabel;
       season.awards.push(ringLabel);
       career.totals.rings++;
@@ -11088,7 +11157,7 @@ import {
       career.gmRelationship = clamp((career.gmRelationship ?? 50) + 3, 0, 100);
       career.fanSupport = clamp((career.fanSupport ?? 50) + 8, 0, 100);
       career.leaguePopularity = clamp((career.leaguePopularity ?? 50) + 10, 0, 100);
-      career.transactions.push(`${season.year}: Won the ${preSBEra ? ringLabel : "Super Bowl"} with the ${season.teamName}.`);
+      career.transactions.push(`${season.year}: Won the World Series with the ${season.teamName}.`);
       // Fixes "won the Super Bowl, got cut" reports: waiverCheck()'s cut chance always has a
       // 2% floor, with no exception for having just won a championship. Reuse the same
       // _cutShieldSeasons mechanic that already protects a newly-named captain (captainShield),
@@ -11103,10 +11172,8 @@ import {
       // was that these two ledger events never threaded it through. The deciding round is the won
       // Conference Championship for a pre-Super-Bowl-era title (a fictional exhibition Super Bowl can
       // still follow it, per reachedTitleGameAndLost's own comment) or otherwise the real last round.
-      const decidingRound = preSBEra
-        ? playoffs.rounds.find(r=>r.round==="Conference Championship" && r.won)
-        : playoffs.rounds[playoffs.rounds.length-1];
-      recordLedgerEvent("championship_won", { teamId: season.teamId, opponentId: decidingRound ? decidingRound.oppId : null, outcomeId: preSBEra?"conf_champ":"super_bowl", metadata:{year: season.year, ringLabel} });
+      const decidingRound = playoffs.rounds[playoffs.rounds.length-1];
+      recordLedgerEvent("championship_won", { teamId: season.teamId, opponentId: decidingRound ? decidingRound.oppId : null, outcomeId: "super_bowl", metadata:{year: season.year, ringLabel} });
     } else if(reachedTitleGameAndLost(season)){
       const lastRound = playoffs.rounds[playoffs.rounds.length-1];
       recordLedgerEvent("championship_lost", { teamId: season.teamId, opponentId: lastRound ? lastRound.oppId : null, metadata:{year: season.year} });
@@ -11303,18 +11370,24 @@ import {
     const seasons = seasonLog.length;
     // Quality first: career rate (passer rating), then accolades, then a HARD-CAPPED nod to volume.
     // Sheer longevity piling up garbage-time yardage should never outrank real accolades and efficiency —
-    // a 20-season .500 game manager is a "Longtime Starter", not a Hall of Famer, no matter the counting stats.
+    // a 20-season .500 game manager is a "Longtime Regular", not a Hall of Famer, no matter the counting stats.
     // The bar itself is era-relative: 3,000 yards and a 78 rating meant something very different in the
     // dead-ball 1970s than in the 2020s, so "average for the era" is computed per-season and attempt-weighted
     // across the whole career, not a flat modern number applied to every decade.
-    const careerRating = passerRating(t.comp, t.att, t.yards, t.td, t.int);
+    const careerRating = passerRating(t.comp, t.att, t.yards, t.td, t.int, t.bb); // career OPS+ index
     let baseWeighted = 0, baseAtt = 0;
     seasonLog.forEach(s=>{ const decade = s.decade || decadeForYear(s.year); baseWeighted += leagueAvgRatingForDecade(decade)*s.att; baseAtt += s.att; });
-    const eraBaseline = baseAtt>0 ? baseWeighted/baseAtt : 75;
-    const qualityScore = (careerRating-eraBaseline-8)*4;
-    const accoladeScore = t.rings*40 + t.mvps*36 + t.allPros*16 + t.proBowls*6;
-    const longevityScore = Math.min(seasons,15)*1.5;
-    const volumeScore = clamp(t.yards/1200 + t.td*0.1, 0, 35);
+    const eraBaseline = baseAtt>0 ? baseWeighted/baseAtt : 100;
+    // A Cooperstown-caliber bat is a career OPS+ around 130-145; a good regular ~105-115.
+    const qualityScore = (careerRating-eraBaseline-6)*4;
+    // t.proBowls = All-Star selections, t.allPros = Silver Slugger + All-MLB. Baseball stars rack
+    // these up (10+ All-Star nods is common for an inner-circle career), so the weights are lower
+    // than the QB values were.
+    const accoladeScore = t.rings*22 + t.mvps*30 + t.allPros*10 + t.proBowls*3;
+    const longevityScore = Math.min(seasons,16)*1.5;
+    // Counting stats, hard-capped so a compiler can't outrank real peak value: career hits (comp),
+    // home runs (td), RBI.
+    const volumeScore = clamp(t.comp/350 + t.td*0.06 + (t.rbi||0)/260, 0, 35);
     const score = qualityScore + accoladeScore + longevityScore + volumeScore;
 
     if(exitReason==="waived" && score<60) return {score, tier:"Out of the League", note:`Released after ${seasons} season${seasons===1?"":"s"} that never quite came together. The phone stopped ringing.`};
@@ -11328,12 +11401,12 @@ import {
       // very seasons he wins it all, so a 3-Pro-Bowl floor alone can wrongly demote a multi-ring
       // champion (a real reported case: 4 rings in 11 seasons, only Hall of Famer). Real-life
       // multi-ring starters are essentially never a First-Ballot snub over a Pro Bowl technicality.
-      { min:150, seasons:10, minProBowls:3, minRingsRoute:3, tier:"First-Ballot Hall of Famer", note:"The bronze bust is a formality at this point." },
-      { min:100, seasons:8,  minProBowls:1, tier:"Hall of Famer", note:"A career the voters won't be able to leave off the ballot." },
-      { min:65,  seasons:0,  minProBowls:0, tier:"Hall of Very Good", note:"A borderline case — the kind that sparks arguments for a decade." },
-      { min:35,  seasons:0,  minProBowls:0, tier:"Longtime Starter", note:"Not a legend, but a team could win with this for a long time." },
-      { min:12,  seasons:0,  minProBowls:0, tier:"Journeyman", note:"A real NFL career, bouncing between rosters and backup jobs." },
-      { min:-Infinity, seasons:0, minProBowls:0, tier:"Camp Arm", note:"The jersey barely got game-worn, but you were on an NFL roster." },
+      { min:150, seasons:10, minProBowls:4, minRingsRoute:3, tier:"First-Ballot Hall of Famer", note:"The bronze plaque in Cooperstown is a formality at this point." },
+      { min:100, seasons:8,  minProBowls:2, tier:"Hall of Famer", note:"A career the writers won't be able to leave off the ballot." },
+      { min:65,  seasons:0,  minProBowls:0, tier:"Hall of Very Good", note:"A borderline case — the kind that sparks arguments every January." },
+      { min:35,  seasons:0,  minProBowls:0, tier:"Longtime Regular", note:"Not a legend, but a team could pencil him into the lineup for a long time." },
+      { min:12,  seasons:0,  minProBowls:0, tier:"Journeyman", note:"A real big-league career, bouncing between clubhouses and bench roles." },
+      { min:-Infinity, seasons:0, minProBowls:0, tier:"Cup of Coffee", note:"The uniform barely got dirty, but you made it to the show." },
     ];
     for(const tier of TIERS){
       const accoladeGateMet = t.proBowls>=(tier.minProBowls||0) || (tier.minRingsRoute && t.rings>=tier.minRingsRoute);
@@ -11358,7 +11431,7 @@ import {
   // A single tier's base HOF-induction likelihood if this career ended exactly as-is today.
   const HOF_TIER_BASE_PCT = {
     "First-Ballot Hall of Famer": 99, "Hall of Famer": 80, "Hall of Very Good": 45,
-    "Longtime Starter": 15, "Journeyman": 4, "Camp Arm": 1, "Out of the League": 1,
+    "Longtime Regular": 15, "Journeyman": 4, "Cup of Coffee": 1, "Out of the League": 1,
   };
   // "Likelihood of making the Hall of Fame" for a STILL-ACTIVE player is necessarily an estimate,
   // not a verdict -- their résumé is still being written. Base rate comes from the exact same tier
@@ -11386,22 +11459,22 @@ import {
 
     const safeName = svgEscape(career.name), safeCollege = svgEscape(career.college);
     const originLine = career.slot.round===0
-      ? `Nobody called ${safeName}'s name on draft weekend in ${career.draftYear}. Out of ${safeCollege}, he signed with the ${teamNameAt(career.draftTeamId, career.draftYear)} as an undrafted free agent and had to fight for a locker.`
+      ? `Nobody called ${safeName}'s name on draft weekend in ${career.draftYear}. Out of ${safeCollege}, he signed with the ${teamNameAt(career.draftTeamId, career.draftYear)} as a non-drafted free agent and had to fight for a roster spot in the minors.`
       : career.slot.round===1
-        ? `The ${teamNameAt(career.draftTeamId, career.draftYear)} spent a first-round pick on ${safeName} in the ${career.draftYear} draft, betting a franchise on the arm scouts had raved about since ${safeCollege}.`
-        : `A ${career.slot.label.toLowerCase()} selection in ${career.draftYear} out of ${safeCollege}, ${safeName} arrived in the league with modest expectations and a chip on his shoulder.`;
+        ? `The ${teamNameAt(career.draftTeamId, career.draftYear)} spent a first-round pick on ${safeName} in the ${career.draftYear} draft, betting a big signing bonus on the bat scouts had raved about since ${safeCollege}.`
+        : `A ${career.slot.label.toLowerCase()} selection in ${career.draftYear} out of ${safeCollege}, ${safeName} climbed the farm system with modest expectations and a chip on his shoulder.`;
     paras.push(originLine);
 
-    const peakLine = `The tape people still cite is <b>${peak.year}</b>: ${peak.td} touchdowns, a ${peak.rating} passer rating, and a ${recordLine(peak.wins, peak.losses, peak.ties||0)} record with the ${peak.teamName}${peak.awards.length?` that earned him ${peak.awards.join(" and ")}`:""}. It's the year that told the league who he really was.`;
+    const peakLine = `The season people still cite is <b>${peak.year}</b>: ${peak.td} home runs, ${peak.rbi!=null?peak.rbi+' RBI, ':''}a ${(peak.avg!=null?peak.avg:0).toFixed(3).replace(/^0/,'')} average and a ${Math.round(peak.rating)} OPS+ for the ${peak.teamName}${peak.awards.length?` \u2014 the year he ${/MVP/.test(peak.awards.join(' '))?'ran away with the MVP':'earned '+peak.awards.slice(0,2).join(' and ')}`:''}. It's the year that told the league who he really was.`;
     paras.push(peakLine);
 
     if(t.rings>0){
       const sbSeason = career.seasonLog.find(s=> s.playoffs && s.playoffs.wonRing);
-      paras.push(`The ring — the one that ends every "yeah, but" argument — came in <b>${sbSeason?sbSeason.year:peak.year}</b>. Highlight reels still open with that fourth quarter.`);
+      paras.push(`The ring \u2014 the one that ends every "yeah, but" argument \u2014 came in <b>${sbSeason?sbSeason.year:peak.year}</b>. World Series montages still open with that October.`);
     } else if(t.mvps>0){
-      paras.push(`An MVP season without a Lombardi Trophy to match it — the kind of résumé line that fuels sports-radio arguments every offseason.`);
+      paras.push(`An MVP season without a World Series ring to match it \u2014 the kind of r\u00e9sum\u00e9 line that fuels sports-radio arguments every winter.`);
     } else if(career.transactions.length>3){
-      paras.push(`It wasn't a straight line: ${career.transactions.length-1} transactions moved him from locker room to locker room, a journeyman's path more than a franchise cornerstone's.`);
+      paras.push(`It wasn't a straight line: ${career.transactions.length-1} transactions moved him from clubhouse to clubhouse, a journeyman's path more than a franchise cornerstone's.`);
     }
 
     // A legendary/major life event the player SURVIVED (as opposed to one that outright ended the
@@ -11430,8 +11503,8 @@ import {
     // naming the actual event/injury where the game already tracked one (see _bannedEventTitle /
     // _careerEndingInjuryName, stashed at the moment each one happens).
     let exitLine;
-    if(career.exitReason==="waived") exitLine = `The ending wasn't a farewell tour. The ${last.teamName} released him after the ${last.year} season, and no other team called. ${seasons} seasons, no fanfare.`;
-    else if(career.exitReason==="age") exitLine = `He played until the league physically wouldn't let him play anymore — a ${seasons}-season marathon that outlasted three generations of teammates.`;
+    if(career.exitReason==="waived") exitLine = `The ending wasn't a farewell tour. The ${last.teamName} released him after the ${last.year} season, and no other club called. ${seasons} seasons, no farewell tour.`;
+    else if(career.exitReason==="age") exitLine = `He played until his body physically wouldn't let him play anymore \u2014 a ${seasons}-season marathon that outlasted three generations of teammates.`;
     else if(career.exitReason==="banned"){
       const title = career._bannedEventTitle;
       exitLine = title
@@ -11451,12 +11524,12 @@ import {
       // own line instead of one flat sentence covering both.
       const lastEdge = last.rating - leagueAvgRatingForDecade(last.decade);
       exitLine = lastEdge >= 6
-        ? `He walked away at the top of his game after the ${last.year} season — ${career.age} years old and still grading out well above league average. No decline to point to, no team pushing him out. He just decided he was done.`
+        ? `He walked away at the top of his game after the ${last.year} season — ${career.age} years old and still hitting well above league average. No decline to point to, no club pushing him out. He just decided he was done.`
         : `He walked away on his own terms after the ${last.year} season, ${career.age} years old, leaving the game before the game could leave him.`;
     }
     paras.push(exitLine);
 
-    paras.push(`<span>Around the league now, the verdict is settled: <b>${verdict.tier}</b>. ${verdict.note}</span>`);
+    paras.push(`<span>Around the game now, the verdict is settled: <b>${verdict.tier}</b>. ${verdict.note}</span>`);
     paras[paras.length-1] = paras[paras.length-1]; // legacy paragraph gets special styling via class below
 
     return paras;
@@ -11468,20 +11541,20 @@ import {
   function buildTrophyCaseHTML(){
     const t = career.totals;
     if(t.rings===0 && t.mvps===0 && t.allPros===0 && t.proBowls===0){
-      return `<p class="trophy-empty">No hardware — that's alright, not every career needs a trophy case.</p>`;
+      return `<p class="trophy-empty">No hardware \u2014 that's alright, not every career needs a trophy case.</p>`;
     }
     const items = [];
     career.seasonLog.forEach(s=>{
       if(s.playoffs && s.playoffs.wonRing){
-        const label = (s.playoffs.ringLabel || "Super Bowl Champion").replace(/\s(?=\S+$)/, "<br>");
+        const label = (s.playoffs.ringLabel || "World Series Champion").replace(/\s(?=\S+$)/, "<br>");
         items.push(`<div class="trophy-item"><div>${TROPHY_ICONS.ring}</div><div class="trophy-year">${s.year}</div><div class="trophy-label">${label}</div></div>`);
       }
       if(s.awards.includes("MVP")){
         items.push(`<div class="trophy-item"><div>${TROPHY_ICONS.mvp}</div><div class="trophy-year">${s.year}</div><div class="trophy-label">MVP</div></div>`);
       }
     });
-    if(t.allPros>0) items.push(`<div class="trophy-item badge-count"><div>${TROPHY_ICONS.allpro}</div><div class="trophy-year">${t.allPros}×</div><div class="trophy-label">All-Pro</div></div>`);
-    if(t.proBowls>0) items.push(`<div class="trophy-item badge-count"><div>${TROPHY_ICONS.probowl}</div><div class="trophy-year">${t.proBowls}×</div><div class="trophy-label">Pro Bowl</div></div>`);
+    if(t.allPros>0) items.push(`<div class="trophy-item badge-count"><div>${TROPHY_ICONS.allpro}</div><div class="trophy-year">${t.allPros}\u00d7</div><div class="trophy-label">Silver Slugger</div></div>`);
+    if(t.proBowls>0) items.push(`<div class="trophy-item badge-count"><div>${TROPHY_ICONS.probowl}</div><div class="trophy-year">${t.proBowls}\u00d7</div><div class="trophy-label">All-Star</div></div>`);
     return `<div class="trophy-case">${items.join("")}</div>`;
   }
 
@@ -11493,7 +11566,7 @@ import {
     const best = loadBest();
     if(!best.careerScoreValue || verdict.tier !== best.careerVerdict){
       // keep the most prestigious verdict seen (rough ordinal by tier order)
-      const order = ["Out of the League","Camp Arm","Journeyman","Longtime Starter","Hall of Very Good","Hall of Famer","First-Ballot Hall of Famer"];
+      const order = ["Out of the League","Cup of Coffee","Journeyman","Longtime Regular","Hall of Very Good","Hall of Famer","First-Ballot Hall of Famer"];
       const prevIdx = order.indexOf(best.careerVerdict);
       const curIdx = order.indexOf(verdict.tier);
       if(curIdx>prevIdx){ best.careerVerdict = verdict.tier; saveBest(best); }
