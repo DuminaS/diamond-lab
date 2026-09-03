@@ -435,18 +435,18 @@ import {
   function eraChrome(decade){
     switch(decade){
       case "1960s": return { wrapClass:"era-1960s",
-        before:`<div class="era-tag">The Gridiron Gazette — Late Edition</div>` };
+        before:`<div class="era-tag">The Baseline — Late Edition</div>` };
       case "1970s": return { wrapClass:"era-1970s",
-        before:`<div class="era-scanlines"></div><div class="era-tag">◉ LIVE — GRIDIRON SPORTS DESK</div>` };
+        before:`<div class="era-scanlines"></div><div class="era-tag">◉ LIVE — THE DIAMOND SPORTS DESK</div>` };
       case "1980s": return { wrapClass:"era-1980s",
-        before:`<div class="era-tag">▌TELETEXT 108▐ GRIDIRON NEWS</div>` };
+        before:`<div class="era-tag">▌TELETEXT 108▐ BASEBALL NEWS</div>` };
       case "1990s": return { wrapClass:"era-1990s",
-        before:`<div class="era-tag">GridironLab.net</div>` };
+        before:`<div class="era-tag">DiamondLab.net</div>` };
       case "2000s": return { wrapClass:"era-2000s",
         before:`<div class="era-forum-head"><span class="era-forum-title">Thread: Breaking News</span><span class="era-forum-time">Posted ${randInt(1,11)}:${String(randInt(0,59)).padStart(2,"0")} ${Math.random()<0.5?"AM":"PM"}</span></div>` };
       case "2010s": return { wrapClass:"era-2010s", overlay:true, before:"" };
       case "2020s": return { wrapClass:"era-2020s",
-        before:`<div class="era-social-head"><span class="era-social-avatar">🏈</span><span class="era-social-name">Gridiron Insider<span class="era-verified">✔</span></span><span class="era-social-handle">@gridironlab</span></div>`,
+        before:`<div class="era-social-head"><span class="era-social-avatar">⚾</span><span class="era-social-name">Diamond Insider<span class="era-verified">✔</span></span><span class="era-social-handle">@diamondlab</span></div>`,
         after:`<div class="era-social-icons"><span>↩ Reply</span><span>⟲ Retweet</span><span>♥ Like</span></div>` };
       default: return { wrapClass:"", before:"", after:"" };
     }

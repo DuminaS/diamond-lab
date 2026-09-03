@@ -68,7 +68,7 @@ test("encodeResultCode/decodeResultCode round-trips an arbitrary payload exactly
 
 test("decodeResultCode rejects a corrupted payload (bit-flipped body) via the checksum", () => {
   const code = encodeResultCode({ matchId: "X", slot: "A", name: "N", decade: "1990s", summary: {} });
-  const corrupted = code.replace(/^GLR1-./, "GLR1-Z"); // mangle the first base64 char
+  const corrupted = code.replace(/^DLR1-./, "DLR1-Z"); // mangle the first base64 char
   assert.equal(decodeResultCode(corrupted), null);
 });
 

@@ -28,36 +28,37 @@ export const SCORE_WEIGHTS = Object.freeze({
 });
 
 // Caps below which a component is scaled linearly to a 0-100 "how close to legendary" reading, and
-// above which more of the same raw stat stops buying additional credit -- a QB with 10 rings and one
-// with 6 should both read as maxed-out on THIS component; the gap between them belongs to whichever
-// OTHER component still has room to differentiate them.
+// above which more of the same raw stat stops buying additional credit -- a hitter with 6 World
+// Series rings and one with 4 should both read as maxed-out on THIS component; the gap between them
+// belongs to whichever OTHER component still has room to differentiate them.
 const CAPS = Object.freeze({
-  rings: 6,               // dynasty-tier: this codebase's own "dynasty" achievement uses 4+
-  accoladeScore: 60,       // weighted mvps*3 + allPros*2 + proBowls*1 -- a very decorated career
-  ratingFloor: 70, ratingCeiling: 130,
-  yards: 60000,
-  games: 300,
-  achievementCount: 85,    // the full current achievement registry size (Balance Wave 7)
-  earnings: 300000000,
+  rings: 5,                // dynasty-tier: this codebase's own "dynasty" achievement uses 4+ WS titles
+  accoladeScore: 70,       // weighted mvps*4 + allPros(Silver Slugger)*2 + proBowls(All-Star)*0.8
+  ratingFloor: 90, ratingCeiling: 155,   // career OPS+: ~90 = a below-average bat, ~155 = inner-circle
+  yards: 6000,             // career total bases -- an all-time great lands ~5500-6500
+  games: 2800,             // ~17 full seasons
+  achievementCount: 92,    // the full current achievement registry size
+  earnings: 500000000,
 });
 
 function pct(value, cap) { return clamp((value || 0) / cap, 0, 1) * 100; }
 
 // summary shape: { rings, mvps, allPros, proBowls, peakOverall, rating, yards, td, games,
-//                  achievementCount, earnings }
+//                  achievementCount, earnings } -- for baseball: rings = World Series titles,
+//   allPros = Silver Sluggers, proBowls = All-Star nods, rating = career OPS+, yards = total
+//   bases, td = home runs.
 // Every field defaults to 0 if missing so a partial/legacy summary never throws.
 export function scoreComponents(summary) {
   const s = summary || {};
   const ringsComponent = pct(s.rings, CAPS.rings);
 
-  const accoladeRaw = (s.mvps || 0) * 3 + (s.allPros || 0) * 2 + (s.proBowls || 0) * 1;
+  // mvps = MVPs, allPros = Silver Sluggers + All-MLB, proBowls = All-Star selections.
+  const accoladeRaw = (s.mvps || 0) * 4 + (s.allPros || 0) * 2 + (s.proBowls || 0) * 0.8;
   const accoladesComponent = pct(accoladeRaw, CAPS.accoladeScore);
 
-  // Rate half: peakOverall is already a 0-99 scale, clamped defensively (malformed/legacy input
-  // could hand this anything) rather than trusted raw. Career rating is scaled against a
-  // floor/ceiling instead of used raw, since ~70 is a replacement-level career passer rating and
-  // ~130 is legendary -- the same "normalize before weighting" instinct awards.js's MVP composite
-  // already uses, so a rating scale change elsewhere in the codebase doesn't need this reworked.
+  // Rate half: peakOverall is a 0-99 hitter-overall, clamped defensively. Career rating is a
+  // career OPS+ index scaled against a floor/ceiling rather than used raw (100 is a league-
+  // average bat, so ~90 is a real everyday-regular career and ~155 is an inner-circle one).
   const peakOverallClamped = clamp(s.peakOverall || 0, 0, 99);
   const ratingScaled = clamp(((s.rating || 0) - CAPS.ratingFloor) / (CAPS.ratingCeiling - CAPS.ratingFloor), 0, 1) * 100;
   const peakAndRateComponent = (peakOverallClamped + ratingScaled) / 2;

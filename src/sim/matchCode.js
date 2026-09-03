@@ -22,8 +22,9 @@ const ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // 32 chars: digits 2-9, A-
 const CHAR_TO_VAL = {};
 ALPHABET.split("").forEach((c, i) => { CHAR_TO_VAL[c] = i; });
 
-// Must match DECADES.length in src/main.js (7 decades, 1960s-2020s) -- decadeIndex is packed into
-// 3 bits (0-7) but only 0-6 are ever valid; a decoded 7 means a corrupted/foreign code.
+// Must match DECADES.length in src/main.js (7 eras, 1960s-2020s) -- the era index (still called
+// decadeIndex internally) is packed into 3 bits (0-7); only 0-6 are ever valid, a decoded 7 means
+// a corrupted/foreign code.
 export const DECADE_COUNT = 7;
 
 function encodeBase32(n, minLength) {
@@ -86,7 +87,7 @@ export function decodeMatchCode(code) {
   return { seed, decadeIndex };
 }
 
-const RESULT_CODE_PREFIX = "GLR1"; // "Gridiron Lab Result v1" -- a version tag, not decorative;
+const RESULT_CODE_PREFIX = "DLR1"; // "Diamond Lab Result v1" -- a version tag, not decorative;
 // bumping this if the payload shape ever changes lets decodeResultCode refuse a code from an
 // incompatible future/past version instead of misparsing it.
 

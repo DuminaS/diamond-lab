@@ -173,7 +173,17 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [x] achievement-rules.node.mjs 15/15; smoke green
 - [ ] opponent-id-ledger revenge regression fails on the FA-screen helper stall (Phase 11)
 
-### Phase 9 — multiplayer (matchCode DLR1, score weights)
+### Phase 9 — multiplayer (Parallel Universe / Private Match)  ✅
+- [x] sim/multiplayerScore.js: caps retuned for baseball (rings→5 WS, OPS+ floor/ceiling 90/155,
+      total bases 6000, games 2800, achievements 92, earnings 500M); accolade weights mvp*4 /
+      SS*2 / All-Star*0.8; comments reframed
+- [x] sim/matchCode.js: RESULT_CODE_PREFIX "GLR1" → "DLR1"; era-index comment
+- [x] MP hub / create / join / compare screen copy → Showcase not Combine, "the better hitter wins"
+- [x] eraChrome news-desk chrome → The Baseline / Diamond Sports Desk / DiamondLab.net / @diamondlab
+- [x] matchCode.node.mjs corrupted-payload test prefix updated (GLR1→DLR1)
+- [ ] 2 MP Playwright regressions fail on RNG seed drift (rookie-season injury interstitial,
+      hardcoded GLR1 prefix assertion) — Phase 11 re-seeding
+
 ### Phase 10 — UI / copy / CSS
 ### Phase 11 — tests
 ### Phase 12 — docs / final build
