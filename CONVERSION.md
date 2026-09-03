@@ -60,11 +60,21 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [ ] per-game gameLog HR/TB sums drift from reconciled season line (schedule tab cosmetic)
 - [ ] season-rate tuning sweep (project norm) — coefficients are first-pass
 
-### Phase 3 — remaining (game-score engine)
-- [ ] simulateRegulationScore / scoreForQuarter / resolveOvertime → 9-inning run scoring
-      (myRuns/oppRuns per inning, extra innings), feeds animatePlayoffQuarters + box scores
-- [ ] simpleWinProb / buildSeasonSchedule — 162g series structure, standings tiebreakers
-- [ ] regularSeasonOffenseGrade / opponentDefenseGrade → lineup vs. pitching-staff grade
+### Phase 3 — game-score engine  ✅
+- [x] scoreForInning (was scoreForQuarter): shallow run-scoring half-inning, most scoreless
+- [x] simulateRegulationScore → 9 innings, home team skips bottom 9th if ahead
+- [x] resolveOvertime → extra innings until someone leads a full frame (cap 21, then coin flip)
+- [x] overtimeRulesForYear / tieProbability → baseball (ties ~never; pre-1975 rare called games)
+- [x] approxGameScore → run totals (winners ~3-7, margins ~1-4)
+- [x] simpleWinProb → 0.0032 coef, clamp [.35,.66] (best ~107 wins, worst ~57) — records now realistic
+- [x] generateGameBoxScore → per-game batting line (ab/r/h/2b/3b/hr/rbi/bb/k/sb + legacy aliases)
+- [x] animatePlayoffQuarters reveal: inning labels (1st/2nd…), "Sim to 5th" / "Sim to Final Out",
+      Key Moment checkpoint moved to after the 6th, eligibility retuned to run-differential
+- [x] verified: reg-season records 76-89 range, game scores baseball-scale, LCS/WS games low-run
+- [ ] playoff rounds are still single games, not best-of-5/7 series (follow-up)
+- [ ] per-game gameLog HR/TB vs reconciled season line still drifts slightly (schedule tab cosmetic)
+- [ ] career length looks short in spot checks (~4-6 seasons) — watch during Phase 4/5 (waiver/durability)
+- [ ] seeded tuning sweep still owed on all Phase 3 coefficients
 
 ### Phase 4 — player entity / roster / league
 ### Phase 5 — contracts / FA / injuries / events

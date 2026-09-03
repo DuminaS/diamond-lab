@@ -3204,22 +3204,23 @@ import {
     return schemeId ? schemeAdjust(eraAdjusted, schemeId) : eraAdjusted;
   }
 
-  /* ----- playoffs & the Super Bowl ----- */
-  function scoreForQuarter(off, def){
-    // tracks not just points but HOW they were scored (touchdowns vs. field goals) so the box
-    // score generated later can be built FROM the actual scoring plays instead of guessing a TD
-    // count independently from the point total -- that independence was the root of "team kicked
-    // 2 FGs but the player is credited with a TD."
-    let pts=0, tds=0, fgs=0;
-    const possessions = randInt(2,3);
-    for(let i=0;i<possessions;i++){
-      const diff = off-def;
-      const scoreProb = clamp(0.32+diff*0.006, 0.10, 0.72);
-      if(Math.random()<scoreProb){
-        if(Math.random()<0.66){ pts+=7; tds++; } else { pts+=3; fgs++; }
-      }
+  /* ----- postseason & the World Series ----- */
+  // One half-inning of run scoring. `off` is the batting side's lineup grade, `def` the fielding
+  // side's pitching+defense grade. Most half-innings are scoreless; a rally is usually 1-2 runs
+  // with a rare crooked number. The `tds`/`fgs` fields are kept at 0 so the overtime/box-score
+  // code that still destructures them keeps working during the conversion.
+  function scoreForInning(off, def){
+    const diff = off - def;
+    // Deliberately shallow: even a huge lineup-vs-staff mismatch only shifts a half-inning's
+    // rally odds a little, so a great team beats a bad one ~60-65% of the time, not 85%+.
+    const rallyProb = clamp(0.205 + diff*0.0017, 0.09, 0.34);
+    let runs = 0;
+    if(Math.random() < rallyProb){
+      runs = 1;
+      if(Math.random() < 0.34) runs++;                    // two-run inning
+      if(Math.random() < 0.10) runs += randInt(1, 3);     // big inning
     }
-    return { pts, tds, fgs };
+    return { pts: runs, tds: 0, fgs: 0 };
   }
   // myDefense (career.defense, 20-99, same independently-noisy scale as oline/weapons) is optional
   // so rival-vs-rival math elsewhere that has no such concept keeps working unchanged -- when
@@ -3252,14 +3253,15 @@ import {
   // only the outcome (who wins, or whether it stays level) is what standings/history/records need
   // to agree on, not shot-by-shot overtime fidelity. `hasOvertime` and `canEndInTie` are the two
   // fields resolveOvertime actually branches on.
+  // Baseball: a game always plays until someone leads at the end of an inning -- there is always
+  // "overtime" (extra innings). The postseason can NEVER end level. The regular season can, but
+  // only very rarely and only in the older eras (a game called for weather/curfew while tied,
+  // never resumed); from the mid-1970s on, a tied game is suspended and finished later, so ties
+  // effectively vanish. `modifiedSuddenDeath` / `periodMinutes` no longer mean anything and are
+  // left as harmless constants for any code still reading the shape.
   function overtimeRulesForYear(year, postseason){
-    if(postseason){
-      return { hasOvertime:true, modifiedSuddenDeath: year>=2010, periodMinutes:15, canEndInTie:false };
-    }
-    if(year<1974) return { hasOvertime:false, modifiedSuddenDeath:false, periodMinutes:0, canEndInTie:true };
-    if(year<2012) return { hasOvertime:true, modifiedSuddenDeath:false, periodMinutes:15, canEndInTie:true };
-    if(year<2017) return { hasOvertime:true, modifiedSuddenDeath:true, periodMinutes:15, canEndInTie:true };
-    return { hasOvertime:true, modifiedSuddenDeath:true, periodMinutes:10, canEndInTie:true };
+    if(postseason) return { hasOvertime:true, modifiedSuddenDeath:false, periodMinutes:0, canEndInTie:false };
+    return { hasOvertime:true, modifiedSuddenDeath:false, periodMinutes:0, canEndInTie: year<1975 };
   }
   // Wave 4 required design #2: regulation scoring separated from tie/overtime resolution -- the two
   // used to be one monolithic function, which made it impossible to ask "is this level after 4
@@ -3277,15 +3279,18 @@ import {
   // calibrated mechanic (see scoreForQuarter's own comment for the diagnostic sweep behind that
   // 80/20 split), not part of this defect.
   function simulateRegulationScore(offOverall, defOverall, myDefense, oppDefense){
-    const myFacingGrade = oppDefense!=null ? oppDefense : defOverall;
+    // myDefense (career.defense -- the player's team's pitching+fielding grade) blends into how
+    // many runs the OPPONENT puts up (80% their lineup / 20% my staff), the same 80/20 split the
+    // football version used, decoupling "how good is my run prevention" from "how good is my bat."
+    const myFacingGrade = oppDefense!=null ? oppDefense : defOverall;   // the pitching I face
     const oppFacingGrade = myDefense!=null ? (offOverall*0.8 + myDefense*0.2) : offOverall;
-    const quarters = [];
+    const quarters = []; // one entry per inning (field name kept for the reveal code)
     let myTotal=0, oppTotal=0, myTds=0, myFgs=0, oppTds=0, oppFgs=0;
-    for(let q=1;q<=4;q++){
-      const myQ = scoreForQuarter(offOverall, myFacingGrade);
-      const oppQ = scoreForQuarter(defOverall, oppFacingGrade);
+    for(let q=1;q<=9;q++){
+      const myQ = scoreForInning(offOverall, myFacingGrade);
+      // Home team bats last: skip the bottom of the 9th if they're already ahead.
+      const oppQ = (q===9 && oppTotal>myTotal) ? { pts:0, tds:0, fgs:0 } : scoreForInning(defOverall, oppFacingGrade);
       myTotal+=myQ.pts; oppTotal+=oppQ.pts;
-      myTds+=myQ.tds; myFgs+=myQ.fgs; oppTds+=oppQ.tds; oppFgs+=oppQ.fgs;
       quarters.push({ q, myQ: myQ.pts, oppQ: oppQ.pts, myTotal, oppTotal });
     }
     return { quarters, myTotal, oppTotal, myTds, myFgs, oppTds, oppFgs };
@@ -3308,13 +3313,22 @@ import {
     if(rules.canEndInTie && tieProb && Math.random()<tieProb){
       return { quarters: regulation.quarters, myTotal, oppTotal, won:null, tie:true, myTds, myFgs, oppTds, oppFgs };
     }
-    let finalMyTds=myTds, finalMyFgs=myFgs, finalOppTds=oppTds, finalOppFgs=oppFgs;
-    const otTd = Math.random()<0.7;
-    const otPts = otTd?6:3;
-    if(Math.random() < 0.5 + (offOverall-defOverall)*0.01){ myTotal += otPts; if(otTd) finalMyTds++; else finalMyFgs++; }
-    else { oppTotal += otPts; if(otTd) finalOppTds++; else finalOppFgs++; }
-    const quarters = [...regulation.quarters, { q:"OT", myQ: myTotal-regulation.myTotal, oppQ: oppTotal-regulation.oppTotal, myTotal, oppTotal }];
-    return { quarters, myTotal, oppTotal, won: myTotal>oppTotal, tie:false, myTds:finalMyTds, myFgs:finalMyFgs, oppTds:finalOppTds, oppFgs:finalOppFgs };
+    // Extra innings: play full frames until one side leads at the end of one. A generous cap then
+    // a coin flip so a sim can never loop forever on two dead-even offenses.
+    const quarters = [...regulation.quarters];
+    for(let inn=10; inn<=21; inn++){
+      const myR = scoreForInning(offOverall, defOverall).pts + (Math.random()<0.12 ? 1 : 0);
+      const oppR = scoreForInning(defOverall, offOverall).pts + (Math.random()<0.12 ? 1 : 0);
+      myTotal += myR; oppTotal += oppR;
+      quarters.push({ q: inn, myQ: myR, oppQ: oppR, myTotal, oppTotal });
+      if(myTotal !== oppTotal) break;
+    }
+    if(myTotal === oppTotal){
+      if(Math.random() < 0.5 + (offOverall-defOverall)*0.01) myTotal++; else oppTotal++;
+      const last = quarters[quarters.length-1];
+      last.myTotal = myTotal; last.oppTotal = oppTotal;
+    }
+    return { quarters, myTotal, oppTotal, won: myTotal>oppTotal, tie:false, myTds, myFgs, oppTds, oppFgs };
   }
   // Thin wrapper kept for every existing call site: runs regulation, and only consults
   // overtimeRulesForYear/resolveOvertime when the two totals actually match after 4 quarters.
@@ -3331,31 +3345,35 @@ import {
     }
     return resolveOvertime(regulation, offOverall, defOverall, year ?? 2020, postseason ?? true, tieProb);
   }
-  function generateGameBoxScore(season, myPts, myTds){
-    const league = LEAGUE[season.decade];
-    const perGameAtt = season.games>0 ? season.att/season.games : league.attPerGame;
-    const att = Math.max(15, Math.round(perGameAtt * (0.85+Math.random()*0.4)));
-    const basePct = season.att>0 ? season.pct : league.comp;
-    const pct = clamp(basePct + (Math.random()-0.5)*0.14, 0.32, 0.86);
-    const comp = Math.round(att*pct);
-    const baseYpa = season.att>0 ? season.yards/season.att : league.ypa;
-    const ypa = clamp(baseYpa*(0.8+Math.random()*0.5), 4, 12.5);
-    const yards = Math.round(att*ypa);
-    const interceptions = Math.random()<0.4 ? randInt(0,2) : 0;
-    const perGameRushAtt = season.games>0 ? (season.rushAtt||0)/season.games : 0;
-    const rushAtt = Math.max(0, Math.round(perGameRushAtt * (0.7+Math.random()*0.7)));
-    const rushYpc = season.rushAtt>0 ? season.rushYards/season.rushAtt : 3.6;
-    const rushYards = rushAtt>0 ? Math.round(rushAtt * clamp(rushYpc*(0.7+Math.random()*0.7), 1, 10)) : 0;
-    // TDs are drawn from the team's ACTUAL touchdown count this game (tracked in simulateGameScore)
-    // rather than re-estimated from the raw point total -- a passing/rushing TD can never be
-    // recorded on a game the team won on field goals alone, and the two can never sum to more
-    // touchdowns than the team actually scored.
-    const teamTds = clamp(myTds||0, 0, 8);
-    const rushTd = rushAtt>0 && teamTds>0 && Math.random()<0.18 ? 1 : 0;
-    const td = clamp(teamTds - rushTd, 0, 6);
-    const perGameSacks = season.games>0 ? (season.sacks||0)/season.games : 2.2;
-    const sacks = Math.max(0, Math.round(perGameSacks * (0.4+Math.random()*1.4)));
-    return { att, comp, pct: att>0?comp/att:0, yards, td, int: interceptions, sacks, rushAtt, rushYards, rushTd };
+  // One postseason game's batting line for the player, sampled around this season's per-game
+  // rates. Real fields: ab / r / h / doubles / triples / hr / rbi / bb / k / sb. Legacy aliases
+  // (att=AB, comp=H, yards=TB, td=HR, int=K, sacks=GIDP, rushAtt=BB, rushYards=RBI, rushTd=SB)
+  // are kept so the box-score modal keeps rendering until Phase 10 relabels it.
+  function generateGameBoxScore(season, myRuns, _unused){
+    const gp = season.games || 1;
+    const per = k => (season[k]||0)/gp;
+    const ab = clamp(Math.round(3.4 + Math.random()*1.6), 2, 6);
+    const seasonAvg = season.avg || 0.255;
+    const h = clamp(Math.round(ab * clamp(seasonAvg*(0.2+Math.random()*2.4), 0, 1)), 0, ab);
+    const hr = h>0 && Math.random() < clamp(per("hr")/Math.max(1,per("hits"))*(h), 0, 0.6) ? 1 + (Math.random()<0.12?1:0) : 0;
+    const hrCapped = Math.min(hr, h);
+    const doubles = (h - hrCapped) > 0 && Math.random() < 0.28 ? 1 : 0;
+    const triples = (h - hrCapped - doubles) > 0 && Math.random() < 0.05 ? 1 : 0;
+    const singles = Math.max(0, h - hrCapped - doubles - triples);
+    const tb = singles + 2*doubles + 3*triples + 4*hrCapped;
+    const bb = Math.random() < clamp(per("bb")/4.2, 0.02, 0.5) ? 1 + (Math.random()<0.14?1:0) : 0;
+    const k = Math.max(0, Math.round(clamp(per("k")/4.2, 0, 0.9) * (ab) * (0.4+Math.random()*1.6)));
+    const kCapped = Math.min(k, ab - h);
+    const rbi = clamp(hrCapped + (h-hrCapped>0 && Math.random()<0.45 ? randInt(1,2) : 0) + Math.round((myRuns||0)*0.12*Math.random()), 0, 7);
+    const r = clamp((h>0 || bb>0) && Math.random()<0.5 ? 1 + (Math.random()<0.15?1:0) : 0, 0, 4);
+    const sb = Math.random() < clamp(per("sb")/4.2, 0, 0.4) ? 1 : 0;
+    const gidp = Math.random() < 0.09 ? 1 : 0;
+    return {
+      ab, r, h, doubles, triples, hr: hrCapped, rbi, bb, k: Math.max(0,kCapped), sb,
+      // legacy aliases
+      att: ab, comp: h, pct: ab>0 ? h/ab : 0, yards: tb, td: hrCapped, int: Math.max(0,kCapped),
+      sacks: gidp, rushAtt: bb, rushYards: rbi, rushTd: sb,
+    };
   }
 
   /* ----- regular season: the player's own team-quality-aware, per-game engine -----
@@ -3507,10 +3525,11 @@ import {
      (starter + backup starts combined) afterward. Division winners + best-record wildcards
      seed the playoffs, so a team's seed and its "made/missed" status can never contradict
      each other, and both the bracket shape and the division map are era-accurate by year. ----- */
-  // Coefficient/clamp tuned via winprob_tune2.mjs sweep: the prior 0.012/[0.06,0.94] pair averaged
-  // 7-8 of 31 teams at 12+ wins in a single season (matching a reported screenshot of an absurdly
-  // bimodal standings page) -- 0.006/[0.10,0.90] cuts that to ~4 while still leaving real spread.
-  function simpleWinProb(aStrength, bStrength){ return clamp(0.5 + (aStrength-bStrength)*0.006, 0.10, 0.90); }
+  // Baseball has far more per-game parity than football -- the best teams win ~62% (about 100-62),
+  // the worst ~38%, over 162. The clamp caps a single team at ~.66 win prob vs. a league-worst
+  // opponent (~107 wins) and floors it at ~.35 (~57 wins), and the coefficient is a third of the
+  // football value. Retune with a full-season standings sweep if the spread looks wrong.
+  function simpleWinProb(aStrength, bStrength){ return clamp(0.5 + (aStrength-bStrength)*0.0032, 0.35, 0.66); }
   // Ties QOL: `tieProb` is OPTIONAL and defaults to falsy, so every pre-existing call site (every
   // flat PLAYOFF resolution -- playoffs never end in a tie in real NFL rules, and none of those
   // call sites pass this) is completely unaffected. Only buildScheduleResults' regular-season flat
@@ -3544,10 +3563,13 @@ import {
   // 1974+ eras were RE-VERIFIED by the same sweep (1980s: 0/704 my games vs 0.39% league, consistent
   // with the existing 0.3% target at this sample size; 2020s: 0.57% my vs 0.56% league, matching the
   // existing 0.5% target closely) and are unchanged.
+  // Unconditional "this game ended in a tie" rate. Baseball ties are vanishingly rare -- a called
+  // game in the pre-suspension-rule era, essentially never after. Used by simpleGameWinner (every
+  // flat-resolved, non-player game).
   function tieProbability(year){
-    if(year<1974) return 0.05;
-    if(year<2012) return 0.003;
-    return 0.005;
+    if(year<1975) return 0.010;
+    if(year<2000) return 0.0015;
+    return 0.0004;
   }
   // simulateGameScore's tie check is CONDITIONAL -- it only ever fires when the game is already
   // level after regulation, unlike simpleGameWinner's tieProb above, which is an UNCONDITIONAL
@@ -3559,17 +3581,21 @@ import {
   // ~6% of the time; see the Round 33 PROGRESS.md entry for the sweep). This divides the target
   // UNCONDITIONAL rate by that measured ~6% to get the conditional "stays tied" probability that
   // actually produces a matching overall tie rate for the player, whichever era they're in.
-  const LEVEL_AFTER_REGULATION_RATE = 0.06;
+  // Two evenly-matched teams reach the end of 9 tied ~9% of the time in scoreForInning's math
+  // (roughly the real MLB extra-inning-game rate). tieStayProbability converts the unconditional
+  // target rate into the conditional "stays a tie once level after 9" figure the player's own
+  // real games check at.
+  const LEVEL_AFTER_REGULATION_RATE = 0.09;
   function tieStayProbability(year){
     return clamp(tieProbability(year) / LEVEL_AFTER_REGULATION_RATE, 0, 1);
   }
-  // A plausible final score for a game where only two raw team-strength numbers exist (not the full
-  // offense/defense split simulateGameScore uses for the player's own games) -- good enough to fill
-  // a real per-team schedule row, swept via approx_score_sweep.mjs for realistic NFL-ish ranges.
+  // A plausible final score for a game resolved from two raw team-strength numbers only (not the
+  // full lineup/pitching split simulateGameScore uses for the player's own games) -- fills a
+  // per-team schedule row. Baseball run totals: winners mostly 3-7, margins mostly 1-4.
   function approxGameScore(winnerStrength, loserStrength){
-    const edge = clamp((winnerStrength-loserStrength)*0.25, 0, 14);
-    const winnerScore = Math.round(20 + edge + (Math.random()*16-4));
-    const margin = Math.round(3 + edge*0.4 + Math.random()*11);
+    const edge = clamp((winnerStrength-loserStrength)*0.05, 0, 3);
+    const winnerScore = clamp(Math.round(3.4 + edge + (Math.random()*4-1)), 1, 16);
+    const margin = clamp(Math.round(1 + edge*0.4 + Math.random()*3.4), 1, winnerScore);
     const loserScore = clamp(winnerScore - margin, 0, winnerScore-1);
     return { winnerScore, loserScore };
   }
@@ -10806,12 +10832,13 @@ import {
   // touching the DOM or opening the overlay.
   let _playoffRevealToken = 0;
   function keyMomentScoreEligibility(round){
-    const checkpoint = round.quarters[2] || round.quarters[round.quarters.length-1];
+    // Checkpoint through 6 innings (index 5) -- late enough that the game's shape is clear.
+    const checkpoint = round.quarters[5] || round.quarters[round.quarters.length-1];
     const diff = Math.abs(checkpoint.myTotal - checkpoint.oppTotal);
-    if(diff<=8) return 1;      // one-score game -- always live
-    if(diff<=16) return 0.7;   // two-score game -- still very much in reach
-    if(diff<=24) return 0.35;  // a real long-shot, but not impossible
-    return 0;                  // out of reach either way -- no point running the mini-game
+    if(diff<=2) return 1;      // one- or two-run game -- always live
+    if(diff<=4) return 0.7;    // a three-four run game -- still very much in reach
+    if(diff<=6) return 0.35;   // a real long-shot, but not impossible
+    return 0;                  // blowout -- no point running the mini-game
   }
   function animatePlayoffQuarters(season){
     _playoffRevealToken++;
@@ -10829,7 +10856,12 @@ import {
     const baseChance = KEY_MOMENT_BASE_TRIGGER_CHANCE;
     function stillCurrent(){ return myToken === _playoffRevealToken; }
 
-    function quarterLabel(q){ return typeof q.q==="number" ? "Q"+q.q : q.q; }
+    function quarterLabel(q){
+      if(typeof q.q!=="number") return q.q;
+      const n = q.q, s = n%10, t = Math.floor(n/10)%10;
+      const suf = t===1 ? "th" : s===1 ? "st" : s===2 ? "nd" : s===3 ? "rd" : "th";
+      return n + suf;
+    }
 
     function finalizeRound(roundIdx){
       if(!stillCurrent()) return;
@@ -10908,7 +10940,7 @@ import {
         holder.appendChild(el);
       }
       r._revealedCount++;
-      if(r._revealedCount===3 && !r._keyMomentChecked && r.oppTendency && KeyMomentSettings.isEnabled()){
+      if(r._revealedCount===6 && !r._keyMomentChecked && r.oppTendency && KeyMomentSettings.isEnabled()){
         r._keyMomentChecked = true;
         const elig = keyMomentScoreEligibility(r);
         if(elig>0 && Math.random() < baseChance*elig){
@@ -10928,7 +10960,7 @@ import {
     }
     function simToHalf(roundIdx){
       const r = rounds[roundIdx];
-      const target = Math.min(2, r.quarters.length);
+      const target = Math.min(5, r.quarters.length);
       function step(){
         if(!stillCurrent()) return;
         if(r._revealedCount>=r.quarters.length){ finalizeRound(roundIdx); return; }
@@ -10954,11 +10986,11 @@ import {
       const controls = document.getElementById("pqControls-"+roundIdx);
       if(!controls) return;
       const nextQ = r.quarters[r._revealedCount];
-      const qBtnLabel = nextQ ? `Sim to ${quarterLabel(nextQ)}` : "Sim Quarter";
+      const qBtnLabel = nextQ ? `Sim ${quarterLabel(nextQ)}` : "Sim Inning";
       controls.innerHTML = `
         <button type="button" class="btn btn-ghost pq-btn" id="pqSimQ-${roundIdx}">${qBtnLabel}</button>
-        ${r._revealedCount<2 ? `<button type="button" class="btn btn-ghost pq-btn" id="pqSimHalf-${roundIdx}">Sim to Half</button>` : ``}
-        <button type="button" class="btn btn-primary pq-btn" id="pqSimEnd-${roundIdx}">Sim to End of Game</button>`;
+        ${r._revealedCount<5 ? `<button type="button" class="btn btn-ghost pq-btn" id="pqSimHalf-${roundIdx}">Sim to 5th</button>` : ``}
+        <button type="button" class="btn btn-primary pq-btn" id="pqSimEnd-${roundIdx}">Sim to Final Out</button>`;
       document.getElementById("pqSimQ-"+roundIdx).addEventListener("click", ()=> simQuarter(roundIdx));
       const halfBtn = document.getElementById("pqSimHalf-"+roundIdx);
       if(halfBtn) halfBtn.addEventListener("click", ()=> simToHalf(roundIdx));
