@@ -92,7 +92,28 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [ ] League/Depth tab column headers (QB / Comp% / Att / Yds / TD / INT) — Phase 10
 - [ ] rival/bench totals objects don't init the new bb/ab/2b/3b fields (guarded at accumulation)
 
-### Phase 5 — contracts / FA / injuries / events
+### Phase 5 — contracts / FA / injuries / events  ✅ (narrative; deep cap-ledger unchanged)
+- [x] CONTRACT_SCALE rebuilt with MLB salary history per era; rookieAPY round bands widened
+- [x] CONTRACT_STRUCTURES labels/subs → payroll/luxury-tax framing
+- [x] INJURY_TYPES → IL stints (hamstring/oblique/wrist/HBP fracture/shoulder/back/meniscus/
+      thumb/concussion/ACL/Achilles), keys mapped to hitter tools
+- [x] AI_SUSPENSION_REASONS → PED / domestic violence policy / conduct / Rule 21 gambling
+- [x] coordinator carousel → hitting-coach-gets-a-manager-job "success tax" (round literals kept)
+- [x] INFRACTION_EVENTS: dugout meltdown, day-game-after-night-game, "baseball story"
+- [x] RARE_EVENTS / POSITIVE_EVENTS: swing overhaul, hitting lab, Roberto Clemente Award,
+      spin pickup, late innings, cleat deal
+- [x] LIFEPATH_EVENTS: bat flip goes viral, airmailed warmup throw, OPS not completion %
+- [x] RIVALRY_EVENTS: benches-clearing shove, won't-acknowledge-all-series, "best I've faced"
+- [x] ORG_EVENTS: top bat leaves FA, rotation overhaul, new ballpark, manager not coach
+- [x] LEAGUE_NEWS_EVENTS: prospect bust, spring injuries, Opening Day, payroll cuts, hitting coach
+- [x] LOCKER_ROOM_EVENTS: unhappy slugger, winning over the pitching staff, hitting-coach friction,
+      "clubhouse" everywhere; at-bat not snap
+- [x] renderWaivedEvent / renderTradeEvent / renderInjuryEvent / expansion → IL, 40-man, clubhouse
+- [x] expansionDraftCheck is data-driven off TEAMS[].start — MLB expansion years already correct
+- [ ] evaluatePerformanceOverExpectation still takes football stat inputs (works; ~approx)
+- [ ] the 5 team grades (O-Line/Weapons/Defense/Coaching/Front Office) still football-named — Phase 7/10
+- [ ] achievement hint text ("passing touchdowns") — Phase 8
+
 ### Phase 6 — Key Moments (batter vs pitcher)
 ### Phase 7 — awards / records / HOF (Cooperstown)
 ### Phase 8 — achievements

@@ -2780,22 +2780,28 @@ import {
   let career = null;
   let lastFinishedCareerEntry = null; // trophy-room-entry-shaped snapshot of the career just finished, for "View Trading Card" on the HOF screen
 
-  /* ----- contracts & money ----- */
+  /* ----- contracts & money -----
+     MLB salary history, roughly. `rookie` blends a first-pro-deal signing bonus with the near-
+     minimum pre-arbitration / early-arb pay a young player actually earns (keyed by draft round,
+     a simplification -- draft slot mostly drives the BONUS, not the MLB salary). `vet` is the
+     free-agent market by tier: elite = a top-of-market star, good = a solid everyday regular,
+     average = a second-division regular / strong platoon, backup = a bench bat, minimum = a
+     league-minimum roster spot. Numbers are annual-average-value in that era's dollars. */
   const CONTRACT_SCALE = {
-    "1960s": { rookie:{1:42000,  2:24000,  4:14000,   6:9000,    udfa:6500},   vet:{elite:280000,    good:90000,    average:45000,   backup:22000,   minimum:12000} },
-    "1970s": { rookie:{1:95000,  2:48000,  4:26000,   6:16000,   udfa:11000},  vet:{elite:500000,    good:150000,   average:80000,   backup:38000,   minimum:20000} },
-    "1980s": { rookie:{1:420000, 2:190000, 4:105000,  6:62000,   udfa:42000},  vet:{elite:1800000,   good:700000,   average:350000,  backup:150000,  minimum:80000} },
-    "1990s": { rookie:{1:2300000,2:950000, 4:420000,  6:210000,  udfa:150000}, vet:{elite:5500000,   good:2800000,  average:1400000, backup:600000,  minimum:300000} },
-    "2000s": { rookie:{1:6200000,2:1850000,4:720000,  6:390000,  udfa:280000}, vet:{elite:13000000,  good:7000000,  average:3500000, backup:1500000, minimum:650000} },
-    "2010s": { rookie:{1:4200000,2:1650000,4:780000,  6:520000,  udfa:430000}, vet:{elite:24000000,  good:15000000, average:7000000, backup:2500000, minimum:895000} },
-    "2020s": { rookie:{1:8600000,2:2900000,4:1250000, 6:880000,  udfa:780000}, vet:{elite:50000000,  good:32000000, average:15000000,backup:5000000, minimum:1100000} },
+    "1960s": { rookie:{1:50000,   2:22000,   4:12000,   6:8000,    udfa:6000},   vet:{elite:115000,   good:55000,    average:24000,   backup:14000,   minimum:7000} },
+    "1970s": { rookie:{1:130000,  2:55000,   4:28000,   6:18000,   udfa:12000},  vet:{elite:280000,   good:120000,   average:55000,   backup:30000,   minimum:18000} },
+    "1980s": { rookie:{1:600000,  2:230000,  4:110000,  6:70000,   udfa:45000},  vet:{elite:2300000,  good:1000000,  average:430000,  backup:180000,  minimum:62000} },
+    "1990s": { rookie:{1:2600000, 2:1000000, 4:450000,  6:230000,  udfa:150000}, vet:{elite:9000000,  good:4200000,  average:1600000, backup:650000,  minimum:150000} },
+    "2000s": { rookie:{1:4200000, 2:1400000, 4:600000,  6:360000,  udfa:250000}, vet:{elite:21000000, good:10000000, average:4200000, backup:1400000, minimum:330000} },
+    "2010s": { rookie:{1:5200000, 2:1900000, 4:820000,  6:530000,  udfa:410000}, vet:{elite:31000000, good:17000000, average:7500000, backup:2400000, minimum:520000} },
+    "2020s": { rookie:{1:7800000, 2:2700000, 4:1150000, 6:820000,  udfa:720000}, vet:{elite:43000000, good:27000000, average:12000000,backup:4000000, minimum:740000} },
   };
   function rookieAPY(decade, round){
     const t = CONTRACT_SCALE[decade].rookie;
     if(round<=0) return t.udfa;
     if(round===1) return t[1];
     if(round<=3) return t[2];
-    if(round<=5) return t[4];
+    if(round<=10) return t[4];
     return t[6];
   }
   function veteranAPY(decade, tier){ return CONTRACT_SCALE[decade].vet[tier]; }
@@ -6524,6 +6530,7 @@ import {
   // reaching a Conference Championship or Super Bowl is genuinely deep by any real NFL measure;
   // losing in the Wild Card or Divisional round isn't the kind of run that gets a coordinator a
   // head-coaching interview elsewhere.
+  // Internal round literals unchanged (load-bearing) -- these mean the LCS and the World Series.
   const COORDINATOR_CAROUSEL_DEEP_ROUNDS = new Set(["Conference Championship","Super Bowl"]);
   function applyCoordinatorCarouselIfDue(){
     if(career._coordinatorCarouselCheckedYear===career.year) return;
@@ -6541,7 +6548,7 @@ import {
       career.coaching = clamp(career.coaching - randInt(6,14), 20, 99);
       recomputeMyTeamStrength();
       const teamName = teamNameAt(career.teamId, career.year);
-      career.transactions.push(`${career.year}: Coordinator carousel — a deep playoff run cost the ${teamName} an assistant to a head-coaching job elsewhere (Coaching ${before} → ${career.coaching}).`);
+      career.transactions.push(`${career.year}: Coaching-staff carousel — a deep October run got the ${teamName}'s hitting coach a manager's chair elsewhere (Coaching ${before} → ${career.coaching}).`);
       recordLedgerEvent("coordinator_carousel", { teamId: career.teamId, outcomeId: wonItAll?"won_it_all":"deep_loss", metadata:{coachingBefore:before, coachingAfter:career.coaching} });
     }
   }
@@ -6998,7 +7005,7 @@ import {
     { id:"substance", title:"Substance Issue", severity:"moderate", suspensionGames:[2,6], repHit:[-10,-20], mitigable:true,
       flavor:(decade)=>{
         if(decade==="1970s"||decade==="1980s") return "The party lifestyle catches up with him — a failed test, and whispers around the building about cocaine use finally become public.";
-        if(decade==="2000s"||decade==="2010s") return "A dependency on the pills that were supposed to just get him through a Sunday becomes a real problem, and it shows up on a drug test.";
+        if(decade==="2000s"||decade==="2010s") return "A dependency on the pills that were supposed to get him through a day game after a night game becomes a real problem, and it shows up on a drug test.";
         return "A failed substance test becomes public, and the league's substance-abuse program is now part of his career.";
       } },
     { id:"ped", title:"PED Suspension", severity:"moderate", minYear:1990, suspensionGames:[4,6], repHit:[-8,-16], mitigable:false,
@@ -7012,12 +7019,12 @@ import {
     { id:"domestic", title:"Off-field Violent Incident", severity:"major", suspensionGames:[6,14], repHit:[-25,-40], mitigable:true,
       flavor:()=>"A police report from a domestic incident becomes national news. The league has a policy for exactly this, and it isn't lenient." },
     { id:"animalring", achievementId:"got_that_dawg", title:"Federal Investigation", severity:"career-multi", minYear:1990, suspensionSeasons:[2,3], repHit:[-40,-55], mitigable:false,
-      flavor:()=>"Federal investigators uncover his financing of an underground animal fighting operation. The evidence is overwhelming, and this is no longer a football story." },
+      flavor:()=>"Federal investigators uncover his financing of an underground animal fighting operation. The evidence is overwhelming, and this is no longer a baseball story." },
     { id:"video", title:"Video Evidence Goes Public", severity:"career-end", minYear:2000, repHit:-60, mitigable:false,
       flavor:()=>"Surveillance footage of a violent incident becomes public, and there is no explaining it away.",
       finalFlavor:"The commissioner's statement is one line long. He will not play in this league again." },
-    { id:"sideline", title:"Sideline Meltdown Goes Viral", severity:"minor", suspensionGames:[0,1], repHit:[-4,-9], mitigable:true,
-      flavor:()=>"A helmet thrown, a shouting match with a coach, all of it caught on a hot mic. The clip is everywhere by Monday." },
+    { id:"sideline", title:"Dugout Meltdown Goes Viral", severity:"minor", suspensionGames:[0,1], repHit:[-4,-9], mitigable:true,
+      flavor:()=>"A bat rack destroyed, a water cooler drop-kicked, a shouting match with the manager — all of it on camera. The clip is everywhere by the next morning." },
     { id:"tabloid", title:"Tabloid Scandal", severity:"minor", suspensionGames:[0,0], repHit:[-3,-7], mitigable:true,
       flavor:()=>"A messy public breakup, or worse, splashes across the tabloids. Nothing the league can touch, but it's the only thing anyone wants to ask about." },
     { id:"business", title:"Failed Business Venture Goes Public", severity:"minor", suspensionGames:[0,1], repHit:[-3,-8], mitigable:true,
@@ -7059,13 +7066,13 @@ import {
       flavor:()=>"A concealed handgun he wasn't legally carrying goes off in his own waistband on a night out, and he shoots himself in the leg. The league doesn't care that the only victim was him." },
     { id:"bountyscandal", achievementId:"bounty_hunter", legendary:true, title:"Bounty Program Scandal",
       severity:"career-multi", minYear:1985, suspensionSeasons:[1,1], repHit:[-35,-50], mitigable:false,
-      flavor:()=>"Investigators uncover a pay-for-injury bounty system he helped run, targeting opposing players. The commissioner makes an example of him with the harshest penalty short of a permanent ban." },
+      flavor:()=>"Investigators uncover a pay-for-injury bounty system he helped run, targeting opposing hitters and pitchers. The commissioner makes an example of him with the harshest penalty short of a permanent ban." },
     { id:"disguiseflight", achievementId:"master_of_disguise", legendary:true, title:"Caught Skipping a Team Flight in Disguise",
       severity:"moderate", suspensionGames:[1,3], repHit:[-8,-18], mitigable:true,
       flavor:()=>"He's spotted boarding a flight in a bad wig and sunglasses to dodge team compliance staff — then gets recognized anyway, mid-disguise, by a fan with a phone camera. The video is not going away." },
     { id:"vanishseason", achievementId:"walked_away", legendary:true, title:"Walks Away Mid-Career to \"Find Himself\"",
       severity:"career-multi", suspensionSeasons:[1,1], repHit:[-15,-5], mitigable:false,
-      flavor:()=>"No arrest, no scandal — he just quietly walks away from football entirely for a while, chasing something the game clearly wasn't giving him. He'll have to talk his way back onto a roster whenever he's ready." },
+      flavor:()=>"No arrest, no scandal — he just quietly walks away from the game entirely for a while, chasing something the game clearly wasn't giving him. He'll have to talk his way back onto a roster whenever he's ready." },
     { id:"shootinvolved", achievementId:"wrong_place_wrong_time", legendary:true, title:"Named in a Nightclub Shooting Investigation",
       severity:"career-multi", minYear:1990, suspensionSeasons:[1,1], repHit:[-25,-40], mitigable:false,
       flavor:()=>"He wasn't the shooter, but he was there, and his name is now permanently tied to a nightclub shooting investigation. The league suspends him for the full season while it plays out." },
@@ -7084,25 +7091,25 @@ import {
 
   const POSITIVE_EVENTS = [
     { id:"mentor", title:"A Legend Takes Him Under His Wing", repDelta:[3,8], boosts:[{key:"DEC",delta:7},{key:"ANT",delta:6}], seasons:2,
-      flavor:()=>"A recently-retired great from this era starts showing up to workouts, unprompted. The extra film study shows up fast." },
-    { id:"mechanics", title:"Throwing Mechanics Overhaul", repDelta:[1,4], boosts:[{key:"SHA",delta:6},{key:"TCH",delta:5}], seasons:2,
-      flavor:()=>"An offseason with a throwing coach rebuilds his mechanics from the ground up. It looks different, and it plays different." },
+      flavor:()=>"A recently-retired great from this era starts showing up to early work, unprompted. The extra cage time and pitch-plan talk show up fast." },
+    { id:"mechanics", title:"Swing Overhaul", repDelta:[1,4], boosts:[{key:"SHA",delta:6},{key:"TCH",delta:5}], seasons:2,
+      flavor:()=>"An offseason with a private hitting coach rebuilds his swing from the ground up. It looks different, and it plays different." },
     { id:"documentary", title:"Subject of a Hit Documentary", repDelta:[6,14], boosts:[], seasons:0,
-      flavor:()=>"A behind-the-scenes documentary turns him into a cultural figure well beyond the football audience. Endorsement offers follow." },
-    { id:"captain", title:"Named Team Captain", repDelta:[4,9], boosts:[{key:"CLU",delta:5}], seasons:3, cutShield:true,
-      flavor:()=>"The locker room votes him a captain. It's a vote of confidence, and it visibly changes how he carries himself in big moments." },
-    { id:"schemefit", title:"A Scheme Built Around Him", repDelta:[1,3], boosts:[{key:"MOB",delta:6},{key:"IMP",delta:5}], seasons:2,
-      flavor:()=>"A new coordinator installs an offense that plays directly to his strengths for the first time in his career." },
-    { id:"shoedeal", title:"Signature Shoe Deal", repDelta:[4,10], boosts:[], seasons:0,
-      flavor:()=>"An apparel brand builds a signature line around him. It's not about the football, but it doesn't hurt his standing either." },
-    { id:"campboost", title:"Offseason Throwing Camp Pays Off", repDelta:[1,3], boosts:[{key:"ARM",delta:5},{key:"REL",delta:4}], seasons:2,
-      flavor:()=>"A grueling offseason at an elite private throwing program sharpens his tools in ways that show up on tape immediately." },
+      flavor:()=>"A behind-the-scenes documentary turns him into a cultural figure well beyond the baseball audience. Endorsement offers follow." },
+    { id:"captain", title:"Named a Team Captain", repDelta:[4,9], boosts:[{key:"CLU",delta:5}], seasons:3, cutShield:true,
+      flavor:()=>"The clubhouse makes him a captain. It's a vote of confidence, and it visibly changes how he carries himself with the game on the line." },
+    { id:"schemefit", title:"A Lineup Built Around Him", repDelta:[1,3], boosts:[{key:"MOB",delta:6},{key:"IMP",delta:5}], seasons:2,
+      flavor:()=>"A new hitting coach builds the whole approach around his strengths for the first time in his career." },
+    { id:"shoedeal", title:"Signature Cleat Deal", repDelta:[4,10], boosts:[], seasons:0,
+      flavor:()=>"An apparel brand builds a signature line around him. It's not about the baseball, but it doesn't hurt his standing either." },
+    { id:"campboost", title:"Offseason Hitting Lab Pays Off", repDelta:[1,3], boosts:[{key:"ARM",delta:5},{key:"REL",delta:4}], seasons:2,
+      flavor:()=>"A grueling offseason at an elite hitting lab sharpens his tools in ways that show up on video immediately." },
     { id:"filmroom", title:"Turns Into a Film-Room Rat", repDelta:[2,5], boosts:[{key:"DEC",delta:6},{key:"ANT",delta:5}], seasons:3,
-      flavor:()=>"He starts showing up before the coaches do, breaking down tendencies frame by frame. It changes how fast he sees the field." },
-    { id:"communityaward", title:"Wins the League's Community Award", repDelta:[8,16], boosts:[], seasons:0,
+      flavor:()=>"He starts showing up before the coaches do, breaking down every pitcher frame by frame. It changes how quickly he picks up spin out of the hand." },
+    { id:"communityaward", title:"Wins the Roberto Clemente Award", repDelta:[8,16], boosts:[], seasons:0,
       flavor:()=>"Recognized league-wide for his work off the field. It doesn't move a single stat, but it matters at the negotiating table." },
     { id:"veteranleadership", title:"Becomes the Vocal Leader of a Turnaround", repDelta:[3,7], boosts:[{key:"CLU",delta:6}], seasons:2, cutShield:true,
-      flavor:()=>"A young, struggling roster starts rallying around his voice specifically. It shows up when games are still in doubt in the fourth quarter." },
+      flavor:()=>"A young, struggling roster starts rallying around his voice specifically. It shows up in the late innings, with the game still in doubt." },
     { id:"offseasontrain", title:"Revolutionary Offseason Training Program", repDelta:[1,3], boosts:[{key:"DUR",delta:6}], seasons:3,
       flavor:()=>"A new sports-science-driven training regimen reshapes how his body holds up over the length of a full season." },
   ];
@@ -7140,7 +7147,7 @@ import {
     (n,t)=>`He slides into ${n}'s comments after she reposts one of his highlights. Three months later, they're official, and the tabloids are thrilled.`,
     (n,t)=>`They meet at a charity gala. A single blurry photo of the two of them talking is enough to spark a thousand headlines, all of which turn out to be true.`,
     (n,t)=>`A teammate's wedding, an open bar, and a seating chart that puts him next to ${n}. Neither of them saw it coming.`,
-    (n,t)=>`${n} shows up to one of his games in a custom jersey, unannounced. The cameras find her by the second quarter, and the internet does the rest.`,
+    (n,t)=>`${n} shows up to one of his games in a custom jersey, unannounced. The cameras find her by the second inning, and the internet does the rest.`,
   ];
   const RELATIONSHIP_BREAKUP_FLAVORS = [
     (n)=>`He and ${n} announce a quiet, mutual split. Both statements use the word "amicable" — and for once, it actually seems true.`,
@@ -7151,8 +7158,8 @@ import {
   ];
   const RELATIONSHIP_MARRIAGE_FLAVORS = [
     (n,t)=>`A surprise Vegas chapel wedding with ${n} — no guests, no press release, just a photo the next morning that breaks the internet.`,
-    (n,t)=>`He proposes to ${n} at midfield after a win, in front of a sold-out stadium. She says yes. The stadium loses its mind.`,
-    (n,t)=>`A televised wedding to ${n}, the ${t}, becomes the offseason's biggest media event — even people who don't watch football tune in.`,
+    (n,t)=>`He proposes to ${n} on the field after a win, in front of a sold-out ballpark. She says yes. The stadium loses its mind.`,
+    (n,t)=>`A televised wedding to ${n}, the ${t}, becomes the offseason's biggest media event — even people who don't watch baseball tune in.`,
     (n,t)=>`A quiet backyard ceremony with ${n} — close friends and family only, and it somehow stays out of the tabloids for almost a full week.`,
   ];
   const RELATIONSHIP_DIVORCE_FLAVORS = [
@@ -7162,7 +7169,7 @@ import {
   ];
   const RELATIONSHIP_ASIDE_FLAVORS = [
     (n)=>`He and ${n} welcome their first child. The delivery-room announcement is, briefly, the most-liked post on the internet.`,
-    (n)=>`${n} shows up to one of his games wearing a custom jersey with her own name on the back. The replica sells out by halftime.`,
+    (n)=>`${n} shows up to one of his games wearing a custom jersey with her own name on the back. The replica sells out by the seventh-inning stretch.`,
     (n)=>`He and ${n} launch a joint business venture. Nobody's totally sure what it does, but the launch party is very well attended.`,
     (n)=>`${n} casts him in a two-second cameo in her new project. His one line gets more views than the trailer.`,
     (n)=>`He and ${n} renew their vows somewhere nobody can quite place on a map. The photos are, once again, everywhere.`,
@@ -7253,7 +7260,7 @@ import {
     { id:"restaurant", title:"Opens a Restaurant", repDelta:[1,4],
       flavor:()=>"He opens a restaurant in the city he plays in. The food is, by all accounts, actually good — which surprises everyone, including the health inspector who keeps getting recognized." },
     { id:"cryptoflop", title:"Crypto Venture Quietly Dies", repDelta:[-3,0], minYear:2015,
-      flavor:()=>"The token he endorsed a year ago is worth, functionally, nothing. He never brings it up, and neither does anyone in the locker room, to his face." },
+      flavor:()=>"The token he endorsed a year ago is worth, functionally, nothing. He never brings it up, and neither does anyone in the clubhouse, to his face." },
     { id:"clothingline", title:"Launches a Clothing Line", repDelta:[1,5],
       flavor:()=>"A streetwear line with his logo on it sells out its first drop in nine minutes. Nobody, including him, expected that." },
     { id:"podcast", title:"Starts a Podcast", repDelta:[2,6], minYear:2004,
@@ -7263,7 +7270,7 @@ import {
     { id:"golfhobby", title:"Gets Seriously Into Golf", repDelta:[0,2],
       flavor:()=>"He takes up golf in the offseason and will not stop talking about his handicap. Teammates have started hiding when he brings up his short game." },
     { id:"chesshobby", title:"Becomes a Serious Chess Guy", repDelta:[1,3],
-      flavor:()=>"He picks up chess to kill time on flights and, unexpectedly, gets genuinely good at it. His online rating is now a bigger point of pride than his completion percentage." },
+      flavor:()=>"He picks up chess to kill time on flights and, unexpectedly, gets genuinely good at it. His online rating is now a bigger point of pride than his OPS." },
     { id:"sixdogs", title:"Adopts Entirely Too Many Dogs", repDelta:[3,7],
       flavor:()=>"What started as one rescue dog is now, inexplicably, six. His house is reportedly chaos. His Instagram has never been better." },
     { id:"wildtattoo", title:"Gets a Very Large, Very Public Tattoo", repDelta:[-1,3],
@@ -7276,12 +7283,12 @@ import {
       flavor:()=>"He strikes up a genuine, very public friendship with a star from another sport entirely. Their courtside/rinkside appearances at each other's games become a whole thing." },
     { id:"mascotbeef", title:"Ongoing Beef With an Opposing Mascot", repDelta:[1,5],
       flavor:()=>"A pregame staredown with a division rival's mascot escalates into a running, mostly good-natured bit that the league's social team leans into every single time they play." },
-    { id:"danceviral", title:"Touchdown Celebration Goes Viral", repDelta:[3,8],
-      flavor:()=>"A spur-of-the-moment touchdown celebration becomes a genuine cultural moment. Kids in three different countries are doing it in their backyards by the following weekend." },
+    { id:"danceviral", title:"Bat Flip Goes Viral", repDelta:[3,8],
+      flavor:()=>"A spur-of-the-moment bat flip becomes a genuine cultural moment. Kids in three different countries are doing it in their backyards by the following weekend." },
     { id:"wrongplayer", title:"Mistaken For a Completely Different Athlete", repDelta:[-1,3],
       flavor:()=>"He gets stopped in an airport by a fan absolutely convinced he's someone else, entirely different sport. He plays along for the photo. The story gets funnier every time he retells it." },
     { id:"badpressoutfit", title:"Pregame Outfit Becomes Bigger News Than the Game", repDelta:[0,5],
-      flavor:()=>"His arrival outfit before a nationally televised game is, by kickoff, the single most-discussed thing about the matchup — more than either team's record." },
+      flavor:()=>"His arrival outfit before a nationally televised game is, by first pitch, the single most-discussed thing about the series — more than either team's record." },
     { id:"micdup", title:"Mic'd Up Segment Goes Viral for the Wrong Reasons", repDelta:[-2,4],
       flavor:()=>"A mic'd-up broadcast segment catches him talking to himself, at length, in the third person. The clip is delightful. He is somewhat mortified." },
     { id:"chartererror", title:"Locked Out of the Team Facility", repDelta:[-1,2],
@@ -7290,8 +7297,8 @@ import {
       flavor:()=>"A photo of him asleep on the team plane, mouth wide open, makes its way around the group chat and then, inevitably, the internet." },
     { id:"charityrun", title:"Charity Foundation Takes Off", repDelta:[5,11],
       flavor:()=>"A foundation he started almost as an afterthought turns into a genuinely major operation. The league starts featuring it in broadcasts unprompted." },
-    { id:"badfirstpitch", title:"Throws Out a Comically Bad First Pitch", repDelta:[-2,3],
-      flavor:()=>"Invited to throw a ceremonial first pitch at a baseball game, he bounces it a full ten feet short of the plate. The clip outlives the actual game by years." },
+    { id:"badfirstpitch", title:"Airmails a Warmup Throw Into the Stands", repDelta:[-2,3],
+      flavor:()=>"A routine between-innings warmup throw across the diamond sails ten rows deep. The blooper packages will not let it go for years." },
     { id:"streamer", title:"Becomes an Unexpectedly Popular Video Game Streamer", repDelta:[1,5], minYear:2011,
       flavor:()=>"An offseason hobby streaming video games picks up a real audience — not huge, but loyal, and mostly there for the trash talk, not the gameplay." },
     { id:"conspiracy", title:"Accidentally Starts a Minor Conspiracy Theory", repDelta:[-1,4],
@@ -7340,24 +7347,24 @@ import {
      escalates the score further; a respectful one cools it slightly -- the story and the number stay
      in sync in both directions. */
   const RIVALRY_EVENTS = [
-    { id:"handshakesnub", tone:"toxic", title:"Postgame Handshake Snub",
-      flavor:(n)=>`He and ${n} skip the postgame handshake again this year — the cameras catch it every single time, and neither side denies it's on purpose.` },
+    { id:"handshakesnub", tone:"toxic", title:"Won't Acknowledge Him All Series",
+      flavor:(n)=>`He and ${n} won't so much as look at each other all series again this year — the cameras catch it every single time, and neither side denies it's on purpose.` },
     { id:"podcastbeef", tone:"toxic", title:"Dueling Podcast Beef",
       flavor:(n)=>`He and ${n} spend a full week trading shots at each other on their competing podcasts. Neither one backs down an inch.` },
-    { id:"sidelineshove", tone:"toxic", title:"Sideline Shoving Match",
-      flavor:(n)=>`Tempers finally boil over in the fourth quarter — he and ${n} have to be separated, and both benches empty onto the field.` },
+    { id:"sidelineshove", tone:"toxic", title:"Benches-Clearing Shoving Match",
+      flavor:(n)=>`Tempers finally boil over late — he and ${n} have to be separated, and both benches and bullpens empty onto the field.` },
     { id:"calledout", tone:"toxic", title:"Called Him Out By Name",
       flavor:(n)=>`A routine press conference question about ${n} gets an answer nobody expected — blunt, personal, and absolutely not what the PR department wanted.` },
     { id:"refusesname", tone:"toxic", title:"Refuses to Say His Name",
       flavor:(n)=>`Asked directly about ${n} in an interview, he pointedly refuses to say the name at all — "that guy" comes up four times in ninety seconds, and everyone notices.` },
     { id:"jerseyswap", tone:"respect", title:"Postgame Jersey Swap",
-      flavor:(n)=>`After another classic, he and ${n} trade jerseys at midfield — the photo is everywhere within the hour.` },
+      flavor:(n)=>`After another classic, he and ${n} trade jerseys near home plate — the photo is everywhere within the hour.` },
     { id:"quietdinner", tone:"respect", title:"Quietly Gets Dinner With Him After the Game",
       flavor:(n)=>`He and ${n} are spotted getting dinner together after the game, like it's nothing. For a rivalry this fierce, it's a genuinely surprising story.` },
     { id:"charityevent", tone:"respect", title:"Co-Hosts a Charity Event With Him",
       flavor:(n)=>`He and ${n} team up for a charity event in the offseason, and the league can't stop talking about the optics.` },
     { id:"bestplayed", tone:"respect", title:"Calls Him the Best He's Ever Played Against",
-      flavor:(n)=>`In a rare moment of candor, he calls ${n} "the best I've ever lined up against" — and clearly means it.` },
+      flavor:(n)=>`In a rare moment of candor, he calls ${n} "the best I've ever faced" — and clearly means it.` },
     { id:"offseasontexts", tone:"respect", title:"The Two of Them Text Every Offseason",
       flavor:(n)=>`A reporter's offhand mention reveals he and ${n} actually text each other every offseason. The rivalry, it turns out, has a real friendship quietly underneath it.` },
   ];
@@ -7410,7 +7417,7 @@ import {
     const partner = career.relationship;
     const teamName = teamNameAt(rival.teamId, career.year);
     const title = `Caught: ${partner.partnerName} and ${rival.name}`;
-    const text = `${partner.partnerName} is photographed leaving dinner with ${rival.name}, the ${teamName} quarterback — yes, THAT ${rival.name}, the one he's spent years trying to beat on the field. The tabloids don't need to add commentary. The photo says all of it.`;
+    const text = `${partner.partnerName} is photographed leaving dinner with ${rival.name}, the ${teamName} star — yes, THAT ${rival.name}, the one he's spent years trying to beat on the field. The tabloids don't need to add commentary. The photo says all of it.`;
     career.relationship = null;
     const repDelta = -randInt(6,14);
     const popDelta = randInt(8,20); // drama sells, same convention as a messy public breakup
@@ -7432,27 +7439,27 @@ import {
 
   const ORG_EVENTS = [
     { id:"coachfired", title:"His Coach Gets Fired", repDelta:0, strengthDelta:[-10,-4], gmDelta:[-6,2], setFlag:"_orgTurmoil", schemeChangeChance:0.5,
-      flavor:()=>"The coach who believed in him is out after a rough stretch. The new regime doesn't owe him anything." },
+      flavor:()=>"The manager who believed in him is out after a rough stretch. The new staff doesn't owe him anything." },
     { id:"coachextended", title:"His Coach Gets Extended", repDelta:0, strengthDelta:[3,8], gmDelta:[2,6], setFlag:"_orgStability",
-      flavor:()=>"Ownership hands his coach a contract extension. Stability, for once, instead of another system change." },
-    { id:"starleaves", title:"Top Weapon Walks in Free Agency", repDelta:0, strengthDelta:[-12,-5], target:"weapons", setFlag:null,
-      flavor:()=>"The best receiver on the roster signs elsewhere for the money. The offense has to be rebuilt around what's left." },
+      flavor:()=>"Ownership hands his manager a contract extension. Stability, for once, instead of another regime change." },
+    { id:"starleaves", title:"Top Bat Leaves in Free Agency", repDelta:0, strengthDelta:[-12,-5], target:"weapons", setFlag:null,
+      flavor:()=>"The best hitter on the roster signs elsewhere for the money. The lineup has to be rebuilt around what's left." },
     { id:"fotrust", title:"Front Office Hands Him the Keys", repDelta:[3,6], strengthDelta:[0,0], gmDelta:[6,12], setFlag:"_leverageBoost", cutShield:true,
-      flavor:()=>"Management makes it official in the press: this is his team now, for better or worse. It won't hurt at the negotiating table." },
+      flavor:()=>"Management makes it official in the press: this is the guy they're building around, for better or worse. It won't hurt at the negotiating table." },
     { id:"relocation", title:"Relocation Rumors Swirl", repDelta:0, strengthDelta:[-6,6], setFlag:null,
-      flavor:()=>"Ownership is publicly flirting with another city. Nothing's decided, but the locker room is distracted." },
+      flavor:()=>"Ownership is publicly flirting with another city. Nothing's decided, but the clubhouse is distracted." },
     { id:"podcastembarrass", title:"His Girlfriend Airs Their Business on Her Podcast", repDelta:[-9,-3], strengthDelta:[0,0], setFlag:null,
       flavor:()=>"She goes viral dragging him on her show. Nothing illegal, nothing the league can touch — but it's everywhere, and none of it is flattering." },
     { id:"newgm", title:"New GM Takes Over", repDelta:0, strengthDelta:[-8,10], setFlag:null, resetGM:true, schemeChangeChance:0.35,
       flavor:()=>"A front-office shakeup. Could be a fresh voice with a real plan, could be a rebuild with no real place for him — nobody in the building knows yet either. Whatever relationship existed with the old GM doesn't carry over." },
-    { id:"oline", title:"O-Line Overhaul in Free Agency", repDelta:0, strengthDelta:[4,11], target:"oline", setFlag:"_orgStability",
-      flavor:()=>"The front office actually spends real money up front this offseason, and it shows up in the pocket immediately." },
+    { id:"oline", title:"Rotation Overhaul in Free Agency", repDelta:0, strengthDelta:[4,11], target:"oline", setFlag:"_orgStability",
+      flavor:()=>"The front office actually spends real money on pitching this offseason, and it shows up in the run column immediately." },
     { id:"scandal_org", title:"Ownership Distracted by Off-field Controversy", repDelta:0, strengthDelta:[-9,-2], gmDelta:[-5,-1], setFlag:"_orgTurmoil",
-      flavor:()=>"The owner's name is in the headlines for reasons that have nothing to do with football, and the whole building feels it." },
+      flavor:()=>"The owner's name is in the headlines for reasons that have nothing to do with baseball, and the whole building feels it." },
     { id:"viral_highlight", title:"A Highlight Goes Viral", repDelta:[3,7], strengthDelta:[0,0], setFlag:null,
-      flavor:()=>"One incredible throw gets clipped and reposted everywhere. A nice ego boost, and not much else." },
-    { id:"newstadium", title:"Team Opens a New Stadium", repDelta:[2,5], strengthDelta:[3,8], setFlag:null,
-      flavor:()=>"A new billion-dollar stadium means new revenue, new energy, and ownership suddenly willing to spend to fill the seats." },
+      flavor:()=>"One absurd swing gets clipped and reposted everywhere. A nice ego boost, and not much else." },
+    { id:"newstadium", title:"Team Opens a New Ballpark", repDelta:[2,5], strengthDelta:[3,8], setFlag:null,
+      flavor:()=>"A new billion-dollar ballpark means new revenue, new energy, and ownership suddenly willing to spend to fill the seats." },
     { id:"ownershipsale", title:"Franchise Sold to New Ownership", repDelta:0, strengthDelta:[-8,8], setFlag:null,
       flavor:()=>"The team changes hands. Nobody in the building — including him — knows yet whether that's good news or bad." },
     { id:"gmbadblood", title:"Bad Blood With the GM", repDelta:0, strengthDelta:[0,0], gmDelta:[-18,-8], setFlag:null,
@@ -7480,26 +7487,26 @@ import {
      entries (generational bust/breakout) are both rare (low weight) AND wider (±4-8), so a
      franchise-altering headline is a real but uncommon event, not routine season noise. ----- */
   const LEAGUE_NEWS_EVENTS = [
-    { id:"draftbust", title:"Generational Draft Bust", weight:3, strengthDelta:[-8,-4],
-      flavor:(team)=>`The ${team}' can't-miss rookie has looked lost through camp and the preseason — the kind of bust scouts will be dissecting for years.` },
-    { id:"rookiestar", title:"Rookie Sensation Wins the Job", weight:4, strengthDelta:[3,7],
-      flavor:(team)=>`A rookie nobody expected to start Week 1 has forced the ${team}' hand and taken the job outright.` },
+    { id:"draftbust", title:"Generational Prospect Bust", weight:3, strengthDelta:[-8,-4],
+      flavor:(team)=>`The ${team}' can't-miss rookie has looked overmatched all spring — the kind of bust scouts will be dissecting for years.` },
+    { id:"rookiestar", title:"Rookie Sensation Wins an Everyday Job", weight:4, strengthDelta:[3,7],
+      flavor:(team)=>`A rookie nobody expected to break camp has forced the ${team}' hand and taken an everyday job outright.` },
     { id:"coachchange", title:"Coaching Change", weight:9, strengthDelta:[-5,4],
-      flavor:(team)=>`The ${team} moved on from their head coach this offseason — could be a fresh system, could be a rebuild nobody's excited about yet.` },
+      flavor:(team)=>`The ${team} moved on from their manager this offseason — could be a fresh system, could be a rebuild nobody's excited about yet.` },
     { id:"blockbuster", title:"Blockbuster Trade", weight:6, strengthDelta:[2,5],
-      flavor:(team)=>`The ${team} sent a haul of draft capital for a proven difference-maker at a position of need.` },
-    { id:"capcasualty", title:"Cap Casualties Gut the Roster", weight:7, strengthDelta:[-5,-1],
-      flavor:(team)=>`A brutal cap crunch forced the ${team} to part ways with several longtime starters this offseason.` },
+      flavor:(team)=>`The ${team} sent a package of prospects for a proven difference-maker at a position of need.` },
+    { id:"capcasualty", title:"Payroll Cuts Gut the Roster", weight:7, strengthDelta:[-5,-1],
+      flavor:(team)=>`A budget crunch forced the ${team} to trade and non-tender several longtime regulars this offseason.` },
     { id:"freeagentwin", title:"Front Office Wins Free Agency", weight:6, strengthDelta:[2,5],
       flavor:(team)=>`The ${team} landed the best available name in free agency, and it wasn't particularly close.` },
-    { id:"holdOut", title:"Star Holds Out of Camp", weight:5, strengthDelta:[-4,-1],
-      flavor:(team)=>`A contract standoff kept the ${team}' best player out of camp all summer — chemistry and timing both took a hit.` },
+    { id:"holdOut", title:"Star Holds Out of Spring Training", weight:5, strengthDelta:[-4,-1],
+      flavor:(team)=>`A contract standoff kept the ${team}' best player out of camp all spring; timing and chemistry both took a hit.` },
     { id:"ownershipmeddling", title:"Ownership Meddling", weight:4, strengthDelta:[-4,-1],
       flavor:(team)=>`Report after report describes an owner overruling his own front office — the building is reportedly not a fun place to work right now.` },
-    { id:"schemeclicks", title:"New Scheme Clicks Immediately", weight:5, strengthDelta:[2,4],
-      flavor:(team)=>`A new coordinator's system fit the existing roster like a glove from day one of camp.` },
-    { id:"injurywave", title:"Rash of Injuries in Camp", weight:5, strengthDelta:[-3,-1],
-      flavor:(team)=>`An unusually bad run of camp injuries has already thinned the ${team}' depth chart before Week 1.` },
+    { id:"schemeclicks", title:"New Approach Clicks Immediately", weight:5, strengthDelta:[2,4],
+      flavor:(team)=>`A new hitting coach's approach fit the existing roster like a glove from the first day of camp.` },
+    { id:"injurywave", title:"Rash of Spring Injuries", weight:5, strengthDelta:[-3,-1],
+      flavor:(team)=>`An unusually bad run of spring injuries has already thinned the ${team}' roster before Opening Day.` },
   ];
   function rollLeagueNews(year, decade){
     const totalWeight = LEAGUE_NEWS_EVENTS.reduce((s,e)=>s+e.weight, 0);
@@ -7551,8 +7558,8 @@ import {
      own framing verbatim: "if it goes well the team rating increases, if the player chooses
      wrong it decreases." */
   const LOCKER_ROOM_EVENTS = [
-    { id:"divawr", title:"The Diva Receiver",
-      flavor:()=>"Your WR1 is skipping voluntary workouts, unhappy with his role and his target share. The rest of the room is starting to notice.",
+    { id:"divawr", title:"The Unhappy Slugger",
+      flavor:()=>"Your cleanup hitter is skipping early work, unhappy with where he bats and how he is being used. The rest of the room is starting to notice.",
       choices:[
         { id:"private", label:"Pull him aside, one-on-one", sub:"Handle it man-to-man, away from the cameras.", goodChance:0.72,
           goodText:"He shows up the next day. Not everything's fixed, but he knows you've got his back — and he plays like it.",
@@ -7563,11 +7570,11 @@ import {
           badText:"He digs in, feels thrown under the bus, and now it's a real story instead of a locker-room issue.",
           goodDelta:[4,9], badDelta:[-9,-3] },
       ] },
-    { id:"oline", title:"Befriending the O-Line",
-      flavor:()=>"The offensive line room has its own culture — steak dinners, inside jokes, a code. Nobody said you're not welcome, but nobody's exactly invited you either.",
+    { id:"oline", title:"Winning Over the Pitching Staff",
+      flavor:()=>"The rotation has its own culture — steak dinners, inside jokes, a code. Nobody said you're not welcome, but nobody's exactly invited you either.",
       choices:[
         { id:"buyin", label:"Buy the whole room dinner, no cameras", sub:"Show up, spend real money, stay off social media about it.", goodChance:0.78,
-          goodText:"An old-school gesture for an old-school room, and it lands exactly right. Protection in the pocket gets a little more personal after this.",
+          goodText:"An old-school gesture for an old-school room, and it lands exactly right. The guys on the mound pitch for you a little harder after this.",
           badText:"Appreciated, but it doesn't really move anything. A nice gesture, forgotten by Monday's film session.",
           goodDelta:[3,7], badDelta:[-2,0] },
         { id:"performative", label:"Post about it for the fans", sub:"Turn the gesture into good publicity.", goodChance:0.25,
@@ -7576,10 +7583,10 @@ import {
           goodDelta:[2,5], badDelta:[-7,-2] },
       ] },
     { id:"mentorrookie", title:"Mentoring the Kid", minAge:30,
-      flavor:()=>"A rookie at your position just got drafted — talented, a little lost, and clearly sizing up whether you're a threat or a resource.",
+      flavor:()=>"A prospect at your position just got called up — talented, a little lost, and clearly sizing up whether you're a threat or a resource.",
       choices:[
-        { id:"teach", label:"Bring him in, teach him everything", sub:"Full playbook access, film sessions, the works.", goodChance:0.75,
-          goodText:"He develops fast, the room notices the example you're setting, and it doesn't cost you a single snap.",
+        { id:"teach", label:"Bring him in, teach him everything", sub:"Full scouting-report access, video sessions, the works.", goodChance:0.75,
+          goodText:"He develops fast, the room notices the example you're setting, and it doesn't cost you a single at-bat.",
           badText:"He develops fast — fast enough that the front office starts openly wondering if they even need you anymore.",
           goodDelta:[4,8], badDelta:[-6,-2] },
         { id:"guard", label:"Keep him at arm's length", sub:"Protect your own job security instead.", goodChance:0.30,
@@ -7590,8 +7597,8 @@ import {
     { id:"rookieclass", title:"Setting the Tone for a Young Room",
       flavor:()=>"This year's draft class brought in a wave of new faces. Nobody's told them how things work here yet.",
       choices:[
-        { id:"structure", label:"Run your own extra film sessions", sub:"Put in the unpaid extra hours yourself.", goodChance:0.70,
-          goodText:"It becomes a standing tradition. The whole young core starts playing noticeably faster.",
+        { id:"structure", label:"Run your own extra video sessions", sub:"Put in the unpaid extra hours yourself.", goodChance:0.70,
+          goodText:"It becomes a standing tradition. The whole young core starts looking noticeably more comfortable at the plate.",
           badText:"Attendance is spotty and it fizzles out after a few weeks. The effort's noticed; the results aren't.",
           goodDelta:[3,6], badDelta:[-2,0] },
         { id:"leaveit", label:"Let the coaches handle it", sub:"That's what they're paid for.", goodChance:0.40,
@@ -7611,8 +7618,8 @@ import {
           badText:"It doesn't blow over — it curdles into something the whole room can feel on a bad Sunday.",
           goodDelta:[0,3], badDelta:[-6,-2] },
       ] },
-    { id:"coachfriction", title:"Friction With a Position Coach",
-      flavor:()=>"You and the position coach see the offense differently, and it's starting to show in meetings — pointed questions, a little too much sarcasm.",
+    { id:"coachfriction", title:"Friction With the Hitting Coach",
+      flavor:()=>"You and the hitting coach see your swing differently, and it's starting to show in the cage — pointed questions, a little too much sarcasm.",
       choices:[
         { id:"private2", label:"Hash it out behind closed doors", sub:"Keep it between the two of you.", goodChance:0.70,
           goodText:"You find common ground, and the meetings get a lot less tense after that.",
@@ -7633,7 +7640,7 @@ import {
       `<button class="choice-btn" data-i="${i}" id="lockerChoice${i}"><div class="cb-title">${c.label}</div><div class="cb-sub">${c.sub}</div></button>`
     ).join("");
     content.innerHTML = eraWrap(decadeForYear(career.year), `
-        <div class="ev-eyebrow">${career.year} · Locker Room</div>
+        <div class="ev-eyebrow">${career.year} · Clubhouse</div>
         <h3>${ev.title}</h3>
         <p>${ev.flavor()}</p>
         <div class="event-choices">${choicesHtml}</div>
@@ -7651,7 +7658,7 @@ import {
     recordLedgerEvent("locker_room_event", { severity: good?"locker-good":"locker-bad", outcomeId: good?"good":"bad", metadata:{delta} });
     career.transactions.push(`${career.year}: ${ev.title} — ${good?"handled it well":"handled it poorly"} (team grade ${fmtDelta(delta)}).`);
     content.innerHTML = eraWrap(decadeForYear(career.year), `
-        <div class="ev-eyebrow">${career.year} · Locker Room</div>
+        <div class="ev-eyebrow">${career.year} · Clubhouse</div>
         <h3>${ev.title}</h3>
         <p>${good ? choice.goodText : choice.badText}</p>
         <div class="rep-note">Effect: Team grade ${fmtDelta(delta)}.</div>
@@ -7749,7 +7756,7 @@ import {
         outcomeText = "The campaign works. The story fades faster than it should have, and the league goes easier than it could have.";
       } else {
         games = Math.round(games*1.6)+1; repHit = Math.round(repHit*1.7);
-        outcomeText = "It backfires. The story won't die, the league throws the book at him, and the locker room notices.";
+        outcomeText = "It backfires. The story won't die, the league throws the book at him, and the clubhouse notices.";
       }
     } else {
       outcomeText = games>0 ? "The league hands down its punishment, and that's that." : "A fine, a headline, and it blows over.";
@@ -8171,13 +8178,13 @@ import {
     }
     const content = document.getElementById("careerContent");
     const choices = canSign ? `
-        <button class="choice-btn" id="waSign"><div class="cb-title">Sign a prove-it deal with the ${teamNameAt(offerTeam.id, career.year)}</div><div class="cb-sub">${fmtMoney(offerApy)}/yr, no guarantees — just a shot at a backup job.</div></button>
+        <button class="choice-btn" id="waSign"><div class="cb-title">Sign a prove-it deal with the ${teamNameAt(offerTeam.id, career.year)}</div><div class="cb-sub">${fmtMoney(offerApy)}/yr, no guarantees — just a shot at a bench job.</div></button>
         <button class="choice-btn" id="waRetire"><div class="cb-title">Call it a career</div><div class="cb-sub">Walk away on your own terms instead.</div></button>`
       : `<button class="choice-btn" id="waRetire"><div class="cb-title">There's nothing left.</div><div class="cb-sub">No team is calling. The league has moved on.</div></button>`;
     content.innerHTML = eraWrap(decadeForYear(career.year), `
         <div class="ev-eyebrow">Roster Cuts · ${career.year}</div>
         <h3>Released by the ${oldTeam}.</h3>
-        <p>${effOverall<40 ? "The tape hasn't been good, and everyone in the building knows it." : "A numbers game, a coaching change, a cap crunch — the reasons don't matter. You're off the roster."}</p>
+        <p>${effOverall<40 ? "The tape hasn't been good, and everyone in the building knows it." : "A numbers game, a new manager, a payroll crunch — the reasons don't matter. You're off the 40-man."}</p>
         <div class="event-choices">${choices}</div>
       `, {tone:"bad"});
     const signBtn = document.getElementById("waSign");
@@ -8232,7 +8239,7 @@ import {
     content.innerHTML = eraWrap(decadeForYear(career.year), `
         <div class="ev-eyebrow">Expansion Draft · ${career.year}</div>
         <h3>Left unprotected — and the ${newTeamName} want him.</h3>
-        <p>The ${oldTeam} could only protect so many names before the new franchise picked through the rest of the roster. He's the veteran they build the expansion team around instead.</p>
+        <p>The ${oldTeam} could only protect so many names before the new franchise picked through the rest of the roster. He's the veteran they build the expansion club around instead.</p>
         <div class="event-choices"><button class="choice-btn" id="expAck"><div class="cb-title">Report to the ${newTeamName}</div></button></div>
       `);
     document.getElementById("expAck").addEventListener("click", ()=>{
@@ -8279,7 +8286,7 @@ import {
         <div class="ev-eyebrow">Trade · ${career.year}</div>
         <h3>Traded to the ${newTeamName}.</h3>
         <p>The ${oldTeam} are rebuilding and cashed in your trade value. A contender picked up the phone. Your contract comes with you.</p>
-        <div class="event-choices"><button class="choice-btn" id="tradeAck"><div class="cb-title">Report to your new team</div><div class="cb-sub">Same deal, new locker room.</div></button></div>
+        <div class="event-choices"><button class="choice-btn" id="tradeAck"><div class="cb-title">Report to your new team</div><div class="cb-sub">Same deal, new clubhouse.</div></button></div>
       `);
     document.getElementById("tradeAck").addEventListener("click", freeAgencyCheck);
   }
@@ -8555,12 +8562,12 @@ import {
   // cycles) -- a full numeric salary-cap ledger is deliberately not built; this is the legible,
   // bounded version of the same real consequence.
   const CONTRACT_STRUCTURES = {
-    market: { id:"market", label:"Sign (Market Value)", apyMult:1, yearsDelta:0, capPressureDelta:0,
+    market: { id:"market", label:"Sign at Market Value", apyMult:1, yearsDelta:0, capPressureDelta:0,
       sub:"The number on the table, as-is." },
     teamFriendly: { id:"teamFriendly", label:"Take a Team-Friendly Discount", apyMult:0.84, yearsDelta:0, capPressureDelta:14,
-      sub:"Less money now, but real cap room for the front office to build around him." },
+      sub:"Less money now, but real payroll room for the front office to build around him." },
     recordSetting: { id:"recordSetting", label:"Push for a Record Contract", apyMult:1.20, yearsDelta:1, capPressureDelta:-14,
-      sub:"Top of the market and an extra guaranteed year -- at the roster's expense." },
+      sub:"Top of the market and an extra guaranteed year -- the payroll and luxury-tax bill land on the rest of the roster." },
   };
   function buildFreeAgentOffers(decade, tier, oldTeamId){
     // Wave 5: guarantee every candidate team already has its real, persistent five-grade profile
@@ -8809,20 +8816,23 @@ import {
   // simulatePlayerSeasonStats's availability comment for why these stay generic rather than reusing
   // the player's own scripted infraction system.
   const AI_SUSPENSION_REASONS = [
-    "League Suspension", "Personal Conduct Policy", "Performance-Enhancing Substance Policy",
-    "Team Conduct Violation",
+    "PED Policy Violation", "Violation of MLB's Joint Domestic Violence Policy",
+    "Conduct Detrimental to the Club", "Gambling Policy Violation (Rule 21)",
   ];
+  // IL stints. `keys` are the hitter tools a lingering version of the injury nicks; `sev` scales
+  // both days missed and the rare permanent-decline roll.
   const INJURY_TYPES = [
-    { id:"ankle", name:"Ankle Sprain", weight:20, sev:0.28, keys:["MOB","IMP"] },
-    { id:"shoulder", name:"Shoulder Injury", weight:14, sev:0.48, keys:["ARM","REL"] },
-    { id:"concussion", name:"Concussion", weight:13, sev:0.40, keys:["DEC","ANT"] },
-    { id:"mcl", name:"MCL Sprain", weight:12, sev:0.42, keys:["MOB","PKT"] },
-    { id:"acl", name:"Torn ACL", weight:6, sev:0.82, keys:["MOB","IMP","PKT"] },
-    { id:"achilles", name:"Torn Achilles", weight:4, sev:0.85, keys:["MOB","IMP"] },
-    { id:"hand", name:"Hand/Finger Injury", weight:13, sev:0.24, keys:["SHA","TCH"] },
-    { id:"rib", name:"Rib/Chest Injury", weight:9, sev:0.30, keys:["ARM","DAC"] },
-    { id:"back", name:"Back Injury", weight:8, sev:0.42, keys:["PKT","SHA"] },
-    { id:"neck", name:"Neck/Stinger", weight:5, sev:0.36, keys:["CLU","DEC"] },
+    { id:"hamstring",  name:"Hamstring Strain",        weight:22, sev:0.24, keys:["MOB","IMP"] },
+    { id:"oblique",    name:"Oblique Strain",          weight:17, sev:0.30, keys:["REL","DAC","TCH"] },
+    { id:"wrist",      name:"Wrist Sprain",            weight:12, sev:0.26, keys:["SHA","TCH"] },
+    { id:"hbpfrac",    name:"Hit-by-Pitch Fracture",   weight:9,  sev:0.34, keys:["SHA","DAC"] },
+    { id:"shoulder",   name:"Shoulder Inflammation",   weight:9,  sev:0.42, keys:["ARM","DAC"] },
+    { id:"back",       name:"Back Spasms",             weight:9,  sev:0.34, keys:["PKT","SHA","DAC"] },
+    { id:"meniscus",   name:"Meniscus Tear",           weight:7,  sev:0.48, keys:["MOB","IMP","PKT"] },
+    { id:"thumb",      name:"Torn Thumb Ligament",     weight:6,  sev:0.28, keys:["TCH","SHA"] },
+    { id:"concussion", name:"Concussion",              weight:5,  sev:0.34, keys:["DEC","ANT"] },
+    { id:"acl",        name:"Torn ACL",                weight:3,  sev:0.82, keys:["MOB","IMP","PKT"] },
+    { id:"achilles",   name:"Torn Achilles",           weight:2,  sev:0.85, keys:["MOB","IMP"] },
   ];
   function rollInjuryType(){
     const total = INJURY_TYPES.reduce((s,t)=>s+t.weight,0);
@@ -8866,15 +8876,15 @@ import {
     const sevFlavor = type.sev>=0.7 ? "a serious injury — the kind that can end a season" : type.sev>=0.42 ? "a real injury, not a tweak" : "a nagging but manageable injury";
     const wear = career.wearAndTear||0;
     const wearWarning = wear>=45
-      ? ` His body's already worn (${Math.round(wear)}/100) — gutting out another one now is real risk of a permanent decline, not just a bad week.`
+      ? ` His body's already worn (${Math.round(wear)}/100) — gutting out another one now is a real risk of permanent decline, not just a rough month.`
       : "";
     content.innerHTML = eraWrap(decade, `
-        <div class="ev-eyebrow">${career.year} Season · Week ${week}</div>
+        <div class="ev-eyebrow">${career.year} Season · Game ${week}</div>
         <h3>${type.name}.</h3>
-        <p>Training staff calls it ${sevFlavor}. Play through it and chase the season, or shut it down and protect the long game.${wearWarning}</p>
+        <p>The training staff calls it ${sevFlavor}. Play through it and chase the season, or hit the IL and protect the long game.${wearWarning}</p>
         <div class="event-choices">
-          <button class="choice-btn" id="injPlay"><div class="cb-title">Gut it out</div><div class="cb-sub">Stay on the field — but pushing through it adds real wear and tear, on top of a chance of making it worse right now.</div></button>
-          <button class="choice-btn" id="injSit"><div class="cb-title">Shut it down</div><div class="cb-sub">Miss real time this year, come back closer to full strength — and barely adds to his long-term wear.</div></button>
+          <button class="choice-btn" id="injPlay"><div class="cb-title">Gut it out</div><div class="cb-sub">Stay in the lineup — but pushing through it adds real wear and tear, on top of a chance of making it worse right now.</div></button>
+          <button class="choice-btn" id="injSit"><div class="cb-title">Shut it down</div><div class="cb-sub">Miss real time on the IL this year, come back closer to full strength — and barely adds to his long-term wear.</div></button>
         </div>
       `, {tone:"bad"});
     document.getElementById("injPlay").addEventListener("click", ()=> resolveInjuryChoice(type, dur, injMult, decade, true, week));
