@@ -13,6 +13,7 @@ import {
   executeKeyMomentQuality,
   keyMomentCallScore,
 } from "./sim/keyMoments.js";
+import { evaluateSeasonAwardScores, expectedWinPctForTeamOverall } from "./sim/awards.js";
 import {
   DEVELOPMENT_PLAN_LIST,
   advanceDevelopmentSeason,
@@ -2913,6 +2914,7 @@ import {
       const recomputed = evaluateSeasonAwards({
         rating: season.rating, td: season.td, winPct: season.winPct, attempts: season.att,
         gamesPlayed: season.games, leagueGames: leagueGames, decade,
+        teamOverall: career.leagueStrength[entity.teamId] ?? 60,
       });
       season.proBowlScore = recomputed.proBowlScore; season.proBowlEligible = recomputed.proBowlEligible;
       season.allProScore = recomputed.allProScore; season.allProEligible = recomputed.allProEligible;
@@ -4525,7 +4527,7 @@ import {
   // yards could still clear that and get selected purely on talent. The ratingEdge gate also used to
   // allow -2, letting a personally below-average season get carried in by a stacked team's win total
   // alone -- both fixed here, once, for every QB in the league at the same time.)
-  function evaluateSeasonAwards({ rating, td, winPct, attempts, gamesPlayed, leagueGames, decade }){
+  function evaluateSeasonAwards({ rating, td, winPct, attempts, gamesPlayed, leagueGames, decade, teamOverall }){
     const awards = [];
     const leagueAvgRating = leagueAvgRatingForDecade(decade);
     const ratingEdge = rating - leagueAvgRating;
@@ -4547,19 +4549,24 @@ import {
     // (or after a stat-realism pass compresses everyone's ratings, as happened once already) that
     // could empty the eligible pool entirely, falling back to resolveSeasonAllProAndProBowl's
     // tiny-sample safety net instead of an honest comparison of who actually played the most/best.
-    const proBowlScore = ratingEdge*0.6 + Math.max(0, td-16)*0.45 + (winPct-0.5)*10;
     const proBowlEligible = attempts>200 && gamesPlayedShare>=0.65;
-
-    const allProScore = ratingEdge*0.75 + Math.max(0, td-22)*0.55 + (winPct-0.5)*18;
     const allProEligible = attempts>250 && gamesPlayedShare>=0.8;
-
     // MVP is likewise decided once, league-wide, by resolveSeasonMVP. mvpEligible gates out
     // someone who barely played from ever backing into the award off a tiny sample; a real MVP
     // case requires having actually played the season.
-    const mvpScore = ratingEdge*0.55 + (winPct-0.5)*40 + Math.max(0, td-25)*0.6;
     const mvpEligible = attempts>150 && gamesPlayedShare>=0.5;
 
-    return { awards, ratingEdge, leagueAvgRating, gamesPlayedShare,
+    // Balance Wave 5: raw win% used to feed all three scores directly -- since Wave 1 a QB's own
+    // team grades no longer inflate from his rating, but the reverse was never broken (a QB drafted
+    // onto/re-signed with an already-strong team still just wins more games for reasons that have
+    // nothing to do with that season's individual case), so raw win% still silently rewarded
+    // "played for a good team" every year. winsAboveExpectation (src/sim/awards.js) replaces it
+    // everywhere -- see that module's own header for the full worked-example comparison.
+    const { proBowlScore, allProScore, mvpScore, winsAboveExpectation } = evaluateSeasonAwardScores({
+      ratingEdge, td, winPct, teamOverall, gamesPlayedShare,
+    });
+
+    return { awards, ratingEdge, leagueAvgRating, gamesPlayedShare, winsAboveExpectation,
       proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible };
   }
 
@@ -5009,7 +5016,7 @@ import {
     const losses = gamesPlayed-wins;
     const winPct = gamesPlayed>0 ? wins/gamesPlayed : 0;
     const { awards, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = evaluateSeasonAwards({
-      rating, td, winPct, attempts, gamesPlayed, leagueGames: league.games, decade,
+      rating, td, winPct, attempts, gamesPlayed, leagueGames: league.games, decade, teamOverall: teamGrade,
     });
     // Same function, same shape, as the player's own developmentReport -- real actual production
     // (post-perfSwingMultiplier) against this entity's clean talent-derived expectation. Stashed on
@@ -5888,6 +5895,7 @@ import {
     // cross-check against the player's own instead of two formulas that only look similar.
     const { awards, ratingEdge, leagueAvgRating, gamesPlayedShare, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = evaluateSeasonAwards({
       rating, td, winPct, attempts, gamesPlayed, leagueGames: league.games, decade,
+      teamOverall: career.teamStrength,
     });
 
     // Team quality for THIS season is whatever it already was heading in (see the end of last
@@ -10898,9 +10906,10 @@ import {
     const gamesPlayedShare = 1; // this preview assumes a full healthy season
     const awardCalc = evaluateSeasonAwards({
       rating: expRating, td: expTd, winPct: winProb, attempts: expAttempts,
-      gamesPlayed: expGames, leagueGames: league.games, decade,
+      gamesPlayed: expGames, leagueGames: league.games, decade, teamOverall: career.teamStrength,
     });
-    const { leagueAvgRating, ratingEdge, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = awardCalc;
+    const { leagueAvgRating, ratingEdge, winsAboveExpectation, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = awardCalc;
+    const expectedWinPct = expectedWinPctForTeamOverall(career.teamStrength);
 
     return {
       decade, league, schemeId, scheme, eff, neutral, primeMult, W, cal,
@@ -10909,7 +10918,7 @@ import {
       comp, ypa, tdRate, intRate, sackRate, expSacks, roleShare, roleShareRange, attPerGame, chemistryNudge,
       expGames, expAttempts, expComp, expYards, expTd, expInt, expRating,
       rushAttPerGame, rushYpc, rushTdRate, expRushAtt, expRushYards, expRushTd,
-      winProb, myOff, leagueAvgRating, ratingEdge, gamesPlayedShare,
+      winProb, myOff, leagueAvgRating, ratingEdge, gamesPlayedShare, winsAboveExpectation, expectedWinPct,
       proBowlScore, proBowlEligible,
       allProScore, allProEligible,
       mvpScore, mvpEligible,
@@ -11078,13 +11087,15 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
 
     function gateLine(ok, text){ return `<div class="calc-gate ${ok?"pass":"fail"}">${ok?"✓":"✗"} ${svgEscape(text)}</div>`; }
 
-    const awardsIntro = `<div class="calc-refnote">All three season awards are judged on what actually happened -- passer rating vs. that year's league average (ratingEdge), raw TD production, team win rate, and (for Pro Bowl/All-Pro) how much of the season was actually played -- never on the underlying attribute grade. This preview assumes a full healthy season, so the games-played gates always read ✓ here; a real season that misses a big chunk of games fails them and the award becomes unreachable no matter how good the per-game numbers were.</div>`;
+    const awardsIntro = `<div class="calc-refnote">All three season awards are judged on what actually happened -- passer rating vs. that year's league average (ratingEdge), TD production, wins ABOVE what this team's own preseason grade already predicted (winsAboveExpectation -- Balance Wave 5, replacing raw win% so a stacked roster's own expected win total no longer inflates the score by itself), and (for Pro Bowl/All-Pro) how much of the season was actually played -- never on the underlying attribute grade. This preview assumes a full healthy season, so the games-played gates always read ✓ here; a real season that misses a big chunk of games fails them and the award becomes unreachable no matter how good the per-game numbers were.</div>`;
 
     const pbCard = card("Pro Bowl Score", d.proBowlScore.toFixed(2),
       [
         `ratingEdge = expectedRating − leagueAvgRating = ${d.expRating.toFixed(1)} − ${d.leagueAvgRating.toFixed(1)} = ${d.ratingEdge.toFixed(1)}`,
-        `score = ratingEdge×0.6 + max(0, TD−16)×0.45 + (winProb−0.5)×10`,
-        `      = ${d.ratingEdge.toFixed(1)}×0.6 + max(0, ${d.expTd}−16)×0.45 + (${d.winProb.toFixed(2)}−0.5)×10 = ${d.proBowlScore.toFixed(2)}`,
+        `expectedWinPct(teamOverall=${career.teamStrength}) = clamp(0.5 + (teamOverall−65)×0.011, 15%, 85%) = ${fmtPct(d.expectedWinPct)}`,
+        `winsAboveExpectation = clamp(winPct − expectedWinPct, −0.5, 0.5) = clamp(${d.winProb.toFixed(2)} − ${d.expectedWinPct.toFixed(2)}, ...) = ${d.winsAboveExpectation.toFixed(2)}`,
+        `score = ratingEdge×0.6 + max(0, TD−16)×0.45 + winsAboveExpectation×10`,
+        `      = ${d.ratingEdge.toFixed(1)}×0.6 + max(0, ${d.expTd}−16)×0.45 + ${d.winsAboveExpectation.toFixed(2)}×10 = ${d.proBowlScore.toFixed(2)}`,
         `Pro Bowl is no longer an independent per-QB roll -- the top scorers in each conference make it (2/conf through the 1980s, 3/conf from the 1990s on, with an extra qualifying 3rd spot possible pre-1990), decided once every other league QB's season is locked in.`,
       ],
       gateLine(d.expAttempts>200, `attempts > 200 (${d.expAttempts})`) +
@@ -11093,8 +11104,8 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
 
     const apCard = card("All-Pro Score", d.allProScore.toFixed(2),
       [
-        `score = ratingEdge×0.75 + max(0, TD−22)×0.55 + (winProb−0.5)×18`,
-        `      = ${d.ratingEdge.toFixed(1)}×0.75 + max(0, ${d.expTd}−22)×0.55 + (${d.winProb.toFixed(2)}−0.5)×18 = ${d.allProScore.toFixed(2)}`,
+        `score = ratingEdge×0.75 + max(0, TD−22)×0.55 + winsAboveExpectation×18`,
+        `      = ${d.ratingEdge.toFixed(1)}×0.75 + max(0, ${d.expTd}−22)×0.55 + ${d.winsAboveExpectation.toFixed(2)}×18 = ${d.allProScore.toFixed(2)}`,
         `All-Pro is no longer an independent per-QB roll -- exactly 1 First-Team and 1 Second-Team All-Pro are named league-wide, the two highest scores across the player and every simulated rival this season.`,
       ],
       gateLine(d.expAttempts>250, `attempts > 250 (${d.expAttempts})`) +
@@ -11103,8 +11114,9 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
 
     const mvpCard = card("MVP Score", d.mvpScore.toFixed(1),
       [
-        `score = ratingEdge×0.55 + (winProb−0.5)×40 + max(0, TD−25)×0.6`,
-        `      = ${d.ratingEdge.toFixed(1)}×0.55 + (${d.winProb.toFixed(2)}−0.5)×40 + max(0, ${d.expTd}−25)×0.6 = ${d.mvpScore.toFixed(2)}`,
+        `Balance Wave 5: MVP is a 5-component weighted composite, per the balance brief's own explicit split -- 45% era-relative efficiency, 20% volume, 20% wins above expectation, 10% availability, 5% narrative (an outright winning record, distinct from whether it was "expected").`,
+        `score = [clamp(ratingEdge/15,±2)×0.45 + clamp((TD−20)/8,±2)×0.20 + clamp(winsAboveExpectation×8,±2)×0.20 + clamp((gamesShare−0.85)×4,−2,1)×0.10 + clamp((winPct−0.5)×3,±1.5)×0.05] × 16`,
+        `      = [${clamp(d.ratingEdge/15,-2,2).toFixed(2)}×0.45 + ${clamp((d.expTd-20)/8,-2,2).toFixed(2)}×0.20 + ${clamp(d.winsAboveExpectation*8,-2,2).toFixed(2)}×0.20 + ${clamp((d.gamesPlayedShare-0.85)*4,-2,1).toFixed(2)}×0.10 + ${clamp((d.winProb-0.5)*3,-1.5,1.5).toFixed(2)}×0.05] × 16 = ${d.mvpScore.toFixed(2)}`,
         `MVP is no longer an independent per-QB roll -- this score is compared against every other starting QB in the league at season's end, and whoever's highest wins it outright (a genuine tie produces co-MVPs).`,
       ],
       gateLine(d.expAttempts>150, `attempts > 150 (${d.expAttempts})`) +

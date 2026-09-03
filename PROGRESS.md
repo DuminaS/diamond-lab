@@ -440,6 +440,70 @@ association reputation mechanic, and defense/GM life cycles beyond what Wave 1/5
 still unstarted. Item 4 (win-above-expectation award scoring) and item 5 (the declarative achievement
 ledger, 39 -> 250) of the "Next balance waves" list remain entirely unstarted.
 
+## 2026-09-02 — Balance implementation Wave 5: wins-above-expectation award scoring
+
+Scope: item 4 of the "Next balance waves" list -- "Award scoring based partly on wins above
+expectation rather than raw win percentage." Exact defect: "MVP scoring combines rating,
+touchdowns, and raw win percentage. Because the player's roster and production rise together, all
+three inputs reinforce the same dynasty" -- and this applied identically to Pro Bowl/All-Pro, which
+also fed straight off `winPct-0.5`.
+
+### What shipped
+
+- New pure module `src/sim/awards.js` (`expectedWinPctForTeamOverall`, `winsAboveExpectation`,
+  `evaluateSeasonAwardScores`) -- same shared-not-duplicated pattern as `ratings.js`/
+  `development.js`/`keyMoments.js`. `expectedWinPctForTeamOverall` reuses this codebase's own
+  established "65 is neutral team overall" convention (not a dynamically computed league average,
+  so a randomly weak/strong league-wide year doesn't itself redefine "expected").
+  `winsAboveExpectation = clamp(winPct - expectedWinPct, -0.5, 0.5)` is the one new signal that
+  replaces raw win% everywhere in `evaluateSeasonAwards` (`src/main.js`), fed by a new `teamOverall`
+  parameter threaded through all four of its call sites (the player's own season, every simulated
+  rival's season, the win/loss reconciliation recompute, and the dev-only admin calculator preview).
+- **Pro Bowl and All-Pro**: a targeted swap, not a redesign -- `winPct-0.5` replaced in place by
+  `winsAboveExpectation` at the exact same coefficients (x10/x18) they always had. Both are
+  centered-on-zero fractions in the same +/-0.5 range, so the existing weight/selectivity
+  characterization these two awards already had is preserved; only the SIGNAL changed, not how much
+  it's allowed to matter.
+- **MVP**: rebuilt as the brief's own explicit five-component weighted composite -- 45% era-relative
+  efficiency (ratingEdge, normalized), 20% volume (TD count, now genuinely two-sided instead of the
+  old one-sided `max(0,td-N)`, so a low-volume season is actually penalized, not just un-rewarded),
+  20% wins above expectation, 10% availability (games-played share above the ~85% bar MVP
+  eligibility already assumes), 5% narrative (an outright winning record -- a distinct signal from
+  wins-above-expectation on purpose: a team can have a winning record that was still fully expected,
+  or a losing record that still beat a bleak expectation, and real MVP voting cares about both
+  independently). Verified via a sweep matching the brief's own worked example exactly: "a 12-win
+  season with a 92-grade roster" now scores lower on all three tiers than "ten wins with a 55-grade
+  roster" given identical individual stats -- confirmed with real numbers (12-5/92: proBowl 11.7/
+  allPro 10.7/mvp 8.1 vs. 10-7/55: proBowl 14.6/allPro 15.9/mvp 15.2).
+- The dev-only admin calculator's displayed award formulas (previously hardcoded strings showing the
+  OLD `(winProb-0.5)` shape) are updated to show the real, current formula -- including the new
+  `expectedWinPct`/`winsAboveExpectation` derivation and the full MVP composite breakdown with live
+  numbers, matching the established "the calculator must show the real production formula, never a
+  stale copy" rule from Wave 7.
+- `resolveSeasonMVP`'s selection mechanism (pure comparative winner-take-all, no fatigue/repeat
+  limit) is untouched -- confirmed still holds: "do not add MVP voter fatigue or hard repeat-winner
+  limits, five MVPs should remain possible" was never at risk since only the SCORE computation
+  changed, not the selection logic.
+
+### Verification
+
+`tests/balance/awards.node.mjs` (new, 6 tests): `expectedWinPctForTeamOverall`'s neutral point and
+clamp bounds; `winsAboveExpectation` nets to exactly 0 when a team wins precisely its own predicted
+rate; the brief's worked example reproduced with real assertions (scrappy-overachiever beats
+stacked-team-at-expectation on all three tiers); a below-average individual season on a stacked team
+merely meeting its own expectation scores MVP-negative (the exact "dynasty reinforcement" case this
+wave exists to kill); the MVP composite's efficiency/volume weight ratio matches 45/20; Pro Bowl/
+All-Pro's `wae` term stays within its documented +/-0.5 bound at extreme records. `npm test`: 20/20
+balance tests (14 prior + 6 new), production build clean, 44/44 Playwright (no reseeds needed this
+wave -- this change didn't add or remove any `Math.random()` calls, only changed how already-rolled
+values are scored).
+
+### Not done this wave (stated plainly)
+
+Item 5 of the "Next balance waves" list (a structured event ledger and declarative expansion from
+the current 39 achievements toward 250) remains entirely unstarted -- this was the last remaining
+item on that list before it.
+
 ## Testing methodology (established pattern, reuse every round)
 - jsdom in `/tmp/gtest`, debug hooks (`window.__debug`) injected only into throwaway copies (`index.debugN.html`), never the real file. Latest debug build: `index.debug24.html` (Round 4, item 3).
 - `grep -c "__debug" index.html` must return 0 on the real file before every publish.

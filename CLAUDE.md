@@ -6,18 +6,21 @@ when you need the detailed "why" behind a specific mechanic, formula, or bug fix
 
 ## Current local status — 2026-09-02
 
-The remediation waves and Android verification are complete. Balance implementation Waves 1-4 are
+The remediation waves and Android verification are complete. Balance implementation Waves 1-5 are
 implemented locally: Wave 1 (honest Combine-vs-Football-OVR ratings, draft order tied to team
 quality, retuned development, dynasty-feedback removal), Wave 2 (performance-over-expectation
 development, a player-chosen offseason program, team chemistry, AI/rival parity on that same
 mechanic), Wave 3 (the Key Moment mini-game's permanent 1:1 tendency-to-play-call answer key is
 gone -- replaced by a contextual EV model in `src/sim/keyMoments.js`; Clutch now gates execution, not
-whether the mini-game triggers at all), and Wave 4 (three real contract structures at signing time,
+whether the mini-game triggers at all), Wave 4 (three real contract structures at signing time,
 each with a genuine, opposite-direction `career.capPressure` effect on O-Line/Weapons specifically;
 a coordinator-carousel "success tax" that can cost Coaching points after a Conference Championship or
-Super Bowl finish). Read the newest sections at the top of `PROGRESS.md` before changing career
-difficulty, development math, the Key Moment decision model, contract signing, or team-grade drift.
-Rating/development/Key-Moment math has begun moving out of the IIFE into pure production modules
+Super Bowl finish), and Wave 5 (Pro Bowl/All-Pro/MVP no longer score off raw win% -- `winsAboveExpectation`,
+in `src/sim/awards.js`, replaces it everywhere, and MVP is now the balance brief's own explicit
+45/20/20/10/5-weighted -- efficiency/volume/wins-above-expectation/availability/narrative -- composite).
+Read the newest sections at the top of `PROGRESS.md` before changing career difficulty, development
+math, the Key Moment decision model, contract signing, team-grade drift, or award scoring.
+Rating/development/Key-Moment/award math has begun moving out of the IIFE into pure production modules
 under `src/sim/`. Run `npm run balance:audit` for the seeded distribution report and `npm test` for
 the balance guards, production build, and full browser suite. Do not restore the old
 QB-to-all-five-team-grades feedback, the self-amplifying breakout/devSpeed loop, or a fixed
