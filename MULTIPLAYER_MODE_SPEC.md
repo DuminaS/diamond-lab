@@ -1,4 +1,11 @@
-# Gridiron Lab — Multiplayer Mode: full design map
+# Diamond Lab (née Gridiron Lab) — Multiplayer Mode: full design map
+
+> **Baseball-conversion note (2026-09-03).** Written against Gridiron Lab; the Private + Parallel
+> Universe build shipped before the football→baseball conversion. Read sport-facing terms remapped
+> (**QB → hitter**, **Combine → Showcase**, **Super Bowl → World Series**, …). The conversion
+> reskinned the shipped multiplayer flow — the Compare-screen scoring composite kept its shape,
+> the caps were retuned for baseball totals, and the result-code prefix changed `GLR1-` → `DLR1-`.
+> Sections 4B/13 and 8 remain theoretical planning only.
 
 Status: **Private + Parallel Universe Mode (sections 4A/12) is built and shipped** — Phase 0 and
 Phase 1 of the roadmap in section 10 are done; see PROGRESS.md's own dated entry for what actually

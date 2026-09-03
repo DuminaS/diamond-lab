@@ -1,6 +1,113 @@
-# Gridiron Lab — Development Log
+# Diamond Lab — Development Log
 
-Single-file HTML/CSS/JS QB-career simulator. Dev copy: `/tmp/gridiron/index.html` in the Cowork session workspace (not persisted between sessions — this doc is the durable record). Published artifact: https://claude.ai/code/artifact/c9dc631e-5094-47ef-95c8-908641aadc67 ("Gridiron Lab", 🏈).
+Vite + Capacitor baseball-hitter career simulator. Game logic in the `src/main.js` IIFE, pure sim
+math under `src/sim/`, static data under `src/data/`, markup in root `index.html`.
+
+**Everything below the "Conversion to Baseball" section is the inherited Gridiron Lab (QB-career
+simulator) history.** The reasoning behind every numeric dial, every bug and how it was caught,
+and the "Key architecture notes" section at the very bottom are all still authoritative — only the
+sport-facing names changed. Where a note says "QB", "pass yards", "TD", "Super Bowl", "AFC", read
+"hitter", "total bases", "HR", "World Series", "AL". The conversion tracker `CONVERSION.md` maps
+every rename and lists what was deliberately left opaque.
+
+---
+
+## 2026-09-03 — Conversion to Baseball: Gridiron Lab → Diamond Lab
+
+A full, deliberate reskin of the QB-career simulator into a hitter-career simulator, done in 12
+phases on branch `baseball-conversion`. The engine skeleton — season loop, playoff bracket, award
+resolution, boom/bust development, Hall-of-Fame scoring, the Key Moment mini-game, Parallel Universe
+multiplayer — is structurally unchanged; the sport it models is not.
+
+**Ground rules.** Sibling repo `../gridiron-export` and its GitHub remote are off limits (this
+repo's `origin` was removed). Player type: everyday position player / hitter (not a pitcher).
+Name "Diamond Lab", app id `com.diamondlab.app`, storage namespace `diamondlab.*`, result-code
+prefix `DLR1-`. No football save-migration.
+
+**Attribute map** (the 12 three-letter keys are unchanged; labels + the group name changed):
+ARM→Arm Strength, REL→Bat Speed, MOB→Speed, IMP→Baserunning Instinct (physical) · DAC→Raw Power,
+SHA→Contact Hitting, TCH→Bat Control, PKT→Plate Discipline (hitting, was `accuracy`) · ANT→Pitch
+Recognition, DEC→Plate Approach, CLU→Clutch, DUR→Durability (mental).
+
+**Load-bearing identifiers kept opaque on purpose** (renaming buys nothing, risks desyncing many
+lookup sites): `conf:"AFC"/"NFC"` = AL/NL; playoff round literals `"Wild Card"`/`"Divisional"`/
+`"Conference Championship"`/`"Super Bowl"` = WC Series / Division Series / LCS / World Series;
+`assignQuarterbackToRoster`, `QB1/QB2/QB3`, `USER_QB_ID`, `career.qbsById`, `career.leagueRivals`,
+`career.leagueDepthCharts`, `career.isBackup`; the five team-grade keys `oline/weapons/defense/
+coaching/gmGrade`; dev-plan ids `balanced/mechanics/film/athletic/chemistry/recovery`; the
+`eventLedger` event-id literals. Display wrappers (`roundDisplayLabel`, `confLabel`, …) are the
+only places these become baseball words.
+
+**"Legacy slot aliases."** Rather than rip out ~50 render sites that read `comp/att/yards/td/int/
+sacks/rushAtt/rushYards`, those engine variables were reinterpreted: `comp`=hits, `att`=PA,
+`yards`=total bases, `td`=HR, `int`=K, `sacks`=GIDP, `rushAtt`=SB attempts, `rushYards`=SB. Season
+objects **also** carry the real baseball fields (`pa/ab/hits/doubles/triples/hr/bb/hbp/sf/k/sb/cs/
+rbi/runs/avg/obp/slg/ops/opsPlus`). `passerRating(h,pa,tb,hr,k,bb)` → an era-relative OPS+ index
+(100 = league average).
+
+**The 12 phases.**
+- **0 — identity.** capacitor/vite config, Android strings/package, `index.html` brand, storage
+  keys `gridironlab.*`→`diamondlab.*`, README, `icon.svg` → a baseball. (PNG icons in `public/`
+  still the old monogram — no SVG→PNG converter installed; tracked.)
+- **1 — data (`src/data/`).** `teams.js`: 30 MLB franchises with historical names, colors,
+  divisions by era, `PLAYOFF_ERAS` (1900–1968 pennant-only, 1969–1993 LCS, 1994–2011, 2012–2021,
+  2022+). `players.js` (replaces `qbs.js`): ~155 real MLB hitters, 12 tools, era. `schemes.js`:
+  8 hitting-approach philosophies. `awards.js`: `MLB_RECORDS` (73 HR, 191 RBI, .406, 262 hits,
+  130 SB, 762/4256/2297 career), baseball badge icons.
+- **2 — attribute & rating core.** `ATTRIBUTES` (12 hitter tools), `LEAGUE` era rate context
+  (avg/obp/slg/hr/bb/k/paPerGame), `sim/ratings.js` → `HITTER_OVERALL_WEIGHTS` + `hitterOverall`,
+  `STAT_CAL` era ceilings grounded in real record seasons, `CURVES`/`PRIME_CURVE` → hitter aging
+  (physical peak ~25–27, hitting ~28–31, mental ~31–34).
+- **3 — season sim + game-score engine.** `generateSeason` produces a full batting line from
+  avg/iso/hr/bb/k signals; `QB_INFLUENCE` 0.45/0.35 → 0.12/0.10 (one bat barely moves team W/L);
+  `RIVAL_STAT_SCALE` 0.75 → 0.10. New game engine: `scoreForInning` (shallow half-inning run
+  scoring, most scoreless), 9-inning regulation, extra innings until a side leads a full frame,
+  `tieProbability` (ties essentially never; rare pre-1975 called games). `simpleWinProb` coef
+  0.0032, clamp [.35,.66] → best ~107 wins, worst ~57. Verified: records land 57–107, game scores
+  baseball-scale, LCS/WS games low-run.
+- **4 — player entity / roster.** `POSITIONS` + an identity Position field/picker; MLB draft
+  (20 rounds, Day 1/2/3); league-news titles ("Regular Hits the IL", "Bench Bat Wins an Everyday
+  Job", …); depth-chart rows say "Everyday / Bench".
+- **5 — contracts / FA / injuries / events.** MLB salary history per era; payroll/luxury-tax
+  contract-structure framing; `INJURY_TYPES` → IL stints (hamstring/oblique/wrist/HBP fracture/…);
+  `AI_SUSPENSION_REASONS` → PED / domestic-violence policy / Rule 21; the coordinator carousel →
+  "hitting coach gets a manager's chair" success tax; every narrative event pool (infraction,
+  rare, positive, lifepath, rivalry, org, league-news) rewritten for baseball.
+- **6 — Key Moments: the clutch at-bat.** `src/sim/keyMoments.js` PLAY_CALLS → 8 batter
+  approaches (same ids), the contextual-EV model and Clutch-gates-execution design preserved.
+- **7 — awards / records / Cooperstown.** MVP/All-Star/Silver Slugger/Gold Glove/ROY/batting
+  title/HR title decided league-wide once per season off OPS+/HR/AVG, not TD counts;
+  `computeHofScore` + tiers re-tuned; HOF narrative + trophy case rewritten.
+- **8 — achievements.** ~90 achievements rewritten wholesale for baseball, every rule-builder
+  pattern in `src/sim/achievementRules.js` kept.
+- **9 — multiplayer.** `matchCode.js` prefix `GLR1`→`DLR1`; scoring caps retuned for baseball
+  totals; Compare/Create/Join copy.
+- **10 — UI / copy / CSS.** Full prose pass across `index.html` and every `build*HTML` — menu,
+  Showcase setup, draft, results explainers, career summary, trophy room, MP screens. Functional
+  ids and `data-sort` keys kept; only visible text changed.
+- **11 — tests.** `tests/balance/*.node.mjs` → baseball (58 pass / 0 fail). `careerFlow.mjs`
+  helper: `SAVE_KEY = diamondlab.activeCareer`, and the free-agency multi-offer screen leads with
+  `.rival-link` profile buttons so `advanceOneSeason` now skips those and auto-signs. All 40+
+  regression specs updated for `diamondlab.*` keys, the `DLR1` prefix, and baseball label/
+  transaction strings, reseeded where RNG drifted. `scoreboard-and-qb-touchdowns-reconcile` →
+  `scoreboard-and-batter-runs-reconcile` (a batter's single-game HR can't exceed his team's runs —
+  now enforced in `simulateRegularSeasonGames`). `baseball-card-text-fits-worst-case` rebuilt
+  around real achievements. Deleted `playoff-tree-divisional-bye-pairing` (tested the NFL
+  1978–1989 bracket; no MLB era reproduces its bye>matchup mismatch). **Real bug fixed:** a
+  pre-1969 pennant winner (`N=1` league bracket, no LCS) was marked `playoffs.done` with zero
+  rounds instead of advancing to the World Series — this stranded the season card in
+  `pending-reveal` forever for any 1960s career that won its league.
+  `advanceToNextPlayoffRound` now builds the WS round for the lone champion, and
+  `animatePlayoffQuarters`/`playoffRoundBoxHtml`/`confirmPlayoffRound` now tolerate a round with
+  no `quarters`/`box`/`_bracketState` (legacy or injected). 57 regression specs green.
+- **12 — docs / final build.** This entry; CLAUDE.md/README rewritten; a light terminology pass
+  on the two spec docs; final build + `cap sync android`.
+
+**Still deferred** (tracked in `CONVERSION.md`): deep opaque-identifier renames (no functional
+gain), the admin Stat Calculator tab's football-ish labels, PNG icon regeneration, a full seeded
+tuning sweep of the first-pass stat coefficients, best-of-5/7 playoff series.
+
+---
 
 ## 2026-09-02 — Balance implementation Wave 1: progression, honest ratings, draft order, team feedback
 

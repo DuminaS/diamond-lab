@@ -27,8 +27,9 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [x] index.html title/meta/brand
 - [x] storage keys `gridironlab.*` → `diamondlab.*` in main.js
 - [x] README rewrite
-- [x] icon.svg → baseball (PNG regeneration in public/ still TODO — no converter installed)
-- [ ] deploy-pages.yml: branch `master` → whatever the new repo uses
+- [x] icon.svg → baseball; `public/*.png` regenerated from it via `scripts/gen-icons.mjs`
+      (renders through Playwright's bundled Chromium — no ImageMagick/rsvg/sharp on this machine)
+- [x] deploy-pages.yml: trigger branch `master` → `main` (rename again if the new repo differs)
 
 ### Phase 1 — domain data (src/data/)  ✅ committed
 - [x] teams.js — 30 MLB franchises, leagues (AFC=AL/NFC=NL), divisions by era, colors, PLAYOFF_ERAS
@@ -227,4 +228,23 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [x] `npm run test:balance` green; `npm run build` green; `npx playwright test tests/regression`
       green.
 
-### Phase 12 — docs / final build
+### Phase 12 — docs / final build  ✅
+- [x] `CLAUDE.md` rewritten for Diamond Lab — fast-start context, load-bearing invariants,
+      storage namespace, build/run, testing methodology, current status.
+- [x] `README.md` already Diamond Lab (Phase 0); left as-is.
+- [x] `PROGRESS.md`: title → Diamond Lab, a "Conversion to Baseball" summary entry at the top
+      (12-phase recap + the opaque-identifier list), football-era history preserved untouched below.
+- [x] `MASTER_REMEDIATION_SPEC.md` / `MULTIPLAYER_MODE_SPEC.md`: conversion banner at the top of
+      each with the football→baseball term map; body prose left as the archival record it is.
+- [x] `public/*.png` icons regenerated (see Phase 0) via `scripts/gen-icons.mjs`.
+- [x] `.github/workflows/deploy-pages.yml`: trigger branch → `main`.
+- [x] final `npm run build` green; `npx cap sync android` run.
+- [ ] create the `diamond-lab` GitHub repo and wire up `origin` (user action — `gh` not installed).
+
+### Deferred past the conversion (not blockers)
+- Deep opaque-identifier renames (`qbsById`, `QB1/QB2/QB3`, the playoff literals, the five
+  team-grade keys) — load-bearing across ~40+ sites, zero functional gain in renaming.
+- Admin → Stat Calculator tab labels still football-ish (`Comp%`, `Y/A`, `TD%`) — admin-only.
+- Full seeded tuning sweep of the first-pass Phase 3 stat coefficients (project norm; the numbers
+  produce coherent baseball output but haven't had the diagnostic-driven sweep).
+- Best-of-5/7 playoff series — rounds are still single games.

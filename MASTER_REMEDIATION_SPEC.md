@@ -1,4 +1,15 @@
-# Gridiron Lab Master Remediation Specification
+# Diamond Lab (née Gridiron Lab) Master Remediation Specification
+
+> **Baseball-conversion note (2026-09-03).** This spec was written and executed against Gridiron
+> Lab, the QB-career simulator. Every remediation wave below shipped *before* the football→baseball
+> conversion. The specification is retained as-is for its reasoning and its exit criteria, which
+> still hold — read it with the sport-facing terms remapped: **QB → hitter**, **pass yards → total
+> bases**, **passing TD → HR**, **INT → strikeout**, **completion % → batting average**,
+> **Super Bowl → World Series**, **Conference Championship → LCS**, **Divisional → Division
+> Series**, **AFC/NFC → AL/NL**, **coordinator carousel → hitting-coach-to-manager carousel**,
+> **Combine → Showcase**. The internal identifiers named here (`career.qbsById`, `QB1/QB2/QB3`,
+> the `"Wild Card"`/`"Super Bowl"` literals, the five `oline/weapons/defense/coaching/gmGrade`
+> keys) were **kept unchanged** in the conversion — see `CONVERSION.md`.
 
 Status: implementation contract  
 Baseline repository commit: `5bf0388`  
