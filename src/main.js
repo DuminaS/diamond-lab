@@ -2329,7 +2329,9 @@ import {
       _earnedBreakthroughCount: 0,
       developmentPlan: "balanced",
       teamChemistry: 50,
+      capPressure: 0,
       _developmentPlanAppliedYear: draftYear,
+      _coordinatorCarouselCheckedYear: draftYear,
       originalBuild: {...build},
       // Wave 2A (MASTER_REMEDIATION_SPEC.md): the canonical, ID-based QB registry -- see the
       // "Canonical QB registry" block above rivalForTeam for what owns these and how they stay in
@@ -5295,6 +5297,11 @@ import {
     if(careerObj._earnedBreakthroughCount==null) careerObj._earnedBreakthroughCount = 0;
     if(!careerObj.devCeilingBonus) careerObj.devCeilingBonus = {};
     if(careerObj._developmentPlanAppliedYear==null) careerObj._developmentPlanAppliedYear = careerObj.year;
+    // Balance Wave 4: same self-heal -- an old save enters cap/coordinator tracking neutral, and the
+    // carousel check is marked already-done for the current year so resuming mid-season never rolls
+    // a surprise coaching hit off a stale/missing playoffs record from before this wave existed.
+    if(careerObj.capPressure==null) careerObj.capPressure = 0;
+    if(careerObj._coordinatorCarouselCheckedYear==null) careerObj._coordinatorCarouselCheckedYear = careerObj.year;
   }
 
   /* ----- Phase 2 of the QB-entity redesign: real bench mobility and a free-agent pool. A bench
@@ -5652,10 +5659,62 @@ import {
     return wonJob;
   }
 
+  // Balance Wave 4: capPressure (set at signing time by which CONTRACT_STRUCTURE was chosen) nudges
+  // O-Line/Weapons specifically -- never the other three grades, which have their own separate life
+  // cycles (defense via drafting/free agency/injuries/coordinators, coaching via the carousel below,
+  // GM via performance) -- then decays 25%/season toward neutral, the same retention-curve shape
+  // teamChemistry already uses, so neither a single discount nor a single record deal has a
+  // permanent effect on its own; staying on one structure across re-signs is what compounds it.
+  function applyCapPressureToRoster(){
+    const pressure = career.capPressure || 0;
+    if(pressure!==0){
+      const nudge = Math.round(pressure*0.15);
+      if(nudge!==0){
+        career.oline = clamp(career.oline+nudge, 20, 99);
+        career.weapons = clamp(career.weapons+nudge, 20, 99);
+        recomputeMyTeamStrength();
+      }
+    }
+    career.capPressure = Math.round(pressure*0.75);
+  }
+  // Balance Wave 4 ("Coordinator carousel"): "Deep playoff runs should cause assistants to be hired
+  // elsewhere. This is a fair, visible 'success tax' and creates dynasty turnover without forced
+  // losses." Checked once per year (guarded the same way prepareDevelopmentPlanForSeason guards its
+  // own once-per-year application) against the PREVIOUS season's fully-resolved playoff result --
+  // the current season's own run isn't decided yet at this point in generateSeason() (playoff
+  // rounds resolve later, interactively, via the Key Moment reveal), so this always looks one season
+  // back, at career.seasonLog's last entry. Only the two deepest rounds count as "a deep run" --
+  // reaching a Conference Championship or Super Bowl is genuinely deep by any real NFL measure;
+  // losing in the Wild Card or Divisional round isn't the kind of run that gets a coordinator a
+  // head-coaching interview elsewhere.
+  const COORDINATOR_CAROUSEL_DEEP_ROUNDS = new Set(["Conference Championship","Super Bowl"]);
+  function applyCoordinatorCarouselIfDue(){
+    if(career._coordinatorCarouselCheckedYear===career.year) return;
+    career._coordinatorCarouselCheckedYear = career.year;
+    const lastSeason = career.seasonLog[career.seasonLog.length-1];
+    const rounds = lastSeason && lastSeason.playoffs && lastSeason.playoffs.made ? (lastSeason.playoffs.rounds||[]) : [];
+    if(!rounds.length) return;
+    const lastRound = rounds[rounds.length-1];
+    if(!COORDINATOR_CAROUSEL_DEEP_ROUNDS.has(lastRound.round)) return;
+    // Winning the Super Bowl makes the staff an even bigger hiring target than a deep loss does.
+    const wonItAll = lastRound.round==="Super Bowl" && lastRound.won;
+    const chance = wonItAll ? 0.38 : 0.25;
+    if(Math.random()<chance){
+      const before = career.coaching;
+      career.coaching = clamp(career.coaching - randInt(6,14), 20, 99);
+      recomputeMyTeamStrength();
+      const teamName = teamNameAt(career.teamId, career.year);
+      career.transactions.push(`${career.year}: Coordinator carousel — a deep playoff run cost the ${teamName} an assistant to a head-coaching job elsewhere (Coaching ${before} → ${career.coaching}).`);
+    }
+  }
+
   function generateSeason(){
     const decade = decadeForYear(career.year);
     const league = LEAGUE[decade];
     const developmentPlan = prepareDevelopmentPlanForSeason();
+    // Must run before career.seasonLog.push(season) below makes THIS season the new "last" entry --
+    // applyCoordinatorCarouselIfDue needs the PREVIOUS season's fully-resolved playoffs record.
+    applyCoordinatorCarouselIfDue();
     // Built once, right at the top, before anyone's games (the player's own included) are
     // simulated -- see buildSeasonSchedule. Every other team's shared results (buildScheduleResults,
     // called later via resolvePlayoffs) reuses this exact same schedule rather than generating a
@@ -5922,6 +5981,7 @@ import {
     const teamRebuildPull = Math.round(rebuildPull(safeNum(career.teamStrength,60))*volMult);
     const myNudge = Math.round(teamNoise) - teamDeclinePull + teamRebuildPull;
     adjustTeamStrength(career.teamId, myNudge, 2);
+    applyCapPressureToRoster();
 
     // ----- Wear and tear economy: a persistent, career-long meter (not a per-injury dice roll) --
     // see resolveInjuryChoice for the play-through-it vs. shut-it-down wear add, which is where
@@ -7558,6 +7618,22 @@ import {
     if(playerProfile.isCurrentlyUnavailable) fit -= 15; // real injury/suspension risk, not flavor-only
     return clamp(Math.round(fit), 0, 100);
   }
+  // Balance Wave 4 ("Contracts and roster construction"): the same offer can be signed under three
+  // real structures, each with a genuine, opposite-direction consequence on the team's own cap
+  // health -- "A max contract reduces roster budget; a discount improves retention" from the
+  // original brief. capPressureDelta lands on career.capPressure (see signFreeAgentOffer/
+  // generateSeason's own team-drift section), a persistent, slowly-decaying value that nudges
+  // O-Line/Weapons specifically (not the other three grades, which have their own separate life
+  // cycles) -- a full numeric salary-cap ledger is deliberately not built; this is the legible,
+  // bounded version of the same real consequence.
+  const CONTRACT_STRUCTURES = {
+    market: { id:"market", label:"Sign (Market Value)", apyMult:1, yearsDelta:0, capPressureDelta:0,
+      sub:"The number on the table, as-is." },
+    teamFriendly: { id:"teamFriendly", label:"Take a Team-Friendly Discount", apyMult:0.84, yearsDelta:0, capPressureDelta:14,
+      sub:"Less money now, but real cap room for the front office to build around him." },
+    recordSetting: { id:"recordSetting", label:"Push for a Record Contract", apyMult:1.20, yearsDelta:1, capPressureDelta:-14,
+      sub:"Top of the market and an extra guaranteed year -- at the roster's expense." },
+  };
   function buildFreeAgentOffers(decade, tier, oldTeamId){
     // Wave 5: guarantee every candidate team already has its real, persistent five-grade profile
     // before any offer reads from it -- a defensive, idempotent no-op once resolvePlayoffs has
@@ -7676,7 +7752,11 @@ import {
         ${o.reason ? `<div class="fa-offer-reason">${svgEscape(o.reason)}</div>` : ""}
         ${agentNote}
         <div class="event-choices">
-          <button class="choice-btn fa-accept" data-i="${i}"><div class="cb-title">Accept</div></button>
+          ${Object.values(CONTRACT_STRUCTURES).map(structure=>`
+            <button class="choice-btn fa-accept" data-i="${i}" data-structure="${structure.id}">
+              <div class="cb-title">${svgEscape(structure.label)}${structure.id!=="market"?` <span class="tabular" style="opacity:0.7;">(${fmtMoney(Math.round(o.apy*structure.apyMult))}/yr)</span>`:""}</div>
+              <div class="cb-sub">${svgEscape(structure.sub)}</div>
+            </button>`).join("")}
           ${canNegotiate ? `<button class="choice-btn fa-negotiate" data-i="${i}"><div class="cb-title">Negotiate for more</div><div class="cb-sub">Could work. Could blow up the deal.</div></button>` : `<div class="cb-sub" style="padding:0.2rem 0;">They've said their final number.</div>`}
         </div>
       </div>`;
@@ -7695,7 +7775,7 @@ import {
     content.querySelectorAll(".fa-accept").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         const o = live[parseInt(btn.dataset.i,10)];
-        signFreeAgentOffer(o, meta);
+        signFreeAgentOffer(o, meta, btn.dataset.structure);
       });
     });
     content.querySelectorAll(".fa-negotiate").forEach(btn=>{
@@ -7732,8 +7812,16 @@ import {
     }
   }
 
-  function signFreeAgentOffer(o, meta){
+  function signFreeAgentOffer(o, meta, structureId){
     const teamName = teamNameAt(o.teamId, career.year);
+    const structure = CONTRACT_STRUCTURES[structureId] || CONTRACT_STRUCTURES.market;
+    const signedApy = Math.round(o.apy*structure.apyMult);
+    const signedYears = Math.max(1, o.years+structure.yearsDelta);
+    // Balance Wave 4: capPressure decays toward 0 every season (see generateSeason's team-drift
+    // section) and nudges O-Line/Weapons specifically while it's non-zero -- a real, if bounded and
+    // legible, stand-in for "this contract structure changes how much room the front office has to
+    // build the roster around him," without a full numeric cap ledger.
+    career.capPressure = clamp((career.capPressure||0) + structure.capPressureDelta, -40, 40);
     // Wave 6 required design: the offer's own projected role must be exactly what happens once
     // signed -- a "competition" role used to be pure flavor text (no mechanical difference from
     // "starter" at all once signed); now it genuinely means competing for the job, the same
@@ -7744,12 +7832,15 @@ import {
     // him outright).
     career.isBackup = (o.role === "competition");
     if(career.isBackup) career._backupSeasonsCount = 0; // a fresh competition, not a stale count carried over from a previous team/stint
+    const structureNote = structure.id==="teamFriendly" ? " -- a team-friendly discount, clearing real cap room."
+      : structure.id==="recordSetting" ? " -- a record-setting deal that will squeeze the roster around him."
+      : "";
     if(o.isHome){
-      career.transactions.push(`${career.year}: Re-signed with the ${teamName} (${fmtMoney(o.apy)}/yr).`);
+      career.transactions.push(`${career.year}: Re-signed with the ${teamName} (${fmtMoney(signedApy)}/yr)${structureNote}`);
       // NOT a team change -- keep his tenure streak intact so the "first season in a new uniform"
       // narrative line (gated on seasonsWithTeam===1) doesn't fire for a guy who never left.
     } else {
-      career.transactions.push(`${career.year}: Signed with the ${teamName} (${fmtMoney(o.apy)}/yr).`);
+      career.transactions.push(`${career.year}: Signed with the ${teamName} (${fmtMoney(signedApy)}/yr)${structureNote}`);
       reassignRivalsForTeamChange(career.teamId, o.teamId);
       // Wave 5: hand the OLD team back its own real, departing profile (never a fresh re-roll)
       // before overwriting career.* with the new team's grades -- the exact grades the offer card
@@ -7765,7 +7856,7 @@ import {
       career.seasonsWithTeam = 0;
     }
     const tier = o.role==="competition" ? "backup" : (meta.tier==="minimum"?"minimum":meta.tier);
-    career.contract = { apy: o.apy, years: o.years, tier };
+    career.contract = { apy: signedApy, years: signedYears, tier };
     // Wave 1: a signing is exactly the kind of material, hard-to-redo decision the spec calls out
     // by name -- checkpoint it immediately, before whatever comes next (an injury check, then the
     // season itself) has a chance to get interrupted.

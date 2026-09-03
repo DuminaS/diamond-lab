@@ -32,8 +32,14 @@ test("key-moment-mini-game-resolves-and-updates-the-record", async ({ page }) =>
   test.setTimeout(240_000);
   // Seed found via a disposable sweep (deleted) that reliably rolls a Key Moment trigger within a
   // few seasons under this seed -- not hardcoded to force a trigger, just chosen because it's a
-  // typical case, not a rare one.
-  await installSeededRandom(page, 1001);
+  // typical case, not a rare one. Balance Wave 4's cap-pressure mechanic shifted the RNG stream
+  // enough that the original seed (1001) stopped reliably triggering (confirmed via a 10-seed
+  // re-sweep: 1001 now 0/1, this seed and two others still reliable) -- capPressure nudges
+  // career.oline every season once non-zero, which shifts checkInjuryThenPlay's own injuryChance
+  // threshold, which can flip whether a given season's injury-interstitial roll fires, cascading
+  // into a different number of subsequent random draws for the rest of that career. A real,
+  // expected consequence of adding a new per-season numeric effect, not a defect in either wave.
+  await installSeededRandom(page, 3003);
   await page.goto("/");
   // Enable the Key Moments beta toggle on the menu screen before starting the combine.
   const kmToggle = page.locator("#keyMomentsToggle");

@@ -380,6 +380,66 @@ re-checked and all self-heal correctly on read for old saves, matching the estab
 restored-seed standings test and an independent re-check against seed 90909, the other seed the
 original sweep found).
 
+## 2026-09-02 — Balance implementation Wave 4: contract structures/cap pressure, coordinator carousel
+
+Scope: item 3 of the "Next balance waves" list -- "Contracts/cap pressure, coordinator carousel,
+independent roster component life cycles." The "independent roster component life cycles" half is
+substantially already covered by Wave 1/5's persistent five-grade drift system (each team's oline/
+weapons/defense/coaching/gmGrade already moves independently via roster churn, decline/rebuild
+pressure, and league news) -- this wave adds the two genuinely new pieces: real contract-structure
+choice with a roster consequence, and the coordinator carousel.
+
+### What shipped
+
+- **Contract structures.** Every free-agent offer card (home re-sign and away alike) now shows three
+  accept buttons instead of one: Market Value (unchanged), a Team-Friendly Discount (apy x0.84,
+  `capPressureDelta:+14`), and a Record-Setting Contract (apy x1.20, one extra guaranteed year,
+  `capPressureDelta:-14`). `career.capPressure` is a new persistent value (-40..+40) that
+  `applyCapPressureToRoster()` (called once a season, alongside the existing team-drift block) uses
+  to nudge O-Line/Weapons specifically -- never the other three grades, which have their own separate
+  life cycles -- then decays 25%/season toward neutral (same retention-curve shape teamChemistry
+  already uses). This is the brief's own "a max contract reduces roster budget; a discount improves
+  retention," implemented as a legible, bounded effect rather than a full numeric salary-cap ledger.
+- **Coordinator carousel.** `applyCoordinatorCarouselIfDue()` looks at the PREVIOUS season's
+  fully-resolved playoff result (the current season's own run isn't decided yet at this point in
+  `generateSeason()` -- it resolves later, interactively) and, only for a Conference Championship or
+  Super Bowl finish, rolls a real chance (25%, or 38% after winning it all) of losing 6-14 points of
+  Coaching to "an assistant hired away," with a transaction log line. A Wild Card or Divisional exit
+  never rolls at all -- "deep playoff runs... a fair, visible 'success tax'... without forced losses,"
+  matching the brief exactly. Guarded to run at most once per year the same way
+  `prepareDevelopmentPlanForSeason` guards its own once-per-year application.
+
+### One real bug found and fixed before this ever shipped
+
+`applyCoordinatorCarouselIfDue()` was originally called AFTER `career.seasonLog.push(season)` --
+meaning `career.seasonLog[length-1]` was already THIS season's fresh, not-yet-played entry instead
+of the previous, actually-resolved one, so the carousel could never see a real deep-run result at
+all. Caught by the carousel's own regression test (forced a fabricated Super Bowl loss into the save
+and the mechanism silently never fired) before being trusted as working. Fixed by moving the call to
+the top of `generateSeason()`, before the push, alongside `prepareDevelopmentPlanForSeason()`.
+
+### Verification and one more RNG-stream reseed
+
+`npm test`: 14/14 balance tests, production build clean, 44/44 Playwright (6 new: 3 for contract
+structures, 3 for the coordinator carousel). Two pre-existing tests needed selector fixes, not
+because of a bug -- adding two more accept buttons per offer card meant
+`document.querySelectorAll(".fa-accept")[i]` (indexing by CARD position) no longer pointed at the
+right button; both now select `.fa-accept[data-i="${i}"][data-structure="market"]` explicitly
+(`fa-offers-match-persistent-team-profile.spec.js`, `fa-role-matches-post-signing-depth-chart.spec.js`).
+Separately, `key-moment-mini-game-resolves.spec.js`'s seed (1001) stopped reliably triggering: once
+`capPressure` is non-zero it nudges `career.oline` every season, which shifts
+`checkInjuryThenPlay`'s own `injuryChance` threshold, which can flip whether a season's injury roll
+fires -- a real, expected downstream RNG-stream shift from adding a new per-season numeric effect,
+not a defect. Reseeded to 3003 (confirmed reliable via a 10-seed sweep).
+
+### Not done this wave (stated plainly)
+
+No numeric salary-cap ledger (a bounded, legible `capPressure` proxy was chosen deliberately instead
+-- see the brief's own framing of this as acceptable). GM-driven roster construction AI, a players'-
+association reputation mechanic, and defense/GM life cycles beyond what Wave 1/5 already built are
+still unstarted. Item 4 (win-above-expectation award scoring) and item 5 (the declarative achievement
+ledger, 39 -> 250) of the "Next balance waves" list remain entirely unstarted.
+
 ## Testing methodology (established pattern, reuse every round)
 - jsdom in `/tmp/gtest`, debug hooks (`window.__debug`) injected only into throwaway copies (`index.debugN.html`), never the real file. Latest debug build: `index.debug24.html` (Round 4, item 3).
 - `grep -c "__debug" index.html` must return 0 on the real file before every publish.

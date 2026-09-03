@@ -102,7 +102,9 @@ test("fa-role-matches-post-signing-depth-chart", async ({ page }) => {
       const before = await readActiveCareer(page);
       const incumbentIdBefore = before.career.teamQbDepth && before.career.teamQbDepth[o.teamId] && before.career.teamQbDepth[o.teamId].QB1;
 
-      await page.evaluate((i) => document.querySelectorAll(".fa-accept")[i].click(), o.index);
+      // Balance Wave 4: each offer card now renders 3 contract-structure accept buttons sharing the
+      // same data-i card index -- select the market-value one specifically.
+      await page.evaluate((i) => document.querySelector(`.fa-accept[data-i="${i}"][data-structure="market"]`).click(), o.index);
       await page.waitForTimeout(200);
 
       const after = await readActiveCareer(page);

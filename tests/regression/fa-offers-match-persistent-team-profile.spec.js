@@ -132,8 +132,12 @@ test("fa-offers-match-persistent-team-profile", async ({ page }) => {
   await page.evaluate(() => document.querySelector("#teamProfileOverlay .rival-close")?.click());
   await page.waitForTimeout(100);
   await page.evaluate(() => { Math.random = () => 0; });
+  // Balance Wave 4: each offer card now renders 3 contract-structure accept buttons (market/
+  // team-friendly/record-setting), all sharing the same data-i card index -- select the
+  // market-value one specifically (data-structure) so this keeps testing the plain, at-face-value
+  // accept path the raw offer numbers below are computed against.
   await page.evaluate((i) => {
-    document.querySelectorAll(".fa-accept")[i].click();
+    document.querySelector(`.fa-accept[data-i="${i}"][data-structure="market"]`).click();
   }, offerInfo.index);
   await page.waitForTimeout(200);
 
