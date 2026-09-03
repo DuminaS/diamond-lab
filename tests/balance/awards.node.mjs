@@ -49,10 +49,11 @@ test("MVP composite weights sum to the balance brief's own 45/20/20/10/5 split",
   // equals the sum of the weights) by inspecting evaluateSeasonAwardScores's own behavior: doubling
   // every normalized input should double the pre-scale composite, confirming linearity, and the
   // ratio between two different weighted inputs should match the documented split.
-  const base = evaluateSeasonAwardScores({ ratingEdge: 0, td: 20, winPct: 0.5, teamOverall: 65, gamesPlayedShare: 0.85 });
-  const onlyEfficiency = evaluateSeasonAwardScores({ ratingEdge: 15, td: 20, winPct: 0.5, teamOverall: 65, gamesPlayedShare: 0.85 });
-  const onlyVolume = evaluateSeasonAwardScores({ ratingEdge: 0, td: 28, winPct: 0.5, teamOverall: 65, gamesPlayedShare: 0.85 });
-  // ratingEdge=15 -> efficiencyComponent=clamp(15/15,-2,2)=1; td=28 -> volumeComponent=clamp((28-20)/8,-2,2)=1.
+  // Baseball: efficiencyComponent = clamp(ratingEdge/28, ...), volumeComponent = clamp((td-26)/11, ...).
+  const base = evaluateSeasonAwardScores({ ratingEdge: 0, td: 26, winPct: 0.5, teamOverall: 65, gamesPlayedShare: 0.85 });
+  const onlyEfficiency = evaluateSeasonAwardScores({ ratingEdge: 28, td: 26, winPct: 0.5, teamOverall: 65, gamesPlayedShare: 0.85 });
+  const onlyVolume = evaluateSeasonAwardScores({ ratingEdge: 0, td: 37, winPct: 0.5, teamOverall: 65, gamesPlayedShare: 0.85 });
+  // ratingEdge=28 -> efficiencyComponent=clamp(28/28,-2,2)=1; td=37 -> volumeComponent=clamp((37-26)/11,-2,2)=1.
   // Both components hit exactly 1 with these inputs, so the resulting MVP-score delta over base is
   // directly proportional to each component's own weight (0.45 vs 0.20) -- confirms efficiency is
   // weighted ~2.25x volume, matching 45/20.

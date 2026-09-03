@@ -1,11 +1,11 @@
-import { QBS } from "../src/data/qbs.js";
+import { PLAYERS as QBS } from "../src/data/players.js";
 import { pathToFileURL } from "node:url";
 import {
   DEVELOPMENT_ATTRIBUTE_KEYS,
   advanceDevelopmentSeason,
   rollDevelopmentSpeed,
 } from "../src/sim/development.js";
-import { evaluateProspect, footballOverall } from "../src/sim/ratings.js";
+import { evaluateProspect, hitterOverall as footballOverall } from "../src/sim/ratings.js";
 
 const ATTRIBUTES = DEVELOPMENT_ATTRIBUTE_KEYS;
 const DECADES = ["1960s", "1970s", "1980s", "1990s", "2000s", "2010s", "2020s"];
@@ -190,10 +190,10 @@ function printSummary(result) {
   const line = (label, data) => console.log(
     `${label.padEnd(34)} p10 ${data.p10.toFixed(1).padStart(5)}  p50 ${data.p50.toFixed(1).padStart(5)}  p90 ${data.p90.toFixed(1).padStart(5)}  p99 ${data.p99.toFixed(1).padStart(5)}`,
   );
-  console.log(`Gridiron Lab balance audit · ${result.metadata.samples.toLocaleString()} seeded careers`);
-  line("Classic Combine grade", result.classicCombine.combineGrade);
-  line("Classic football OVR", result.classicCombine.footballOverall);
-  line("Flat-76 peak football OVR", result.flat76Development.peakOverall);
+  console.log(`Diamond Lab balance audit · ${result.metadata.samples.toLocaleString()} seeded careers`);
+  line("Classic Showcase grade", result.classicCombine.combineGrade);
+  line("Classic hitter OVR", result.classicCombine.footballOverall);
+  line("Flat-76 peak hitter OVR", result.flat76Development.peakOverall);
   console.log(`Flat-76 peak 90+${"".padEnd(21)} ${formatPercent(result.flat76Development.sharePeak90Plus)}`);
   console.log(`Flat-76 any breakout${"".padEnd(18)} ${formatPercent(result.flat76Development.shareAnyBreakout)}`);
   if (result.displayed75To76Development) {
