@@ -44,18 +44,19 @@ export function evaluateSeasonAwardScores({ ratingEdge, td, winPct, teamOverall,
   // Pro Bowl/All-Pro: same shapes as before, `winPct-0.5` swapped for `wae` in place -- both are
   // centered-on-zero fractions in the same +/-0.5 range, so the existing coefficients (10/18) still
   // mean the same thing: how many points a fully-earned (or fully-unearned) win swing is worth.
-  const proBowlScore = ratingEdge * 0.6 + Math.max(0, td - 16) * 0.45 + wae * 10;
-  const allProScore = ratingEdge * 0.75 + Math.max(0, td - 22) * 0.55 + wae * 18;
+  // Baseball: `ratingEdge` is OPS+ minus 100; `td` is home runs. Thresholds/divisors retuned from
+  // football (TD counts) to HR counts and the wider OPS+ spread.
+  const proBowlScore = ratingEdge * 0.35 + Math.max(0, td - 20) * 0.5 + wae * 10;
+  const allProScore = ratingEdge * 0.5 + Math.max(0, td - 28) * 0.6 + wae * 16;
 
   // MVP: the brief's own explicit five-bucket composite. Each component is normalized to a
   // roughly comparable +/-2 range before weighting, so the 45/20/20/10/5 split actually reflects
   // relative importance instead of being swamped by whichever raw input happens to have the
   // largest natural magnitude.
-  const efficiencyComponent = clamp(ratingEdge / 15, -2, 2);
-  // Volume centers on 20 TD (a real, productive full season, but well short of an outlier year) --
-  // unlike the old Pro Bowl/All-Pro formulas' one-sided `max(0, td-N)`, this can go negative too,
-  // since a genuine MVP case has never come from a low-volume season no matter how efficient.
-  const volumeComponent = clamp((td - 20) / 8, -2, 2);
+  const efficiencyComponent = clamp(ratingEdge / 28, -2, 2);
+  // Volume centers on ~26 HR (a real, productive full season, short of an outlier year) -- can go
+  // negative too, since a genuine MVP case rarely comes from a low-power season.
+  const volumeComponent = clamp((td - 26) / 11, -2, 2);
   const winsComponent = clamp(wae * 8, -2, 2);
   // Rewards clearing the ~85% availability bar MVP eligibility already assumes; doesn't reward
   // barely-more-than-that as heavily as missing significant time punishes it (capped at +1 vs -2).

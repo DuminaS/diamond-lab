@@ -4,7 +4,7 @@
 // one real, maintained place. Every regression test under tests/regression should build on these
 // rather than re-deriving its own click sequence.
 
-const SAVE_KEY = "gridironlab.activeCareer";
+const SAVE_KEY = "diamondlab.activeCareer";
 
 // Walks combine -> Go Pro -> decade pick -> draft night -> Start Career, optionally typing a
 // custom scouting name (used by the XSS regression test) into the identity field first. Leaves

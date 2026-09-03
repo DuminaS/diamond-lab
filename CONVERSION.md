@@ -36,15 +36,29 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [x] schemes.js — 8 hitting-approach philosophies
 - [x] awards.js (data) — baseball icons, MLB_RECORDS; checkSeason/CareerRecords call sites migrated
 
-### Phase 2 — attribute & rating core  (in progress)
-- [x] ATTRIBUTES (12 hitter tools) / groups (accuracy→hitting everywhere incl. development.js) / GROUP_LABEL/ORDER
+### Phase 2 — attribute & rating core  ✅ (draft order + prospect-field rename deferred to a cleanup pass)
+- [x] ATTRIBUTES (12 hitter tools) / groups (accuracy→hitting everywhere incl. development.js)
 - [x] LEAGUE era table → avg/obp/slg/hrRate/bbRate/kRate/paPerGame; DECADE_BLURB
-- [x] sim/ratings.js → HITTER_OVERALL_WEIGHTS (+ back-compat aliases), hitterOverall
-- [ ] STAT_CAL era ceilings/floors → AVG/OBP/SLG/HR/K/BB grounded in real record seasons
-- [ ] ERA_ATTR_MULT (era stat multipliers) — still football
-- [ ] CURVES / PRIME_CURVE / DEVELOPMENT_CURVES → hitter aging (peak 26-29)
-- [ ] draftSlotFor / chooseDraftTeam — MLB draft order
-- [ ] evaluateProspect return field footballOverall→hitterOverall (+ 3 main.js sites)
+- [x] sim/ratings.js → HITTER_OVERALL_WEIGHTS (+ aliases), hitterOverall
+- [x] STAT_CAL era ceilings/floors → avg/iso/hr/bb/k grounded in real record seasons
+- [x] ERA_ATTR_MULT → baseball offensive-environment lean per era
+- [x] CURVES / PRIME_CURVE → hitter aging (physical peak ~25-27, hitting ~28-31, mental ~31-34)
+
+### Phase 3 — season sim  ✅ core (tuning + playoffs/box-score polish remain)
+- [x] passerRating() → OPS+ index (h,pa,tb,hr,k,bb)
+- [x] QB_INFLUENCE 0.45/0.35 → 0.12/0.10 (one bat barely moves team W/L)
+- [x] generateSeason stat block → avg/iso/hr/bb/k signals → full batting line (PA/AB/H split/BB/K/HBP/SB/RBI/R/AVG/OBP/SLG/OPS/OPS+), legacy slot aliases kept
+- [x] simulateRegularSeasonGames → per-game batting line, HR decoupled from scoreboard, rush slots → SB
+- [x] simulatePlayerSeasonStats (rivals/bench) → same; RIVAL_STAT_SCALE 0.75→0.10
+- [x] computeMetricBreakdown / admin calc → new keys (labels still football-ish)
+- [x] leagueAvgRatingForDecade → 100 (era-relative OPS+)
+- [x] sim/awards.js Pro Bowl/All-Pro/MVP thresholds retuned HR/OPS+ (not TD counts)
+- [x] career.totals + rival totals carry bb/ab/2b/3b/sb/cs/rbi/runs
+- [x] smoke test: full career runs 6 seasons, no page errors, plausible .270/.340/.450-ish lines
+- [ ] simulateGameScore still produces football-scale scores (17-24, want 3-6 runs)
+- [ ] resolvePlayoffs / animatePlayoffQuarters → innings/series reveal
+- [ ] per-game gameLog HR/TB sums drift from reconciled season line (schedule tab cosmetic)
+- [ ] season-rate tuning sweep (project norm) — coefficients are first-pass
 
 ### Phase 3 — season sim
 - [ ] stat pipeline (PA/AB/H split/BB/K/RBI/R/SB → AVG/OBP/SLG/OPS/OPS+)

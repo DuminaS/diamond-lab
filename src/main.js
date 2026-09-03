@@ -74,79 +74,44 @@ import {
     "2010s":{ games:162, avg:0.255, obp:0.320, slg:0.410, hrRate:0.028, bbRate:0.079, kRate:0.204, paPerGame:4.2 },
     "2020s":{ games:162, avg:0.246, obp:0.317, slg:0.407, hrRate:0.031, bbRate:0.085, kRate:0.223, paPerGame:4.15 },
   };
-  // ---- Career stat ceilings/floors (item #7) ----
-  // Each decade's realistic per-attempt production range is grounded against an actual
-  // record-caliber season from that decade, compared to that decade's LEAGUE average above.
-  // Sources for the CEILING (best) side:
-  //   1960s — Sonny Jurgensen, 1961 (3,723 yds/32 TD, ~57% comp on ~416 att) for comp/ypa/TD;
-  //           Bart Starr, 1966 (3 INT all season) for the low-INT ceiling.
-  //   1970s — Dan Fouts, 1979 (4,082 yds, 62.6% comp — first post-merger 4,000-yard season) for
-  //           comp/ypa/INT; Fran Tarkenton, 1975 (~5.9% TD rate) for TD.
-  //   1980s — Dan Marino, 1984 (5,084 yds / 48 TD / 17 INT, 64.2% comp, 564 att) — still the
-  //           standard-bearer season decades later.
-  //   1990s — Steve Young, 1994 (70.3% comp / 35 TD / 10 INT on 461 att) for comp/TD/INT;
-  //           Warren Moon, 1991 (~4,690 yds) for ypa.
-  //   2000s — Tom Brady, 2007 (4,806 yds / 50 TD / 8 INT, 68.9% comp, 117.2 rating).
-  //   2010s — Peyton Manning, 2013 (5,477 yds / 55 TD / 10 INT, 659 att) for ypa/TD/INT;
-  //           Drew Brees, 2018 (74.4% comp — the all-time record) for comp.
-  //   2020s — Joe Burrow, 2024 (4,918 yds / 43 TD / 9 INT, 70.6% comp, 652 att) for TD/INT;
-  //           Tua Tagovailoa, 2024 (72.9% comp) for comp; Patrick Mahomes, 2022 (~8.10 ypa) for ypa.
-  // Every ceiling number below is that sourced record's rate scaled up another ~9% (the design
-  // brief's "capped at slightly [8-10% more] above the best statistical season") so a flawless
-  // 99-everywhere build, at its career-peak age, with no lucky boosts, lands AT the real record --
-  // and only variance/temp boosts can push a season past it into that last 9%.
-  // CEILINGS ACCUMULATE FORWARD ACROSS DECADES: a build drafted into the 2020s isn't limited to a
-  // 2020s-only ceiling -- it can still reach an all-time mark set in an EARLIER decade (Marino's
-  // '84 arm, Bart Starr's '66 ball security), the same way a real 2020s all-time-great could still
-  // put up a Manning-2013-caliber season even though the league's own average has moved on. So
-  // each decade's ceiling is the running best of every sourced record from that decade and every
-  // decade before it (comp/ypa/TD: running max; INT: running min, since lower is better there) --
-  // NOT reset back down just because a later decade's own record happened to be a bit lower.
-  // The FLOOR (worst) side has no equivalent clean single-season source -- nobody keeps a
-  // "worst starter of the decade" leaderboard -- so it's a flat, decade-independent, explicitly
-  // ESTIMATED ratio against league average (0.70x comp, 0.68x ypa, 0.30x TD rate, 2.3x INT rate),
-  // sanity-checked against George Blanda's real 1962 42-INT season (~10% INT rate, the actual
-  // all-time record) landing comfortably inside — not past — every decade's floor, since a
-  // 10-everywhere build should be able to be worse than any QB who was ever actually good enough
-  // to start 16 games in the NFL. The floor is NOT cumulative -- it stays per-decade, since it was
-  // never grounded in a real record to begin with.
-  // Field meaning: lo/hi are the hard clamp bounds actually passed to clamp(). up/down are the
-  // coefficients applied to the build's era/scheme-adjusted delta from a neutral (65-everywhere)
-  // baseline -- "up" when the delta is >=0 (build better than neutral), "down" when it's negative
-  // -- calibrated so a maxed or bottomed build actually reaches lo/hi instead of saturating
-  // partway there. For comp/ypa/td, hi=ceiling(best)/lo=floor(worst); for int the sense flips
-  // (lower is better), so lo=ceiling(fewest picks)/hi=floor(most picks) -- the formula sites
-  // handle that inversion, this table just stores the two numeric bounds.
+  // ---- Career stat ceilings/floors ----
+  // Each era's realistic rate-stat range is grounded against real record seasons and that era's
+  // LEAGUE average above. The season engine derives five primitives from the build's era/scheme/
+  // age-adjusted edge over a neutral (65-everywhere) baseline, then clamps each to [lo, hi]:
+  //   avg  batting average (H/AB)        iso  isolated power (SLG - AVG)
+  //   hr   home runs per plate appearance                 bb  walks per PA
+  //   k    strikeouts per PA (LOWER is better -- the formula sites invert this one, like INT was)
+  // CEILING sources (illustrative, not a certified encyclopedia): Bonds 2001 (.863 SLG, 73 HR,
+  //   .515 OBP), Bonds 2004 (.609 OBP), McGwire 1998 (.470 ISO), Brett 1980 / Gwynn 1994 (~.394
+  //   AVG), Ted Williams 1941 (.406, pre-scope), Gwynn (career ~4.5% K), Judge 2022 (62 HR).
+  // Ceilings ACCUMULATE forward across eras (a 2020s build can still reach a mark set in the
+  // 1990s); the FLOOR is a flat, era-independent estimate (nobody keeps a "worst regular" board).
+  // Field meaning matches the old table: lo/hi are the hard clamp bounds; up/down are the
+  // coefficients on the build's blended delta from neutral (up when delta>=0, down when negative).
   const STAT_CAL = {
-    "1960s": { comp:{lo:0.357,hi:0.6226,up:0.003609,down:0.003355}, ypa:{lo:4.692,hi:9.7773,up:0.10294,down:0.04506},
-      td:{lo:0.0114,hi:0.08284,up:0.0015569,down:0.0006379}, int:{lo:0.01097,hi:0.1196,up:0.0013676,down:0.0014475} },
-    "1970s": { comp:{lo:0.364,hi:0.68016,up:0.005133,down:0.003373}, ypa:{lo:4.488,hi:9.7773,up:0.1109,down:0.04346},
-      td:{lo:0.0108,hi:0.08284,up:0.0016264,down:0.0006029}, int:{lo:0.01097,hi:0.115,up:0.0013551,down:0.0013978} },
-    "1980s": { comp:{lo:0.392,hi:0.70196,up:0.004732,down:0.003182}, ypa:{lo:4.76,hi:9.8427,up:0.09702,down:0.04498},
-      td:{lo:0.0126,hi:0.09293,up:0.0018321,down:0.0005465}, int:{lo:0.01097,hi:0.0966,up:0.0009881,down:0.0010706} },
-    "1990s": { comp:{lo:0.406,hi:0.76496,up:0.006165,down:0.003295}, ypa:{lo:4.692,hi:9.8427,up:0.09601,down:0.0447},
-      td:{lo:0.0123,hi:0.09293,up:0.0019974,down:0.0005218}, int:{lo:0.01097,hi:0.0828,up:0.000863,down:0.0008897} },
-    "2000s": { comp:{lo:0.42,hi:0.76496,up:0.005809,down:0.003333}, ypa:{lo:4.76,hi:9.8427,up:0.09769,down:0.04595},
-      td:{lo:0.012,hi:0.09418,up:0.0023054,down:0.0004904}, int:{lo:0.01097,hi:0.069,up:0.000682,down:0.0007345} },
-    "2010s": { comp:{lo:0.441,hi:0.80,up:0.005986,down:0.0035}, ypa:{lo:4.896,hi:9.8427,up:0.09035,down:0.04659},
-      td:{lo:0.0123,hi:0.09418,up:0.0022065,down:0.000508}, int:{lo:0.01097,hi:0.0552,up:0.0004539,down:0.0006035} },
-    "2020s": { comp:{lo:0.4585,hi:0.80,up:0.004991,down:0.003656}, ypa:{lo:4.964,hi:9.8427,up:0.09033,down:0.04621},
-      td:{lo:0.0126,hi:0.09418,up:0.0020787,down:0.0005231}, int:{lo:0.01097,hi:0.0483,up:0.0003482,down:0.0005301} },
+    "1960s": { avg:{lo:0.195,hi:0.394,up:0.0150,down:0.0075}, iso:{lo:0.045,hi:0.330,up:0.0300,down:0.0110},
+      hr:{lo:0.0015,hi:0.078,up:0.0075,down:0.0026}, bb:{lo:0.020,hi:0.230,up:0.0210,down:0.0080}, k:{lo:0.030,hi:0.360,up:0.0130,down:0.0250} },
+    "1970s": { avg:{lo:0.198,hi:0.394,up:0.0150,down:0.0078}, iso:{lo:0.045,hi:0.340,up:0.0310,down:0.0110},
+      hr:{lo:0.0015,hi:0.080,up:0.0078,down:0.0026}, bb:{lo:0.020,hi:0.245,up:0.0220,down:0.0082}, k:{lo:0.030,hi:0.360,up:0.0130,down:0.0250} },
+    "1980s": { avg:{lo:0.200,hi:0.394,up:0.0150,down:0.0080}, iso:{lo:0.050,hi:0.360,up:0.0330,down:0.0120},
+      hr:{lo:0.0018,hi:0.086,up:0.0084,down:0.0028}, bb:{lo:0.022,hi:0.255,up:0.0230,down:0.0085}, k:{lo:0.030,hi:0.380,up:0.0135,down:0.0260} },
+    "1990s": { avg:{lo:0.200,hi:0.394,up:0.0152,down:0.0082}, iso:{lo:0.052,hi:0.430,up:0.0400,down:0.0130},
+      hr:{lo:0.0018,hi:0.100,up:0.0098,down:0.0030}, bb:{lo:0.024,hi:0.290,up:0.0260,down:0.0090}, k:{lo:0.030,hi:0.400,up:0.0150,down:0.0280} },
+    "2000s": { avg:{lo:0.200,hi:0.394,up:0.0150,down:0.0082}, iso:{lo:0.055,hi:0.470,up:0.0440,down:0.0140},
+      hr:{lo:0.0018,hi:0.112,up:0.0110,down:0.0032}, bb:{lo:0.026,hi:0.320,up:0.0290,down:0.0095}, k:{lo:0.030,hi:0.400,up:0.0150,down:0.0280} },
+    "2010s": { avg:{lo:0.198,hi:0.394,up:0.0148,down:0.0082}, iso:{lo:0.055,hi:0.470,up:0.0440,down:0.0142},
+      hr:{lo:0.0018,hi:0.112,up:0.0112,down:0.0033}, bb:{lo:0.026,hi:0.320,up:0.0290,down:0.0098}, k:{lo:0.030,hi:0.420,up:0.0160,down:0.0300} },
+    "2020s": { avg:{lo:0.195,hi:0.394,up:0.0146,down:0.0082}, iso:{lo:0.055,hi:0.470,up:0.0440,down:0.0142},
+      hr:{lo:0.0018,hi:0.115,up:0.0116,down:0.0034}, bb:{lo:0.026,hi:0.320,up:0.0290,down:0.0098}, k:{lo:0.030,hi:0.430,up:0.0165,down:0.0310} },
   };
-  // Rival QBs (simulateRivalSeasons) are driven off a single "talent" scalar instead of the
-  // player's twelve-attribute build, so they get a flatter, slightly more conservative slice of
-  // the same per-decade ceiling/floor -- a hand-built min-maxed player archetype can legitimately
-  // reach further than a randomly-generated league talent grade.
-  // Reduced from the original 0.75 (stat-realism pass): at 0.75, a merely talent~72-85 rival (not
-  // a rare outlier) already reached 4500-5300 yards at prime age with a full workload, and since
-  // ~30 rivals exist with talent naturally spread across a wide range, many clustered near the
-  // ceiling simultaneously most seasons -- a reported screenshot showed 9 QBs at once. Swept via
-  // stat_inflation_fix_sweep2.mjs against a realistic 30-rival league: 0.22 (paired with the
-  // missedGames-rate and per-rival volume-variance changes in simulatePlayerSeasonStats) brings
-  // the average from ~2.6 QBs/season >=5000 yds, ~7.2 >=4500 down to roughly ~0.7 >=5000, ~3.7
-  // >=4500 -- a large improvement, though re-verify with real in-game data if live seasons still
-  // look clustered, same as any other empirically-tuned dial in this file.
-  const RIVAL_STAT_SCALE = 0.22;
+  // Rival hitters (simulateRivalSeasons) are driven off a single "talent" scalar instead of the
+  // player's twelve-tool build. Their talent-vs-65 `delta` is RAW (not run through the player's
+  // STAT_BLEND/STAT_SENSITIVITY compression, ~0.34x), so this scale has to absorb that compression
+  // itself plus stay conservative -- a hand-built min-maxed archetype should out-hit a random
+  // league talent grade. First pass at 0.30 gave talent-90 rivals 70+ HR / .390 seasons league-
+  // wide; 0.10 brings a talent-90 to a believable ~35-40 HR / ~.300 peak. Re-verify with a seeded
+  // sweep if live seasons still cluster near the records.
+  const RIVAL_STAT_SCALE = 0.10;
 
   const ATTR_KEYS = ATTRIBUTES.map(a=>a.key);
   const ATTR_BY_KEY = Object.fromEntries(ATTRIBUTES.map(a=>[a.key,a]));
@@ -310,10 +275,15 @@ import {
     }
     return points[points.length-1][1];
   }
+  // Hitter aging: physical tools (bat speed / speed / arm / baserunning) peak early-mid 20s and
+  // fade first; hitting skill (power / contact / bat control / plate discipline) holds through the
+  // late 20s and declines gently; the mental group (pitch recognition / approach / clutch) keeps
+  // improving into the early-mid 30s and erodes the least -- the "old-player skills" that let a
+  // career run to 40.
   const CURVES = {
-    physical: [[22,0.90],[24,0.95],[27,1.00],[29,1.00],[31,0.97],[33,0.90],[35,0.80],[37,0.68],[39,0.55],[41,0.45],[43,0.35]],
-    hitting:  [[22,0.78],[24,0.86],[27,0.95],[29,1.00],[32,1.00],[34,0.97],[36,0.92],[38,0.85],[40,0.76],[42,0.65]],
-    mental:   [[22,0.65],[24,0.75],[26,0.85],[28,0.92],[30,0.97],[32,1.00],[35,1.00],[37,0.98],[39,0.94],[41,0.88],[43,0.80]],
+    physical: [[21,0.88],[23,0.95],[25,1.00],[27,1.00],[29,0.98],[31,0.93],[33,0.86],[35,0.76],[37,0.64],[39,0.52],[41,0.42]],
+    hitting:  [[21,0.80],[23,0.88],[26,0.96],[28,1.00],[31,1.00],[33,0.97],[35,0.92],[37,0.85],[39,0.76],[41,0.66]],
+    mental:   [[21,0.66],[23,0.76],[25,0.86],[27,0.93],[29,0.98],[31,1.00],[34,1.00],[36,0.98],[38,0.94],[40,0.88],[42,0.80]],
   };
   function ageMultiplier(group, age){ return curveVal(CURVES[group] || CURVES.mental, age); }
 
@@ -324,7 +294,7 @@ import {
   // well-preserved 38-year-old throws a visibly smaller season than his 27-year-old self, on
   // top of whatever the neutral comparison already accounts for. This is what makes careers
   // regress with age instead of staying statistically flat until a hard cutoff.
-  const PRIME_CURVE = [[22,0.90],[24,0.95],[26,0.99],[29,1.00],[32,1.00],[34,0.90],[36,0.78],[38,0.65],[40,0.50],[42,0.38]];
+  const PRIME_CURVE = [[21,0.86],[23,0.93],[25,0.98],[27,1.00],[30,1.00],[32,0.97],[34,0.91],[36,0.82],[38,0.71],[40,0.58],[42,0.45]];
   function primeMultiplier(age){ return curveVal(PRIME_CURVE, age); }
 
   /* ================= Development =================
@@ -729,13 +699,20 @@ import {
     return "F";
   }
 
-  function passerRating(comp, att, yards, td, int){
-    if(att<=0) return 0;
-    const a = clamp(((comp/att)-0.3)*5, 0, 2.375);
-    const b = clamp(((yards/att)-3)*0.25, 0, 2.375);
-    const c = clamp((td/att)*20, 0, 2.375);
-    const d = clamp(2.375-((int/att)*25), 0, 2.375);
-    return Math.round(((a+b+c+d)/6)*100*10)/10;
+  // Rate-quality index on the OPS+ scale (100 = league average, ~150 = MVP-caliber, ~60 = a bat
+  // that shouldn't be playing every day). Inherited name `passerRating` kept so the ~15 call
+  // sites don't churn; args are (hits, plateAppearances, totalBases, homeRuns, strikeouts, walks).
+  // `walks` is optional -- career/rival totals didn't always carry BB during the baseball
+  // conversion, so a league-ish fallback keeps old data from reading as a sub-.300 OBP.
+  function passerRating(h, pa, tb, hr, k, bb){
+    if(pa<=0) return 0;
+    const walks = bb!=null ? bb : Math.max(0, pa*0.085);
+    const hbp = pa*0.009, sf = pa*0.006;
+    const ab = Math.max(1, pa - walks - hbp - sf);
+    const obp = clamp((h + walks + hbp) / Math.max(1, ab + walks + hbp + sf), 0, 1);
+    const slg = clamp(tb / ab, 0, 4);
+    const LG_OBP = 0.328, LG_SLG = 0.410;
+    return Math.round((obp/LG_OBP + slg/LG_SLG - 1) * 100 * 10) / 10;
   }
 
   /* ================= Achievements =================
@@ -2824,43 +2801,32 @@ import {
   // rather than cluttering every record everywhere with an always-present "-0".
 
   /* ----- era style: the same build plays differently depending on when it lands -----
-     Grounded in real scheme/rule history, not a smooth gradient:
-     - MOB/IMP/PKT peak in the 1960s-70s: minimal pass-protection coaching and defenses that
-       teed off on the passer meant scrambling for your life was a survival skill, not a system.
-       They bottom out in the 2000s "prototypical pocket passer" era (Manning/Brady/Brees), the
-       peak of West Coast/Erhardt-Perkins timing offenses that had zero use for a QB who left the
-       pocket, then rebound hard in the 2010s-2020s as zone-read/RPO and now full dual-threat
-       schemes (Kaepernick/Wilson through Mahomes/Allen/Jackson/Hurts) make mobility a premium,
-       coached, MVP-caliber trait again -- not a fallback, a weapon.
-     - DUR (the attribute) is deliberately left UN-adjusted -- it's treated as a personal, timeless
-       "how tough is this specific guy" trait, not something that goes up or down with the calendar.
-       The era's actual danger level lives entirely in the separate "injury" multiplier below (which
-       checkInjuryThenPlay() applies on top of the DUR-driven base chance): leather-era/pre-facemark
-       -contact-rule brutality made every 60s/70s QB a walking injury risk, and each subsequent decade
-       of player-safety legislation (roughing-the-passer, horse-collar, low hits, targeting) made the
-       position steadily safer to play. Keeping these two separate matters: an earlier draft of this
-       table also boosted the DUR *attribute* upward in dangerous eras, which silently fought the
-       injury multiplier's own math (a higher effective DUR lowers injury chance in the formula) and
-       made the 1960s come out safer than the 2020s once both factors combined -- exactly backwards.
-     - TCH/ANT are almost absent in the 1960s-70s -- anticipation/timing passing as a coached
-       system didn't really exist before Bill Walsh's West Coast offense took hold after the 1978
-       rule changes opened up the passing game -- then climb through the 80s-2000s and hold at a
-       high plateau through today, since once that coaching lineage took over the league it never
-       left.
-     - DEC (protecting the ball, reading coverage) trends mildly upward with better film study and
-       coaching infrastructure decade over decade; PKT beyond its 60s/70s peak settles into a
-       gentle climb as offensive lines got better-coached, dipping slightly in the pure pocket-passer
-       2000s where elite protection let some QBs get away with average pocket feel.
-     - SHA, DAC, REL, CLU are left unadjusted as timeless fundamentals -- arm talent, accuracy,
-       and clutch composure aren't era-contingent the way scheme-driven traits are. */
+     Grounded in real offensive-environment history, not a smooth gradient:
+     - SHA/TCH/MOB/IMP peak in the 1960s-80s: high mounds and big parks suppressed power, so
+       contact hitting, bat control, and a running game were how you scored. They fall through the
+       1990s-2020s as the launch-angle / three-true-outcomes approach takes over and the stolen
+       base (2000s) then partly rebounds (2020s bigger bases, pickoff limits).
+     - DAC/REL (raw power, bat speed) are suppressed in the 60s-70s dead-ball environment, climb
+       through the 90s-2000s offensive surge, and stay high into the 2010s-2020s once selling out
+       for the barrel became the league-wide approach.
+     - PKT (plate discipline / working a walk) is lowest in the aggressive 60s-70s, peaks in the
+       Moneyball 2000s, and holds high after.
+     - DUR (the attribute) is deliberately left UN-adjusted -- a personal, timeless toughness
+       trait. The era's actual injury danger lives entirely in the separate "injury" multiplier
+       below (checkInjuryThenPlay applies it on top of the DUR-driven base chance): no injured
+       list, worse turf, and year-round grind made the 60s-70s far riskier, and modern sports
+       science / load management made it steadily safer.
+     - ANT/DEC/CLU are left near-neutral as timeless fundamentals -- pitch recognition, a
+       professional approach, and composure aren't era-contingent the way environment-driven
+       tools are. */
   const ERA_ATTR_MULT = {
-    "1960s": {ARM:1.15, MOB:1.20, IMP:1.05, PKT:1.10, TCH:0.70, ANT:0.75, DEC:0.95, injury:1.45},
-    "1970s": {ARM:1.12, MOB:1.15, IMP:1.05, PKT:1.20, TCH:0.72, ANT:0.78, DEC:0.92, injury:1.40},
-    "1980s": {ARM:1.05, MOB:1.00, IMP:0.95, PKT:1.05, TCH:1.05, ANT:1.05, DEC:1.00, injury:1.15},
-    "1990s": {ARM:1.00, MOB:1.05, IMP:1.00, PKT:1.00, TCH:1.05, ANT:1.05, DEC:1.10, injury:1.05},
-    "2000s": {ARM:0.98, MOB:0.85, IMP:0.90, PKT:0.95, TCH:1.10, ANT:1.10, DEC:1.08, injury:1.00},
-    "2010s": {ARM:0.97, MOB:1.05, IMP:1.05, PKT:0.92, TCH:1.10, ANT:1.10, DEC:1.05, injury:0.92},
-    "2020s": {ARM:0.95, MOB:1.25, IMP:1.15, PKT:0.90, TCH:1.08, ANT:1.08, DEC:1.05, injury:0.85},
+    "1960s": {SHA:1.12, TCH:1.10, MOB:1.15, IMP:1.12, DAC:0.78, REL:0.92, PKT:0.90, injury:1.35},
+    "1970s": {SHA:1.08, TCH:1.06, MOB:1.16, IMP:1.14, DAC:0.82, REL:0.94, PKT:0.94, injury:1.28},
+    "1980s": {SHA:1.04, TCH:1.02, MOB:1.12, IMP:1.12, DAC:0.92, REL:0.98, PKT:1.00, injury:1.15},
+    "1990s": {SHA:1.02, TCH:1.00, MOB:1.00, IMP:1.00, DAC:1.06, REL:1.02, PKT:1.06, injury:1.05},
+    "2000s": {SHA:1.04, TCH:1.02, MOB:0.88, IMP:0.90, DAC:1.12, REL:1.04, PKT:1.10, injury:1.00},
+    "2010s": {SHA:0.94, TCH:0.92, MOB:1.00, IMP:1.00, DAC:1.10, REL:1.08, PKT:1.00, injury:0.92},
+    "2020s": {SHA:0.90, TCH:0.88, MOB:1.10, IMP:1.06, DAC:1.12, REL:1.10, PKT:1.06, injury:0.85},
   };
   function eraAdjust(eff, decade){
     const mult = ERA_ATTR_MULT[decade] || {};
@@ -3043,7 +3009,8 @@ import {
       year: draftYear,
       seasonNumber: 1,
       seasonLog: [],
-      totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, sacks:0, proBowls:0, allPros:0, mvps:0, rings:0, earnings:0, rushYards:0, rushTd:0 },
+      totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, sacks:0, proBowls:0, allPros:0, mvps:0, rings:0, earnings:0, rushYards:0, rushTd:0,
+        bb:0, ab:0, hbp:0, sf:0, doubles:0, triples:0, sb:0, cs:0, rbi:0, runs:0 },
       contract: { apy: rookieApy, years: 4, tier: "rookie" },
       badStreak: 0,
       forcedOut: false,
@@ -3417,7 +3384,11 @@ import {
   // personal stat line) -- see missedGamesBackup/genericMissedGames below for how that split is
   // decided and reported back to generateSeason().
   function simulateRegularSeasonGames({ schedule, gamesPlayed, missedGamesBackup, genericMissedGames,
-      incumbentWinRate, incumbentId, incumbentName, effOverall, comp, ypa, tdRate, intRate, attPerGame, perfMult, effRush, sackRate, age, decade }){
+      incumbentWinRate, incumbentId, incumbentName, effOverall, comp, ypa, tdRate, intRate, bbRate, attPerGame, perfMult, effRush, sackRate, age, decade }){
+    // Baseball reinterpretation of the slot names: comp = hits-per-PA, ypa = total-bases-per-PA,
+    // tdRate = HR-per-PA, intRate = K-per-PA, bbRate = BB-per-PA, sackRate = GIDP-per-PA, attPerGame
+    // = PA per game, effRush = stolen-base signal.
+    bbRate = bbRate || 0.08;
     const mySlots = schedule.weeks
       .map((pairs, wIdx)=>{
         const pair = pairs.find(([a,b])=>a===career.teamId || b===career.teamId);
@@ -3446,7 +3417,7 @@ import {
 
     const myOff = regularSeasonOffenseGrade(effOverall, age, decade);
     const games = [];
-    let tComp=0,tAtt=0,tYards=0,tTd=0,tInt=0,tSacks=0,tRushAtt=0,tRushYards=0,tRushTd=0,wins=0,ties=0,started=0,personalTies=0;
+    let tComp=0,tAtt=0,tYards=0,tTd=0,tInt=0,tSacks=0,tBb=0,tRushAtt=0,tRushYards=0,tRushTd=0,wins=0,ties=0,started=0,personalTies=0;
     let backupWins=0, backupLosses=0, incumbentWins=0, incumbentLosses=0;
     mySlots.forEach((slot, idx)=>{
       const oppId = slot.opponentId;
@@ -3477,7 +3448,7 @@ import {
           opponentGrade: Math.round(oppGrade), opponentQbId: oppRival?oppRival.id:null,
           opponentQbName: oppRival?oppRival.name:null, opponentQbOverall: oppRival?rivalEffTalent(oppRival):null,
           won: isTie?null:won, tie: isTie, myScore: isTie?winnerScore:(won?winnerScore:loserScore), oppScore: isTie?loserScore:(won?loserScore:winnerScore),
-          comp:0, att:0, yards:0, td:0, int:0, sacks:0, rushAtt:0, rushYards:0, rushTd:0, startedByBackup:true,
+          comp:0, att:0, yards:0, td:0, int:0, sacks:0, bb:0, rushAtt:0, rushYards:0, rushTd:0, startedByBackup:true,
           qbId: isIncumbent ? incumbentId : null, qbName: isIncumbent ? incumbentName : null });
         return;
       }
@@ -3491,32 +3462,26 @@ import {
       if(scoreSim.tie){ ties++; personalTies++; } else if(won) wins++;
       bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won: scoreSim.tie?false:won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
 
-      // per-game noise ranges are all built to average to exactly 1.0x the season rate over a
-      // full season, so summed game logs land on the same season totals the old single-formula
-      // approach produced -- this only adds game-to-game texture, it doesn't change the mean.
-      const gAtt = Math.max(4, Math.round(attPerGame*(0.72+Math.random()*0.56)));
-      const gComp = clamp(Math.round(gAtt*clamp(comp+(Math.random()-0.5)*0.16, 0.15, 0.97)*perfMult), 0, gAtt);
-      const gYards = Math.max(0, Math.round(gAtt*clamp(ypa*(0.7+Math.random()*0.6), 0, 20)*perfMult));
-      const gInt = Math.max(0, Math.round(gAtt*clamp(intRate*(0.2+Math.random()*1.6), 0, 1)*(2-perfMult)));
-      const gSacks = Math.max(0, Math.round(gAtt*clamp(sackRate*(0.3+Math.random()*1.4), 0, 1)));
+      // A hitter's box line for this game. Per-game noise averages to 1.0x the season rate over a
+      // full slate, so summed game logs land on the same season totals -- this only adds texture.
+      // Deliberately NOT tied to this game's run total (unlike the old scoreboard-coupled TD rule):
+      // one bat's HR/hits aren't the team's runs.
+      const gAtt = Math.max(2, Math.round(attPerGame*(0.55+Math.random()*0.9)));   // PA
+      const gComp = clamp(Math.round(gAtt*clamp(comp*(0.35+Math.random()*1.3), 0, 0.9)*perfMult), 0, gAtt);   // hits
+      const gYards = Math.max(gComp, Math.round(gAtt*clamp(ypa*(0.3+Math.random()*1.55), 0, 3.2)*perfMult));   // total bases
+      const gInt = Math.max(0, Math.round(gAtt*clamp(intRate*(0.2+Math.random()*1.7), 0, 0.9)*(2-perfMult))); // strikeouts
+      const gBb = Math.max(0, Math.round(gAtt*clamp(bbRate*(0.25+Math.random()*1.6), 0, 0.7)));               // walks
+      const gSacks = Math.max(0, Math.round(gAtt*clamp(sackRate*(0.2+Math.random()*2.0), 0, 0.5)));           // GIDP
+      const gTd = clamp(Math.round(gAtt*clamp(tdRate*(0.15+Math.random()*2.2), 0, 0.5)*perfMult), 0, Math.max(1,gComp)); // HR
 
-      const gRushAttPerGame = clamp((effRush-45)*0.14, 0.2, 9.5);
-      const gRushAtt = Math.max(0, Math.round(gRushAttPerGame*(0.5+Math.random()*1.0)));
-      const gRushYpc = clamp(3.4 + (effRush-55)*0.045, 1.8, 7.8);
-      const gRushYards = gRushAtt>0 ? Math.max(0, Math.round(gRushAtt*gRushYpc*(0.6+Math.random()*0.8)*perfMult)) : 0;
-      // Wave 7 (task #3, scenario #24 "scoreboard-and-qb-touchdowns-reconcile"): gTd/gRushTd are now
-      // derived from THIS game's own real scoreboard offensive TD count (scoreSim.myTds), never
-      // independently rolled from tdRate -- the confirmed "per-game QB passing touchdowns are
-      // generated independently from the scoreboard's offensive touchdowns" defect. Allocation
-      // matches the existing, documented rule generateGameBoxScore already uses for a fabricated
-      // single-game line: every offensive TD this game is credited to the QB, as either a pass or
-      // (18% chance, only when there's a rush attempt to attach it to) a QB rush -- this sim has no
-      // separately-tracked RB/WR entities to attribute a TD to instead, so passing+rushing TDs
-      // always exactly equal the scoreboard's offensive TD count for this game, never more.
-      const gRushTd = gRushAtt>0 && scoreSim.myTds>0 && Math.random()<0.18 ? 1 : 0;
-      const gTd = clamp(scoreSim.myTds - gRushTd, 0, scoreSim.myTds);
+      // Stolen bases: effRush is the SB signal. Attempts per game run ~0..0.9, success ~62-90%.
+      const gRushAttPerGame = clamp((effRush-58)*0.010, 0, 0.9);
+      const gRushAtt = Math.max(0, Math.round(gRushAttPerGame*(0.3+Math.random()*1.7)));
+      const gSbSuccess = clamp(0.62 + (effRush-60)*0.006, 0.45, 0.92);
+      const gRushYards = gRushAtt>0 ? Math.min(gRushAtt, Math.round(gRushAtt*gSbSuccess + (Math.random()<0.5?0:1))) : 0; // SB made
+      const gRushTd = 0;
 
-      tComp+=gComp; tAtt+=gAtt; tYards+=gYards; tTd+=gTd; tInt+=gInt; tSacks+=gSacks;
+      tComp+=gComp; tAtt+=gAtt; tYards+=gYards; tTd+=gTd; tInt+=gInt; tSacks+=gSacks; tBb+=gBb;
       tRushAtt+=gRushAtt; tRushYards+=gRushYards; tRushTd+=gRushTd;
 
       games.push({ week: slot.week, opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
@@ -3525,10 +3490,10 @@ import {
         opponentQbName: oppRival ? oppRival.name : null,
         opponentQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
         won, tie: !!scoreSim.tie, myScore: scoreSim.myTotal, oppScore: scoreSim.oppTotal,
-        comp: gComp, att: gAtt, yards: gYards, td: gTd, int: gInt, sacks: gSacks,
+        comp: gComp, att: gAtt, yards: gYards, td: gTd, int: gInt, sacks: gSacks, bb: gBb,
         rushAtt: gRushAtt, rushYards: gRushYards, rushTd: gRushTd });
     });
-    return { games, comp:tComp, att:tAtt, yards:tYards, td:tTd, int:tInt, sacks:tSacks,
+    return { games, comp:tComp, att:tAtt, yards:tYards, td:tTd, int:tInt, sacks:tSacks, bb:tBb,
       rushAtt:tRushAtt, rushYards:tRushYards, rushTd:tRushTd, wins, losses: started-wins-personalTies, ties,
       backupWins, backupLosses, incumbentWins, incumbentLosses };
   }
@@ -4027,8 +3992,13 @@ import {
   // This does NOT touch how the QB's own passing STATS (yards/TD/rating) are generated -- those
   // still come from effOverall vs. neutralOverall alone (see generateSeason/STAT_BLEND/
   // STAT_SENSITIVITY) -- only the win/loss engine's offensive grade input changes here.
-  const QB_INFLUENCE_REGULAR = 0.45;
-  const QB_INFLUENCE_PLAYOFF = 0.35;
+  // One hitter is ~1/9 of a lineup and doesn't touch defense or pitching at all, so his personal
+  // grade moves team wins far less than a quarterback's did (0.45/0.35). A superstar bat still
+  // meaningfully lifts a team; a replacement-level one still drags a little -- but the roster
+  // around him, and above all the pitching, decides the season. Retune via a seeded win-rate
+  // sweep before changing (project norm), same as the QB values were.
+  const QB_INFLUENCE_REGULAR = 0.12;
+  const QB_INFLUENCE_PLAYOFF = 0.10;
   function blendOffenseWithTeam(effOverall, teamStrength, qbInfluence){
     return teamStrength + (effOverall-teamStrength)*qbInfluence;
   }
@@ -5708,20 +5678,23 @@ import {
     // 0 ("met expectations"), which would make the shared earned-breakthrough path structurally
     // unreachable for AI regardless of any gating, not just rare. This is the one piece Wave 1 left
     // unaddressed in "one shared development model for the player and AI."
-    const expectedComp = clamp(league.comp + delta*(delta>=0?cal.comp.up:cal.comp.down)*RIVAL_STAT_SCALE, cal.comp.lo, cal.comp.hi);
-    const expectedYpa = clamp(league.ypa + delta*(delta>=0?cal.ypa.up:cal.ypa.down)*RIVAL_STAT_SCALE, cal.ypa.lo, cal.ypa.hi);
-    const expectedTdRate = clamp(league.tdRate + delta*(delta>=0?cal.td.up:cal.td.down)*RIVAL_STAT_SCALE, cal.td.lo, cal.td.hi);
-    const expectedIntRate = clamp(league.intRate - delta*(delta>=0?cal.int.up:cal.int.down)*RIVAL_STAT_SCALE, cal.int.lo, cal.int.hi);
+    const lgIso = Math.max(0.05, league.slg - league.avg);
+    const expectedComp = clamp(league.avg + delta*(delta>=0?cal.avg.up:cal.avg.down)*RIVAL_STAT_SCALE, cal.avg.lo, cal.avg.hi);       // AVG
+    const expectedYpa  = clamp(lgIso + delta*(delta>=0?cal.iso.up:cal.iso.down)*RIVAL_STAT_SCALE, cal.iso.lo, cal.iso.hi);            // ISO
+    const expectedTdRate = clamp(league.hrRate + delta*(delta>=0?cal.hr.up:cal.hr.down)*RIVAL_STAT_SCALE, cal.hr.lo, cal.hr.hi);      // HR/PA
+    const expectedBbRate = clamp(league.bbRate + delta*(delta>=0?cal.bb.up:cal.bb.down)*RIVAL_STAT_SCALE, cal.bb.lo, cal.bb.hi);      // BB/PA
+    const expectedIntRate = clamp(league.kRate - delta*(delta>=0?cal.k.up:cal.k.down)*RIVAL_STAT_SCALE, cal.k.lo, cal.k.hi);          // K/PA
     // Bell-shaped, mean 0, in [-1,1] -- the same three-uniform-average technique used for devSpeed
     // and for the balance audit's own ordinary-variance model (see scripts/balance-audit.mjs).
     const performanceIndexRoll = clamp(((Math.random()+Math.random()+Math.random())/3)*2-1, -1, 1);
     const perfSwingMultiplier = clamp(1 + performanceIndexRoll*0.22, 0.78, 1.22);
-    const comp = clamp(expectedComp*perfSwingMultiplier, cal.comp.lo, cal.comp.hi);
-    const ypa = clamp(expectedYpa*perfSwingMultiplier, cal.ypa.lo, cal.ypa.hi);
-    const tdRate = clamp(expectedTdRate*perfSwingMultiplier, cal.td.lo, cal.td.hi);
-    const intRate = clamp(expectedIntRate*(2-perfSwingMultiplier), cal.int.lo, cal.int.hi);
+    const avgR = clamp(expectedComp*perfSwingMultiplier, cal.avg.lo, cal.avg.hi);
+    const isoR = clamp(expectedYpa*perfSwingMultiplier, cal.iso.lo, cal.iso.hi);
+    const hrRateR = clamp(expectedTdRate*perfSwingMultiplier, cal.hr.lo, cal.hr.hi);
+    const bbRateR = clamp(expectedBbRate*perfSwingMultiplier, cal.bb.lo, cal.bb.hi);
+    const kRateR = clamp(expectedIntRate*(2-perfSwingMultiplier), cal.k.lo, cal.k.hi);
     if(entity.volumeLean==null) entity.volumeLean = rollVolumeLean();
-    const attPerGame = clamp(league.attPerGame + entity.volumeLean*12 + randInt(-2,2), 18, 45);
+    const attPerGame = clamp(league.paPerGame + entity.volumeLean*0.45 + randInt(-1,1)*0.15, 2.4, 4.9);
     // forcedGames (Part C of the bench-realism fix): when a caller already knows exactly how many
     // real games this entity played -- specifically a bench QB inheriting the starter's own missed
     // games as his relief appearances -- use that directly instead of rolling an independent
@@ -5758,12 +5731,30 @@ import {
     }
     entity.availability = missedGames>0 ? { reason: availabilityReason, label: availabilityLabel, gamesMissed: missedGames, year } : null;
     const gamesPlayed = forcedGames!=null ? clamp(forcedGames, 0, league.games) : clamp(league.games - missedGames, 0, league.games);
-    const attempts = Math.round(attPerGame*gamesPlayed);
-    const completions = Math.round(attempts*comp);
-    const yards = Math.round(attempts*ypa);
-    const td = Math.max(0, Math.round(attempts*tdRate));
-    const interceptions = Math.max(0, Math.round(attempts*intRate));
-    const rating = passerRating(completions, attempts, yards, td, interceptions);
+    const pa = Math.round(attPerGame*gamesPlayed);
+    const walks = Math.max(0, Math.round(pa*bbRateR));
+    const hbp = Math.round(pa*0.009), sf = Math.round(pa*0.006);
+    const ab = Math.max(0, pa - walks - hbp - sf);
+    const hits = clamp(Math.round(ab*avgR), 0, ab);
+    const hr = clamp(Math.round(pa*hrRateR), 0, hits);
+    const strikeouts = Math.max(0, Math.round(pa*kRateR));
+    const tbTarget = Math.round(ab*(avgR+isoR));
+    let doubles = clamp(Math.round((tbTarget - hits - 3*hr)/2), 0, Math.max(0, hits-hr));
+    const triples = clamp(Math.round((entity.talent-72)*0.05 + Math.random()*3), 0, Math.max(0, hits-hr-doubles));
+    const singles = Math.max(0, hits - hr - doubles - triples);
+    const tbActual = singles + 2*doubles + 3*triples + 4*hr;
+    const sbAtt = Math.max(0, Math.round(gamesPlayed * clamp((entity.talent-70)*0.006, 0, 0.55)));
+    const sb = Math.round(sbAtt*0.72), cs = Math.max(0, sbAtt - sb);
+    const obp = clamp((hits+walks+hbp)/Math.max(1, ab+walks+hbp+sf), 0, 1);
+    const slg = ab>0 ? tbActual/ab : 0;
+    const thin = pa < 25;
+    const opsPlus = thin ? 0 : Math.round(100*(obp/Math.max(0.001,league.obp) + slg/Math.max(0.001,league.slg) - 1));
+    const rbi = thin ? 0 : Math.max(0, Math.round(hr*1.5 + doubles*0.55 + triples*0.5 + singles*0.19 + (entity.talent-65)*0.4));
+    const runs = thin ? 0 : Math.max(0, Math.round((hits+walks)*0.33 + hr*0.5 + sb*0.24 + (entity.talent-65)*0.3));
+    // Legacy slot aliases (att=PA, comp=hits, yards=TB, td=HR, int=K) so shared distribution and
+    // render code keeps working.
+    const attempts = pa, completions = hits, yards = tbActual, td = hr, interceptions = strikeouts;
+    const rating = opsPlus;
     // This is a placeholder win/loss, used only to feed evaluateSeasonAwards below -- the CALLER
     // (simulateRivalSeasons/simulateDepthChartSeasons) overwrites season.wins/losses/winPct right
     // after this returns with an EXACT count from the real per-game schedule
@@ -5785,7 +5776,7 @@ import {
     // without recomputing it a second time or drifting from a slightly different formula.
     const performance = evaluatePerformanceOverExpectation({
       actual: { attempts, completions, yards, touchdowns: td, interceptions },
-      expected: { completionPct: expectedComp, yardsPerAttempt: expectedYpa, touchdownRate: expectedTdRate, interceptionRate: expectedIntRate },
+      expected: { completionPct: expectedComp, yardsPerAttempt: (expectedComp+expectedYpa), touchdownRate: expectedTdRate, interceptionRate: expectedIntRate },
       leagueGames: league.games,
     });
     // nextBreakthroughMomentum (called from developEntityTalent, right after this returns) needs
@@ -5798,7 +5789,9 @@ import {
     // season (an incumbent planned for zero games, or any other zero-relief-weeks edge case) skips
     // that call entirely, which used to leave this season row with no ties field at all.
     const season = { year, age: entity.age, teamId: entity.teamId, games: gamesPlayed, comp: completions, att: attempts,
-      pct: attempts>0?completions/attempts:0, yards, td, int: interceptions, rating, wins, losses, ties:0, awards,
+      pct: ab>0?hits/ab:0, yards, td, int: interceptions, rating, wins, losses, ties:0, awards,
+      pa, ab, hits, singles, doubles, triples, hr, bb: walks, hbp, sf, k: strikeouts, sb, cs, rbi, runs,
+      avg: ab>0?hits/ab:0, obp, slg, ops: obp+slg, opsPlus,
       proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible, performance };
     // Wave 2B (MASTER_REMEDIATION_SPEC.md, Section 3 invariant #6 / Section 7 required design #4):
     // a (qbId, year) pair must never get a second season row. This used to be reachable for real --
@@ -5821,6 +5814,14 @@ import {
     entity.totals.games += gamesPlayed; entity.totals.comp += completions; entity.totals.att += attempts;
     entity.totals.yards += yards; entity.totals.td += td; entity.totals.int += interceptions;
     entity.totals.wins += wins; entity.totals.losses += losses;
+    entity.totals.bb = (entity.totals.bb||0) + walks;
+    entity.totals.ab = (entity.totals.ab||0) + ab;
+    entity.totals.doubles = (entity.totals.doubles||0) + doubles;
+    entity.totals.triples = (entity.totals.triples||0) + triples;
+    entity.totals.sb = (entity.totals.sb||0) + sb;
+    entity.totals.cs = (entity.totals.cs||0) + cs;
+    entity.totals.rbi = (entity.totals.rbi||0) + rbi;
+    entity.totals.runs = (entity.totals.runs||0) + runs;
     // Pro Bowl/All-Pro/MVP totals are incremented once, league-wide, by
     // resolveSeasonAllProAndProBowl/resolveSeasonMVP after every QB's season this year is locked in
     // -- bench players are never in that pool (they're not in career.leagueRivals), so their
@@ -6499,18 +6500,29 @@ import {
     const schemeId = career.teamScheme ? career.teamScheme[career.teamId] : null;
     const eff = schemeEffective(career.age, decade, schemeId);
 
-    const effAcc = weighted(eff, {SHA:0.40, TCH:0.25, DAC:0.20, ANT:0.15});
-    const effYpa = weighted(eff, {ARM:0.35, DAC:0.35, TCH:0.15, IMP:0.15});
-    const effTd  = weighted(eff, {ANT:0.40, DEC:0.30, TCH:0.30});
-    const effInt = weighted(eff, {DEC:0.50, ANT:0.30, PKT:0.20});
+    // Tool signals -> season rate stats. Each pulls from a concentrated subset of the 12 tools;
+    // effK's sense is "higher signal = FEWER strikeouts" (the formula site inverts it, the way INT
+    // was handled). See STAT_CAL near LEAGUE for the era ceilings these feed.
+    const AVG_W = {SHA:0.40, TCH:0.25, ANT:0.20, DEC:0.15};
+    const ISO_W = {DAC:0.55, REL:0.30, TCH:0.15};
+    const HR_W  = {DAC:0.62, REL:0.30, ANT:0.08};
+    const BB_W  = {PKT:0.52, ANT:0.28, DEC:0.20};
+    const K_W   = {SHA:0.34, TCH:0.30, ANT:0.24, DEC:0.12};
+    const SPEED_W = {MOB:0.62, IMP:0.34, ARM:0.04};
+    const effAcc = weighted(eff, AVG_W);   // batting-average signal
+    const effYpa = weighted(eff, ISO_W);   // isolated-power signal
+    const effTd  = weighted(eff, HR_W);    // home-run-rate signal
+    const effInt = weighted(eff, K_W);     // contact (anti-strikeout) signal
+    const effBb  = weighted(eff, BB_W);    // walk-rate signal
     const effOverall = weighted(eff, OVERALL_WEIGHTS);
-    const effRush = weighted(eff, {MOB:0.60, IMP:0.30, ARM:0.10});
+    const effRush = weighted(eff, SPEED_W); // stolen-base / baserunning signal
 
     const neutral = neutralEffective(career.age, decade, schemeId);
-    const neutralAcc = weighted(neutral, {SHA:0.40, TCH:0.25, DAC:0.20, ANT:0.15});
-    const neutralYpa = weighted(neutral, {ARM:0.35, DAC:0.35, TCH:0.15, IMP:0.15});
-    const neutralTd  = weighted(neutral, {ANT:0.40, DEC:0.30, TCH:0.30});
-    const neutralInt = weighted(neutral, {DEC:0.50, ANT:0.30, PKT:0.20});
+    const neutralAcc = weighted(neutral, AVG_W);
+    const neutralYpa = weighted(neutral, ISO_W);
+    const neutralTd  = weighted(neutral, HR_W);
+    const neutralInt = weighted(neutral, K_W);
+    const neutralBb  = weighted(neutral, BB_W);
     const neutralOverall = weighted(neutral, OVERALL_WEIGHTS);
     // independent age-expression cap (see primeMultiplier) — applied to the deltas below, not
     // to the neutral baseline itself, so league-average stays league-average at every age and
@@ -6560,7 +6572,8 @@ import {
     // coefficients that saturated well short of realistic decade-relative production).
     const cal = STAT_CAL[decade] || STAT_CAL["2000s"];
     const dCompRaw = (effAcc-neutralAcc)*primeMult, dYpaRaw = (effYpa-neutralYpa)*primeMult,
-      dTdRaw = (effTd-neutralTd)*primeMult, dIntRaw = (effInt-neutralInt)*primeMult;
+      dTdRaw = (effTd-neutralTd)*primeMult, dIntRaw = (effInt-neutralInt)*primeMult,
+      dBbRaw = (effBb-neutralBb)*primeMult;
     // Blend each narrow per-stat delta with the broad effOverall delta. The per-stat formulas
     // above each pull from a small, concentrated subset of attributes (YPA only cares about
     // ARM/DAC/TCH/IMP, for instance), so a build can max out one of those subsets -- swinging
@@ -6595,27 +6608,35 @@ import {
     // ~55-65 overall now tops out well shy of 90 rating even on a hot-streak season (was ~87-91
     // before this pass, itself down from routinely 100+ pre-Round-2), ~75-80 caps out high-90s,
     // and a truly maxed 99-everywhere build's ceiling comes down from ~120 to ~112 rating.
-    const STAT_SENSITIVITY = 0.32;
-    const dComp = (dCompRaw*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
-    const dYpa = (dYpaRaw*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
-    const dTd = (dTdRaw*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
-    const dInt = (dIntRaw*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
-    // Weapons is a small, independent nudge on top of the QB's own accuracy/arm attributes --
-    // better skill-position talent means more YAC and more room for error, but it can't turn a bad
-    // arm into a good one, so this stays a modest post-hoc addition rather than folded into the
-    // main dComp/dYpa blend above.
+    const STAT_SENSITIVITY = 0.34;
+    const blendD = raw => (raw*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
+    const dComp = blendD(dCompRaw); // AVG
+    const dYpa  = blendD(dYpaRaw);  // ISO
+    const dTd   = blendD(dTdRaw);   // HR rate
+    const dInt  = blendD(dIntRaw);  // contact (fewer K)
+    const dBb   = blendD(dBbRaw);   // BB rate
+    // The lineup around him (career.weapons) is a small independent nudge -- a better supporting
+    // cast means more hittable counts and more RBI chances, but can't turn a weak bat into a
+    // strong one, so it stays a modest post-hoc addition, not folded into the main blend.
     const weaponsNudge = (safeNum(career.weapons,60)-65);
     const chemistryNudge = teamChemistryEdge();
-    const comp = clamp(league.comp + dComp*(dComp>=0?cal.comp.up:cal.comp.down) + weaponsNudge*0.0006 + chemistryNudge*0.00035, cal.comp.lo, cal.comp.hi);
-    const ypa = clamp(league.ypa + dYpa*(dYpa>=0?cal.ypa.up:cal.ypa.down) + weaponsNudge*0.008 + chemistryNudge*0.006, cal.ypa.lo, cal.ypa.hi);
-    const tdRate = clamp(league.tdRate + dTd*(dTd>=0?cal.td.up:cal.td.down), cal.td.lo, cal.td.hi);
-    const intRate = clamp(league.intRate - dInt*(dInt>=0?cal.int.up:cal.int.down), cal.int.lo, cal.int.hi);
-    let attPerGame = clamp((league.attPerGame - (eff.MOB-neutral.MOB)*0.05 + dOverall*0.06 + randInt(-2,2)) * roleShare, 4, 48);
-    // Sack rate leans on pocket presence (individual) and the O-line grade specifically -- not
-    // generic team strength, since a good team can absolutely have a bad line (see the Supporting
-    // Cast system) -- a good pocket passer behind a good line gets sacked less than league-average,
-    // a statue behind a bad one gets sacked a lot more.
-    const sackRate = clamp(0.075 - (eff.PKT-neutral.PKT)*0.0012 - (safeNum(career.oline,60)-65)*0.0006, 0.015, 0.16);
+    const lgIso = Math.max(0.05, league.slg - league.avg);
+    const avgRate = clamp(league.avg + dComp*(dComp>=0?cal.avg.up:cal.avg.down) + weaponsNudge*0.0005 + chemistryNudge*0.0003, cal.avg.lo, cal.avg.hi);
+    const isoRate = clamp(lgIso + dYpa*(dYpa>=0?cal.iso.up:cal.iso.down) + weaponsNudge*0.0009, cal.iso.lo, cal.iso.hi);
+    const hrRate = clamp(league.hrRate + dTd*(dTd>=0?cal.hr.up:cal.hr.down), cal.hr.lo, cal.hr.hi);
+    const bbRate = clamp(league.bbRate + dBb*(dBb>=0?cal.bb.up:cal.bb.down) + weaponsNudge*0.0002, cal.bb.lo, cal.bb.hi);
+    const kRate  = clamp(league.kRate - dInt*(dInt>=0?cal.k.up:cal.k.down), cal.k.lo, cal.k.hi);
+    // Per-plate-appearance rates fed into the shared game engine (which multiplies each by that
+    // game's PA count). AB is ~91% of PA, so per-PA hit/TB rates are the per-AB AVG/SLG scaled down.
+    const abShare = clamp(1 - bbRate - 0.015, 0.7, 0.97);
+    const comp = clamp(avgRate * abShare, 0.05, 0.60);              // hits per PA
+    const ypa  = clamp((avgRate + isoRate) * abShare, 0.05, 1.60);  // total bases per PA
+    const tdRate = hrRate;                                          // HR per PA
+    const intRate = kRate;                                          // K per PA
+    let attPerGame = clamp((league.paPerGame + dOverall*0.010 + randInt(-1,1)*0.12) * roleShare, 2.4, 4.9);
+    // GIDP rate reuses the old "sackRate" plumbing slot -- a slow, ground-ball-prone hitter rolls
+    // into more double plays; a fast one beats them out.
+    const sackRate = clamp(0.022 - (effRush-60)*0.00035 + (isoRate>0.20 ? 0.003 : 0), 0.004, 0.05);
 
     const perfMult = 1 - perfPenalty*0.01;
     // the team's season doesn't stop when this QB is hurt — a generic backup covers the missed
@@ -6638,15 +6659,50 @@ import {
       schedule, gamesPlayed, missedGamesBackup, genericMissedGames, incumbentWinRate,
       incumbentId: career._backupUsagePlan ? career._backupUsagePlan.qbId : null,
       incumbentName: backupIncumbentName,
-      effOverall, comp, ypa, tdRate, intRate, attPerGame, perfMult, effRush, sackRate,
+      effOverall, comp, ypa, tdRate, intRate, bbRate, attPerGame, perfMult, effRush, sackRate,
       age: career.age, decade,
     });
     const gameLog = regSeason.games, wins = regSeason.wins, losses = regSeason.losses, ties = regSeason.ties||0;
+    // Legacy slot names kept so the ~50 render sites still read: att=PA, comp=hits, yards=total
+    // bases, td=HR, int=K, sacks=GIDP, rushAtt=SB attempts, rushYards=SB, rushTd=(unused, 0).
     const attempts = regSeason.att, completions = regSeason.comp, yards = regSeason.yards,
       td = regSeason.td, interceptions = regSeason.int, sacks = regSeason.sacks,
       rushAtt = regSeason.rushAtt, rushYards = regSeason.rushYards, rushTd = regSeason.rushTd;
-    const rating = passerRating(completions, attempts, yards, td, interceptions);
-    // Ties QOL: real NFL winPct formula -- a tie counts as half a win, half a loss.
+    const walks = regSeason.bb || 0;
+
+    // ---- Derive the full batting line ----
+    // The season's power output (isoRate*AB = extra bases beyond singles) is split into HR / 2B /
+    // 3B here rather than trusting the per-game HR slot, so ISO and HR can never disagree (an
+    // earlier pass produced .478-SLG / 0-HR seasons because the two were computed independently).
+    const pa = attempts;
+    const hbp = Math.round(pa*0.009), sf = Math.round(pa*0.006);
+    const ab = Math.max(0, pa - walks - hbp - sf);
+    const hits = clamp(completions, 0, ab);
+    const strikeouts = interceptions;
+    const powerBases = Math.max(0, Math.round(isoRate * ab)); // 2B + 2*3B + 3*HR
+    const hrShare = clamp(0.26 + (effTd - neutralTd)*0.006, 0.12, 0.46); // pull-power vs. gap-power lean
+    const hr = clamp(Math.round(powerBases * hrShare / 3), 0, Math.max(0, hits - 3));
+    const triples = clamp(Math.round((effRush-64)*0.09 + Math.random()*2.4), 0, Math.max(0, hits - hr));
+    let doublesN = Math.round(powerBases*(1-hrShare) - 2*triples);
+    doublesN = clamp(doublesN, 0, Math.max(0, hits - hr - triples));
+    const singles = Math.max(0, hits - hr - triples - doublesN);
+    const totalBases = singles + 2*doublesN + 3*triples + 4*hr;
+    const tbActual = totalBases;
+    const sb = rushYards, cs = Math.max(0, rushAtt - rushYards);
+    const avg = ab>0 ? hits/ab : 0;
+    const obp = clamp((hits+walks+hbp) / Math.max(1, ab+walks+hbp+sf), 0, 1);
+    const slg = ab>0 ? tbActual/ab : 0;
+    const ops = obp+slg;
+    const thin = pa < 25; // a lost season -- injury/suspension/blocked; no rate stats
+    const opsPlus = thin ? 0 : Math.round(100*(obp/Math.max(0.001,league.obp) + slg/Math.max(0.001,league.slg) - 1));
+    const rbi = thin ? 0 : Math.max(0, Math.round(hr*1.55 + doublesN*0.55 + triples*0.55 + singles*0.19 + (eff.CLU-65)*0.30 + weaponsNudge*0.55));
+    const runs = thin ? 0 : Math.max(0, Math.round((hits+walks)*0.33 + hr*0.55 + sb*0.24 + weaponsNudge*0.45));
+    const rating = opsPlus;
+    // Reconciled legacy aliases -- these, not the raw per-game slot sums, are what the season
+    // object and career totals store (comp=hits, yards=total bases, td=HR, int=K).
+    const completionsFinal = hits, yardsFinal = totalBases, tdFinal = hr, intFinal = strikeouts;
+    // "winPct" here is really the player's team's win rate over the games he was in the lineup --
+    // kept for every award/HOF/record path that still reads it. A tie counts as half.
     const winPct = gamesPlayed>0 ? (wins+0.5*ties)/gamesPlayed : 0;
     const backupWins = regSeason.backupWins, backupLosses = regSeason.backupLosses;
     const incumbentWins = regSeason.incumbentWins, incumbentLosses = regSeason.incumbentLosses;
@@ -6661,7 +6717,7 @@ import {
     // starting QB in the league, which is what makes the League tab's award rates an honest
     // cross-check against the player's own instead of two formulas that only look similar.
     const { awards, ratingEdge, leagueAvgRating, gamesPlayedShare, proBowlScore, proBowlEligible, allProScore, allProEligible, mvpScore, mvpEligible } = evaluateSeasonAwards({
-      rating, td, winPct, attempts, gamesPlayed, leagueGames: league.games, decade,
+      rating, td: tdFinal, winPct, attempts, gamesPlayed, leagueGames: league.games, decade,
       teamOverall: career.teamStrength,
     });
 
@@ -6671,9 +6727,12 @@ import {
 
     const season = {
       year: career.year, age: career.age, teamId: career.teamId, teamName: teamNameAt(career.teamId, career.year),
-      decade, games: gamesPlayed, comp: completions, att: attempts, pct: attempts>0?completions/attempts:0,
-      yards, td, int: interceptions, sacks, rating, wins, losses, ties,
+      decade, games: gamesPlayed, comp: completionsFinal, att: attempts, pct: avg,
+      yards: yardsFinal, td: tdFinal, int: intFinal, sacks, rating, wins, losses, ties,
       rushAtt, rushYards, rushTd, gameLog,
+      // real batting line
+      pa, ab, hits, singles, doubles: doublesN, triples, hr, bb: walks, hbp, sf, k: strikeouts,
+      sb, cs, rbi, runs, avg, obp, slg, ops, opsPlus,
       teamGames: league.games, teamWins: wins+backupWins+incumbentWins, teamLosses: losses+backupLosses+incumbentLosses, teamTies: ties, missedGames,
       missedGamesInjury, missedGamesSuspension, missedGamesBackup,
       incumbentName: backupIncumbentName,
@@ -6800,10 +6859,21 @@ import {
       }
     }
 
-    career.totals.games += gamesPlayed; career.totals.comp += completions; career.totals.att += attempts;
-    career.totals.yards += yards; career.totals.td += td; career.totals.int += interceptions; career.totals.sacks += sacks;
+    career.totals.games += gamesPlayed; career.totals.comp += completionsFinal; career.totals.att += attempts;
+    career.totals.yards += yardsFinal; career.totals.td += tdFinal; career.totals.int += intFinal; career.totals.sacks += sacks;
     career.totals.rushYards += rushYards; career.totals.rushTd += rushTd;
     career.totals.earnings += career.contract.apy;
+    // real batting totals (comp=hits, att=PA, yards=TB, td=HR, int=K carry the aliases above)
+    career.totals.bb = (career.totals.bb||0) + walks;
+    career.totals.ab = (career.totals.ab||0) + ab;
+    career.totals.hbp = (career.totals.hbp||0) + hbp;
+    career.totals.sf = (career.totals.sf||0) + sf;
+    career.totals.doubles = (career.totals.doubles||0) + doublesN;
+    career.totals.triples = (career.totals.triples||0) + triples;
+    career.totals.sb = (career.totals.sb||0) + sb;
+    career.totals.cs = (career.totals.cs||0) + cs;
+    career.totals.rbi = (career.totals.rbi||0) + rbi;
+    career.totals.runs = (career.totals.runs||0) + runs;
 
     // Catches any season-level statistical achievement the moment this season's stat line locks in.
     checkAchievements();
@@ -11141,9 +11211,10 @@ import {
   }
 
   function leagueAvgRatingForDecade(decade){
-    const l = LEAGUE[decade];
-    const att = 500;
-    return passerRating(Math.round(att*l.comp), att, Math.round(att*l.ypa), Math.round(att*l.tdRate), Math.round(att*l.intRate));
+    // Season opsPlus is era-relative (computed against that era's own league OBP/SLG in
+    // generateSeason / simulatePlayerSeasonStats), so a league-average regular is 100 in every
+    // era by construction. ratingEdge = rating - 100.
+    return 100;
   }
 
   // Round 32 item 5: factored out of hofVerdict() (which was hardcoded to career.totals/
@@ -11678,61 +11749,66 @@ import {
     const neutral = neutralEffective(career.age, decade, schemeId);
     const primeMult = primeMultiplier(career.age);
 
+    // Baseball rate signals -- kept in sync with generateSeason's AVG_W/ISO_W/HR_W/BB_W/K_W.
     const W = {
-      acc: {SHA:0.40, TCH:0.25, DAC:0.20, ANT:0.15},
-      ypa: {ARM:0.35, DAC:0.35, TCH:0.15, IMP:0.15},
-      td:  {ANT:0.40, DEC:0.30, TCH:0.30},
-      int: {DEC:0.50, ANT:0.30, PKT:0.20},
-      rush:{MOB:0.60, IMP:0.30, ARM:0.10},
+      acc: {SHA:0.40, TCH:0.25, ANT:0.20, DEC:0.15},   // AVG
+      ypa: {DAC:0.55, REL:0.30, TCH:0.15},             // ISO
+      td:  {DAC:0.62, REL:0.30, ANT:0.08},             // HR rate
+      int: {SHA:0.34, TCH:0.30, ANT:0.24, DEC:0.12},   // contact (anti-K)
+      bb:  {PKT:0.52, ANT:0.28, DEC:0.20},             // BB rate
+      rush:{MOB:0.62, IMP:0.34, ARM:0.04},             // SB signal
     };
     const effAcc = weighted(eff, W.acc), neutralAcc = weighted(neutral, W.acc);
     const effYpa = weighted(eff, W.ypa), neutralYpa = weighted(neutral, W.ypa);
     const effTd  = weighted(eff, W.td),  neutralTd  = weighted(neutral, W.td);
     const effInt = weighted(eff, W.int), neutralInt = weighted(neutral, W.int);
+    const effBb  = weighted(eff, W.bb),  neutralBb  = weighted(neutral, W.bb);
     const effOverall = weighted(eff, OVERALL_WEIGHTS), neutralOverall = weighted(neutral, OVERALL_WEIGHTS);
     const effRush = weighted(eff, W.rush);
 
-    // Per-decade, real-record-grounded ceilings/floors -- see the STAT_CAL constant near LEAGUE
-    // for the sourced seasons and full methodology (this replaced a flat, non-decade-aware set of
-    // coefficients that saturated well short of realistic decade-relative production).
-    const cal = STAT_CAL[decade] || STAT_CAL["2000s"];
-    // Mirrors the STAT_BLEND fix in generateSeason -- see that function for the full rationale.
-    // Kept in sync here so this preview never drifts from what a real season actually rolls.
+    const calRaw = STAT_CAL[decade] || STAT_CAL["2000s"];
+    // alias so the existing rateCard renderer's d.cal.comp/ypa/td/int keys still resolve
+    const cal = { comp: calRaw.avg, ypa: calRaw.iso, td: calRaw.hr, int: calRaw.k, bb: calRaw.bb };
     const dOverall = (effOverall-neutralOverall)*primeMult;
-    const STAT_BLEND = 0.18;
-    const STAT_SENSITIVITY = 0.32;
-    const dComp = (((effAcc-neutralAcc)*primeMult)*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
-    const dYpa = (((effYpa-neutralYpa)*primeMult)*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
-    const dTd = (((effTd-neutralTd)*primeMult)*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
-    const dInt = (((effInt-neutralInt)*primeMult)*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
+    const STAT_BLEND = 0.30;
+    const STAT_SENSITIVITY = 0.34;
+    const blendD = raw => (raw*STAT_BLEND + dOverall*(1-STAT_BLEND))*STAT_SENSITIVITY;
+    const dComp = blendD((effAcc-neutralAcc)*primeMult);
+    const dYpa  = blendD((effYpa-neutralYpa)*primeMult);
+    const dTd   = blendD((effTd-neutralTd)*primeMult);
+    const dInt  = blendD((effInt-neutralInt)*primeMult);
+    const dBb   = blendD((effBb-neutralBb)*primeMult);
     const weaponsNudge = (safeNum(career.weapons,60)-65);
     const chemistryNudge = teamChemistryEdge();
-    const comp = clamp(league.comp + dComp*(dComp>=0?cal.comp.up:cal.comp.down) + weaponsNudge*0.0006 + chemistryNudge*0.00035, cal.comp.lo, cal.comp.hi);
-    const ypa = clamp(league.ypa + dYpa*(dYpa>=0?cal.ypa.up:cal.ypa.down) + weaponsNudge*0.008 + chemistryNudge*0.006, cal.ypa.lo, cal.ypa.hi);
-    const tdRate = clamp(league.tdRate + dTd*(dTd>=0?cal.td.up:cal.td.down), cal.td.lo, cal.td.hi);
-    const intRate = clamp(league.intRate - dInt*(dInt>=0?cal.int.up:cal.int.down), cal.int.lo, cal.int.hi);
-    const sackRate = clamp(0.075 - (eff.PKT-neutral.PKT)*0.0012 - (safeNum(career.oline,60)-65)*0.0006, 0.015, 0.16);
+    const lgIso = Math.max(0.05, league.slg - league.avg);
+    const comp = clamp(league.avg + dComp*(dComp>=0?cal.comp.up:cal.comp.down) + weaponsNudge*0.0005 + chemistryNudge*0.0003, cal.comp.lo, cal.comp.hi);   // AVG
+    const ypa = clamp(lgIso + dYpa*(dYpa>=0?cal.ypa.up:cal.ypa.down) + weaponsNudge*0.0009, cal.ypa.lo, cal.ypa.hi);                                       // ISO
+    const tdRate = clamp(league.hrRate + dTd*(dTd>=0?cal.td.up:cal.td.down), cal.td.lo, cal.td.hi);                                                        // HR/PA
+    const bbRate = clamp(league.bbRate + dBb*(dBb>=0?cal.bb.up:cal.bb.down), cal.bb.lo, cal.bb.hi);                                                        // BB/PA
+    const intRate = clamp(league.kRate - dInt*(dInt>=0?cal.int.up:cal.int.down), cal.int.lo, cal.int.hi);                                                  // K/PA
+    const sackRate = clamp(0.022 - (effRush-60)*0.00035, 0.004, 0.05);
 
     const roleShareRange = career.contract.tier==="minimum" ? [0.1,0.6] : career.contract.tier==="backup" ? [0.3,0.85] : [1,1];
     const roleShare = (roleShareRange[0]+roleShareRange[1])/2;
-    const attPerGameBase = league.attPerGame - (eff.MOB-neutral.MOB)*0.05 + dOverall*0.06;
-    const attPerGame = clamp(attPerGameBase*roleShare, 4, 48);
+    const attPerGameBase = league.paPerGame + dOverall*0.010;
+    const attPerGame = clamp(attPerGameBase*roleShare, 2.4, 4.9);
 
     const expGames = league.games;
-    const expAttempts = Math.round(attPerGame*expGames);
-    const expComp = Math.round(expAttempts*comp);
-    const expYards = Math.round(expAttempts*ypa);
-    const expTd = Math.max(0, Math.round(expAttempts*tdRate));
-    const expInt = Math.max(0, Math.round(expAttempts*intRate));
-    const expRating = passerRating(expComp, expAttempts, expYards, expTd, expInt);
+    const abShare = clamp(1 - bbRate - 0.015, 0.7, 0.97);
+    const expAttempts = Math.round(attPerGame*expGames);         // PA
+    const expComp = Math.round(expAttempts*abShare*comp);        // hits
+    const expYards = Math.round(expAttempts*abShare*(comp+ypa)); // total bases
+    const expTd = Math.max(0, Math.round(expAttempts*tdRate));   // HR
+    const expInt = Math.max(0, Math.round(expAttempts*intRate)); // K
+    const expRating = passerRating(expComp, expAttempts, expYards, expTd, expInt, Math.round(expAttempts*bbRate));
 
-    const rushAttPerGame = clamp((effRush-45)*0.14, 0.2, 9.5);
-    const rushYpc = clamp(3.4 + (effRush-55)*0.045, 1.8, 7.8);
-    const rushTdRate = clamp(0.018 + (effRush-55)*0.0006, 0.004, 0.09);
-    const expRushAtt = Math.round(rushAttPerGame*expGames);
-    const expRushYards = Math.max(0, Math.round(expRushAtt*rushYpc));
-    const expRushTd = Math.max(0, Math.round(expRushAtt*rushTdRate));
-    const expSacks = Math.max(0, Math.round(expAttempts*sackRate));
+    const rushAttPerGame = clamp((effRush-58)*0.010, 0, 0.9);
+    const rushYpc = clamp(0.62 + (effRush-60)*0.006, 0.45, 0.92); // SB success rate
+    const rushTdRate = 0;
+    const expRushAtt = Math.round(rushAttPerGame*expGames);       // SB attempts
+    const expRushYards = Math.max(0, Math.round(expRushAtt*rushYpc)); // SB
+    const expRushTd = 0;
+    const expSacks = Math.max(0, Math.round(expAttempts*sackRate));  // GIDP
 
     // Same engine every real game now uses (simulateGameScore vs. an opponent's team grade, see
     // regularSeasonOffenseGrade) -- this preview shows the per-game win odds against a
@@ -11762,8 +11838,10 @@ import {
     const expectedWinPct = expectedWinPctForTeamOverall(career.teamStrength);
 
     return {
-      decade, league, schemeId, scheme, eff, neutral, primeMult, W, cal,
-      effAcc, neutralAcc, effYpa, neutralYpa, effTd, neutralTd, effInt, neutralInt,
+      decade,
+      league: { ...league, comp: league.avg, ypa: Math.max(0.05, league.slg-league.avg), tdRate: league.hrRate, intRate: league.kRate, bbRate: league.bbRate, attPerGame: league.paPerGame },
+      schemeId, scheme, eff, neutral, primeMult, W, cal,
+      effAcc, neutralAcc, effYpa, neutralYpa, effTd, neutralTd, effInt, neutralInt, effBb, neutralBb,
       effOverall, neutralOverall, effRush,
       comp, ypa, tdRate, intRate, sackRate, expSacks, roleShare, roleShareRange, attPerGame, chemistryNudge,
       expGames, expAttempts, expComp, expYards, expTd, expInt, expRating,
@@ -11791,11 +11869,11 @@ import {
     const leagueRefRows = DECADES.map(dk=>{
       const l = LEAGUE[dk];
       const cur = d && d.decade===dk;
-      return `<tr class="${cur?"calc-ref-current":""}"><td>${dk}${cur?" ← current":""}</td><td>${l.games}</td><td>${fmtPct(l.comp)}</td><td>${l.ypa.toFixed(1)}</td><td>${(l.tdRate*100).toFixed(2)}%</td><td>${(l.intRate*100).toFixed(2)}%</td><td>${l.attPerGame}</td></tr>`;
+      return `<tr class="${cur?"calc-ref-current":""}"><td>${dk}${cur?" ← current":""}</td><td>${l.games}</td><td>${l.avg.toFixed(3)}</td><td>${l.obp.toFixed(3)}</td><td>${l.slg.toFixed(3)}</td><td>${(l.hrRate*100).toFixed(1)}%</td><td>${(l.kRate*100).toFixed(1)}%</td></tr>`;
     }).join("");
     const refTable = `
       <div class="calc-refnote">Every season starts from this decade's league-wide baseline rate, then shifts up or down based on how far the build's effective attributes sit above or below a flat, hypothetical "65-everywhere" neutral build run through that same age/era/scheme adjustment. That's why a rookie-year age penalty or a run-first 1970s era doesn't read as "bad build" on its own -- only a genuinely below-average build does.</div>
-      <div class="admin-table-wrap"><table class="calc-ref-table"><thead><tr><th>Decade</th><th>Games</th><th>Comp%</th><th>Y/A</th><th>TD%</th><th>INT%</th><th>Att/G</th></tr></thead><tbody>${leagueRefRows}</tbody></table></div>`;
+      <div class="admin-table-wrap"><table class="calc-ref-table"><thead><tr><th>Era</th><th>Games</th><th>AVG</th><th>OBP</th><th>SLG</th><th>HR%</th><th>K%</th></tr></thead><tbody>${leagueRefRows}</tbody></table></div>`;
 
     if(!d){
       return `<div class="admin-note">Start a career to see every formula below worked out with real, substituted numbers. The league reference table is always available.</div>
