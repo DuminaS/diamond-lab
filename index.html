@@ -30,24 +30,17 @@
 
   <!-- MENU -->
   <section class="screen active" id="screen-menu">
-    <div class="intro">
+    <div class="menu-actions">
+      <button class="btn btn-primary" id="startBtn">Start the combine</button>
+      <button class="btn btn-ghost" id="trophyRoomBtn">Trophy Room</button>
+      <button class="btn btn-ghost" id="achievementsBtn">Achievements</button>
+      <button class="btn btn-ghost" id="multiplayerBtn">Multiplayer</button>
+    </div>
+
+    <div class="intro" style="margin-top:1.5rem;">
       <h1>Draft twelve legends.<br>Build one QB.</h1>
       <p class="lede">Every round hands you a decade and a real quarterback skill. Pick the best passer football has ever produced for that skill — then take your build to the Combine, and if it grades out, into a simulated career: draft night, trades, injuries, MVPs, and a Hall of Fame verdict at the end.</p>
     </div>
-
-    <div class="section-label">Mode</div>
-    <div class="mode-toggle" role="radiogroup" aria-label="Game mode">
-      <button type="button" class="active" data-mode="classic" role="radio" aria-checked="true">Classic</button>
-      <button type="button" data-mode="blind" role="radio" aria-checked="false">Blind</button>
-    </div>
-    <p class="mode-help" id="modeHelp">Classic shows every rating up front. Pick with the numbers in front of you.</p>
-
-    <div class="section-label">Key Moments <span class="km-beta-tag">Beta</span></div>
-    <label class="km-toggle-row" for="keyMomentsToggle">
-      <input type="checkbox" id="keyMomentsToggle">
-      <span>Enable the skill-based Key Moment mini-game during playoff games</span>
-    </label>
-    <p class="mode-help">On big playoff possessions, read the scouting report and call the right play. Odds of one coming up scale with your build's Clutch. Off by default — toggle on to try it.</p>
 
     <div class="stat-row">
       <span><b id="statQbCount">80</b> quarterbacks scouted</span>
@@ -55,17 +48,36 @@
       <span><b>12</b> attributes per prospect</span>
     </div>
 
-    <div class="menu-actions" style="margin-top:1.75rem;">
-      <button class="btn btn-primary" id="startBtn">Start the combine</button>
-      <button class="btn btn-ghost" id="trophyRoomBtn">Trophy Room</button>
-      <button class="btn btn-ghost" id="achievementsBtn">Achievements</button>
-      <button class="btn btn-ghost" id="multiplayerBtn">Multiplayer</button>
-    </div>
-
     <div class="active-career-strip" id="activeCareerStrip"></div>
     <div class="active-career-strip" id="multiplayerMatchesStrip"></div>
     <div class="best-strip" id="bestStrip"></div>
     <div class="last-build-strip" id="lastBuildStrip"></div>
+  </section>
+
+  <!-- COMBINE SETUP: mode + Key Moments, asked right before the combine actually starts (solo path only -- multiplayer's own lobby screens ask their own equivalent options). -->
+  <section class="screen" id="screen-combine-setup">
+    <div class="section-label">Before you start</div>
+    <h2 style="font-size:clamp(1.6rem,5vw,2.2rem);">Set your options.</h2>
+    <p class="lede" style="margin-top:0.6rem;">These apply to this Combine and the career that follows it.</p>
+
+    <div class="section-label" style="margin-top:1.5rem;">Mode</div>
+    <div class="mode-toggle" role="radiogroup" aria-label="Game mode">
+      <button type="button" class="active" data-mode="classic" role="radio" aria-checked="true">Classic</button>
+      <button type="button" data-mode="blind" role="radio" aria-checked="false">Blind</button>
+    </div>
+    <p class="mode-help" id="modeHelp">Classic shows every rating up front. Pick with the numbers in front of you.</p>
+
+    <div class="section-label" style="margin-top:1.5rem;">Key Moments <span class="km-beta-tag">Beta</span></div>
+    <label class="km-toggle-row" for="keyMomentsToggle">
+      <input type="checkbox" id="keyMomentsToggle">
+      <span>Enable the skill-based Key Moment mini-game during playoff games</span>
+    </label>
+    <p class="mode-help">On big playoff possessions, read the scouting report and call the right play. Odds of one coming up scale with your build's Clutch. Off by default — toggle on to try it.</p>
+
+    <div class="menu-actions" style="margin-top:1.75rem;">
+      <button class="btn btn-primary" id="combineSetupBeginBtn">Begin the Combine</button>
+      <button class="btn btn-ghost" id="combineSetupBackBtn">Back to menu</button>
+    </div>
   </section>
 
   <!-- DRAFT (COMBINE) -->
@@ -284,6 +296,17 @@
       <div class="section-label">Your match code</div>
       <div class="mp-code-display" id="mpCreateCodeText"></div>
       <p class="mode-help">Share this with your opponent. Don't watch each other's screen or stream until you've both locked in a build — this game can't enforce that for you, it's on the honor system.</p>
+
+      <div class="section-label" style="margin-top:1.25rem;">Mode</div>
+      <p class="mode-help">Multiplayer is always played <b>Blind</b> — ratings hidden, best player available on name and reputation alone. No respins, either: whatever four options a round hands you is what you're picking from.</p>
+
+      <div class="section-label" style="margin-top:1rem;">Key Moments <span class="km-beta-tag">Beta</span></div>
+      <label class="km-toggle-row" for="mpCreateKeyMomentsToggle">
+        <input type="checkbox" id="mpCreateKeyMomentsToggle">
+        <span>Enable the skill-based Key Moment mini-game during playoff games</span>
+      </label>
+      <p class="mode-help">A personal preference for your own career only — off by default.</p>
+
       <div class="menu-actions" style="margin-top:1rem;">
         <button class="btn btn-ghost" id="mpCreateCopyBtn">Copy code</button>
         <button class="btn btn-primary" id="mpCreateStartBtn">Start My Combine</button>
@@ -309,6 +332,15 @@
 
     <div id="mpJoinConfirmPanel" style="display:none; margin-top:1rem;">
       <p class="mode-help" id="mpJoinConfirmText"></p>
+      <p class="mode-help">Multiplayer is always played <b>Blind</b> — ratings hidden, best player available on name and reputation alone. No respins, either.</p>
+
+      <div class="section-label" style="margin-top:1rem;">Key Moments <span class="km-beta-tag">Beta</span></div>
+      <label class="km-toggle-row" for="mpJoinKeyMomentsToggle">
+        <input type="checkbox" id="mpJoinKeyMomentsToggle">
+        <span>Enable the skill-based Key Moment mini-game during playoff games</span>
+      </label>
+      <p class="mode-help">A personal preference for your own career only — off by default.</p>
+
       <div class="menu-actions" style="margin-top:1rem;">
         <button class="btn btn-primary" id="mpJoinStartBtn">Start My Combine</button>
       </div>

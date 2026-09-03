@@ -6,6 +6,8 @@ test("combine exposes football OVR and draft order influences destination", asyn
   await installSeededRandom(page, 0xD4A47);
   await page.goto("/");
   await page.click("#startBtn");
+  await page.waitForSelector("#combineSetupBeginBtn", { timeout: 10_000 });
+  await page.click("#combineSetupBeginBtn");
   for (let round = 0; round < 12; round++) {
     await page.waitForSelector(".player-card", { timeout: 10_000 });
     // Pick the best visible value so this reliably exercises an early-round prospect.

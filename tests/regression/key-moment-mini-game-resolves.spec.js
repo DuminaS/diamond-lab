@@ -41,10 +41,13 @@ test("key-moment-mini-game-resolves-and-updates-the-record", async ({ page }) =>
   // expected consequence of adding a new per-season numeric effect, not a defect in either wave.
   await installSeededRandom(page, 3003);
   await page.goto("/");
-  // Enable the Key Moments beta toggle on the menu screen before starting the combine.
+  await page.click("#startBtn");
+  // Mode + Key Moments now live on the Combine Setup screen shown right before the Combine itself
+  // starts, not a persistent menu-level toggle -- enable it there before beginning.
+  await page.waitForSelector("#combineSetupBeginBtn", { timeout: 10_000 });
   const kmToggle = page.locator("#keyMomentsToggle");
   if (await kmToggle.count()) await kmToggle.check();
-  await page.click("#startBtn");
+  await page.click("#combineSetupBeginBtn");
   for (let i = 0; i < 12; i++) {
     await page.waitForSelector(".player-card", { timeout: 10_000 });
     await page.click(".player-card >> nth=0");

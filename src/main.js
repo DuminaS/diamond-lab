@@ -1841,6 +1841,12 @@ import {
     activeCareerKey = SOLO_ACTIVE_CAREER_KEY;
     currentMultiplayerContext = null;
     restoreRandom();
+    // Multiplayer force-sets cs.mode="blind" without ever touching the Combine Setup screen's own
+    // toggle (it never shows that screen) -- reset back to the plain default here so a solo Combine
+    // right after a multiplayer match doesn't silently inherit a forced-blind mode the player never
+    // actually chose. cs itself is declared further down but already initialized by the time any
+    // click handler can call this.
+    cs.mode = "classic";
   }
   let _lastCheckpoint = null;
   // Pure -- never mutates `raw` in place (spreads into new objects instead), and never rolls fresh
@@ -2109,6 +2115,7 @@ import {
   /* ================= Screens ================= */
   const screens = {
     menu: document.getElementById("screen-menu"),
+    combineSetup: document.getElementById("screen-combine-setup"),
     draft: document.getElementById("screen-draft"),
     results: document.getElementById("screen-results"),
     careerSetup: document.getElementById("screen-career-setup"),
@@ -2157,6 +2164,21 @@ import {
       document.getElementById("modeHelp").textContent = modeHelpText[cs.mode];
     });
   });
+  // The Combine Setup screen's own toggle only updates cs.mode/its own visible "active" state when
+  // CLICKED -- nothing re-syncs the displayed button to cs.mode's actual current value when the
+  // screen is simply shown again. Without this, a multiplayer combine (which force-sets
+  // cs.mode="blind" without touching this UI at all, since it never shows this screen) could leave
+  // a LATER solo Combine Setup visit still visually showing "Classic" while cs.mode was actually
+  // still "blind" underneath. Called every time the solo entry points show this screen.
+  function syncModeToggleDisplay(){
+    document.querySelectorAll(".mode-toggle button").forEach(b=>{
+      const active = b.dataset.mode===cs.mode;
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-checked", active?"true":"false");
+    });
+    const helpEl = document.getElementById("modeHelp");
+    if(helpEl) helpEl.textContent = modeHelpText[cs.mode] || modeHelpText.classic;
+  }
 
   function renderBestStrip(){
     const best = loadBest();
@@ -2166,9 +2188,13 @@ import {
     el.innerHTML = `Best combine grade <b>${best.score}</b> (${best.grade}) — best career: <b>${best.careerVerdict || "—"}</b>`;
   }
 
-  document.getElementById("startBtn").addEventListener("click", ()=>{ resetToSoloSession(); startCombine(); });
+  // Mode + Key Moments are asked on a dedicated Combine Setup screen right before the Combine
+  // itself starts, not as a persistent menu-level toggle -- both solo entry points funnel here now.
+  document.getElementById("startBtn").addEventListener("click", ()=>{ resetToSoloSession(); syncModeToggleDisplay(); showScreen("combineSetup"); });
   document.getElementById("brandHome").addEventListener("click", ()=>{ resetToSoloSession(); renderBestStrip(); renderLastBuildStrip(); renderActiveCareerStrip(); renderMultiplayerMatchesStrip(); showScreen("menu"); });
-  document.getElementById("playAgainBtn").addEventListener("click", ()=>{ resetToSoloSession(); startCombine(); });
+  document.getElementById("playAgainBtn").addEventListener("click", ()=>{ resetToSoloSession(); syncModeToggleDisplay(); showScreen("combineSetup"); });
+  document.getElementById("combineSetupBeginBtn").addEventListener("click", ()=> startCombine());
+  document.getElementById("combineSetupBackBtn").addEventListener("click", ()=>{ renderBestStrip(); renderLastBuildStrip(); renderActiveCareerStrip(); renderMultiplayerMatchesStrip(); showScreen("menu"); });
 
   function startCombine(){
     cs.order = shuffle(ATTRIBUTES);
@@ -2176,8 +2202,13 @@ import {
     cs.picks = [];
     // Respins are a scarce resource for the WHOLE combine, not a per-round freebie: one respin of
     // the round's era and one respin of its player options, total, across all 12 rounds.
-    cs.respinEraLeft = 1;
-    cs.respinPlayersLeft = 1;
+    // Multiplayer: no "run it back" -- every respin route (the free ones and the ad-earned bonus
+    // pool) is zeroed out, so both players face the exact same single set of candidates each round
+    // with no way to reroll toward a better one. renderRound()/renderWatchAdRespinBtn() hide the
+    // whole respin row entirely in this case rather than just showing disabled buttons at "(0)".
+    const inMultiplayer = !!currentMultiplayerContext;
+    cs.respinEraLeft = inMultiplayer ? 0 : 1;
+    cs.respinPlayersLeft = inMultiplayer ? 0 : 1;
     cs.bonusRespinLeft = 0;
     cs.adWatchesUsed = 0;
     renderYardTicks();
@@ -2213,13 +2244,18 @@ import {
     document.getElementById("yardFill").style.width = pct+"%";
     cs.order.forEach((a,i)=>{ const t=document.getElementById("tick-"+i); if(t) t.classList.toggle("done", i<cs.round); });
 
-    const eraBtn = document.getElementById("respinEraBtn");
-    const playersBtn = document.getElementById("respinPlayersBtn");
-    eraBtn.disabled = cs.respinEraLeft<=0 && cs.bonusRespinLeft<=0;
-    playersBtn.disabled = (cs.respinPlayersLeft<=0 && cs.bonusRespinLeft<=0) || decadePool(cs.currentDecade).length<=cs.currentCandidates.length;
-    document.getElementById("respinEraCount").textContent = "("+(cs.respinEraLeft+cs.bonusRespinLeft)+")";
-    document.getElementById("respinPlayersCount").textContent = "("+(cs.respinPlayersLeft+cs.bonusRespinLeft)+")";
-    renderWatchAdRespinBtn();
+    // Multiplayer: hide the respin UI entirely rather than just disabling it at "(0)" -- see
+    // startCombine's own comment on why respins are zeroed out for a multiplayer session.
+    document.querySelectorAll(".respin-row").forEach(row=> row.style.display = currentMultiplayerContext ? "none" : "");
+    if(!currentMultiplayerContext){
+      const eraBtn = document.getElementById("respinEraBtn");
+      const playersBtn = document.getElementById("respinPlayersBtn");
+      eraBtn.disabled = cs.respinEraLeft<=0 && cs.bonusRespinLeft<=0;
+      playersBtn.disabled = (cs.respinPlayersLeft<=0 && cs.bonusRespinLeft<=0) || decadePool(cs.currentDecade).length<=cs.currentCandidates.length;
+      document.getElementById("respinEraCount").textContent = "("+(cs.respinEraLeft+cs.bonusRespinLeft)+")";
+      document.getElementById("respinPlayersCount").textContent = "("+(cs.respinPlayersLeft+cs.bonusRespinLeft)+")";
+      renderWatchAdRespinBtn();
+    }
 
     renderCards();
   }
@@ -2485,6 +2521,7 @@ import {
   document.getElementById("mpCreateBtn").addEventListener("click", ()=>{
     mpCreateDecadeIndex = null; mpCreateSeed = null; mpCreateCode = null;
     document.getElementById("mpCreateCodePanel").style.display = "none";
+    document.getElementById("mpCreateKeyMomentsToggle").checked = KeyMomentSettings.isEnabled();
     renderMpCreateDecadeGrid();
     showScreen("mpCreate");
   });
@@ -2492,6 +2529,7 @@ import {
   document.getElementById("mpCreateCopyBtn").addEventListener("click", ()=> copyText(mpCreateCode, document.getElementById("mpCreateCopyBtn")));
   document.getElementById("mpCreateStartBtn").addEventListener("click", ()=>{
     if(mpCreateCode==null) return;
+    KeyMomentSettings.setEnabled(document.getElementById("mpCreateKeyMomentsToggle").checked);
     beginMultiplayerCombine(mpCreateCode, mpCreateSeed, mpCreateDecadeIndex, "A");
   });
 
@@ -2501,6 +2539,7 @@ import {
     document.getElementById("mpJoinCodeInput").value = "";
     document.getElementById("mpJoinError").style.display = "none";
     document.getElementById("mpJoinConfirmPanel").style.display = "none";
+    document.getElementById("mpJoinKeyMomentsToggle").checked = KeyMomentSettings.isEnabled();
     mpJoinDecoded = null;
     showScreen("mpJoin");
   });
@@ -2526,15 +2565,19 @@ import {
   document.getElementById("mpJoinStartBtn").addEventListener("click", ()=>{
     if(!mpJoinDecoded) return;
     const code = document.getElementById("mpJoinCodeInput").value.trim().toUpperCase();
+    KeyMomentSettings.setEnabled(document.getElementById("mpJoinKeyMomentsToggle").checked);
     beginMultiplayerCombine(code, mpJoinDecoded.seed, mpJoinDecoded.decadeIndex, "B");
   });
 
   // Shared by Create's and Join's "Start My Combine": installs the shared seed, points saves at
-  // this match's own namespaced key so it can't collide with any other save on this device, then
-  // runs the ordinary solo combine flow completely unchanged from here on.
+  // this match's own namespaced key so it can't collide with any other save on this device, forces
+  // Blind mode (multiplayer is never Classic -- best player available on name/reputation alone is
+  // the whole point of a fair blind draft), then runs the ordinary solo combine flow -- unchanged
+  // from here on except that startCombine() itself zeroes out respins for a multiplayer context.
   function beginMultiplayerCombine(matchId, seed, decadeIndex, slot){
     currentMultiplayerContext = { matchId, slot, seed, decadeIndex };
     activeCareerKey = multiplayerSaveKey(matchId, slot);
+    cs.mode = "blind";
     installSeededRandom(seed);
     startCombine();
   }
@@ -10264,9 +10307,13 @@ import {
       document.getElementById("playOnBtn").addEventListener("click", beginOffseason);
       document.getElementById("retireBtn").addEventListener("click", ()=>{ career.exitReason="retired"; finishCareer(); });
     } else {
-      actions.innerHTML = `<button class="btn btn-primary" id="continueBtn">Plan offseason &amp; continue</button>${tradeBtnHtml}<button class="btn btn-ghost" id="fastForwardBtn">Fast-Forward ⏩</button>`;
+      // Multiplayer: no Fast-Forward -- each season is meant to be played through deliberately,
+      // not skipped in bulk, matching the "no respins either" restriction on the Combine side.
+      const ffBtnHtml = career.multiplayerMatchId ? "" : `<button class="btn btn-ghost" id="fastForwardBtn">Fast-Forward ⏩</button>`;
+      actions.innerHTML = `<button class="btn btn-primary" id="continueBtn">Plan offseason &amp; continue</button>${tradeBtnHtml}${ffBtnHtml}`;
       document.getElementById("continueBtn").addEventListener("click", beginOffseason);
-      document.getElementById("fastForwardBtn").addEventListener("click", startFastForward);
+      const ffBtn = document.getElementById("fastForwardBtn");
+      if(ffBtn) ffBtn.addEventListener("click", startFastForward);
     }
     const reqTradeBtn = document.getElementById("reqTradeBtn");
     if(reqTradeBtn) reqTradeBtn.addEventListener("click", requestTrade);

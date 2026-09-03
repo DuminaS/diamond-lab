@@ -34,8 +34,12 @@ test("mobile-layout-no-horizontal-overflow", async ({ page }) => {
     await page.goto("/");
     await assertNoHorizontalOverflow(page, `menu @ ${width}px`);
 
-    // Combine (player-card grid -- a real candidate for overflow on a narrow screen).
+    // Combine Setup (the new mode/Key Moments screen shown before the Combine itself) and the
+    // Combine proper (player-card grid -- a real candidate for overflow on a narrow screen).
     await page.click("#startBtn");
+    await page.waitForSelector("#combineSetupBeginBtn", { timeout: 10_000 });
+    await assertNoHorizontalOverflow(page, `combine setup @ ${width}px`);
+    await page.click("#combineSetupBeginBtn");
     await page.waitForSelector(".player-card", { timeout: 10_000 });
     await assertNoHorizontalOverflow(page, `combine @ ${width}px`);
   }

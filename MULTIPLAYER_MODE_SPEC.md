@@ -92,16 +92,31 @@ point forward, never before it.
 ## 3. The blind draft/combine mechanic (shared by both tracks)
 
 Given section 2, "blind" falls out almost for free: **each client is simply an ordinary solo
-Combine/draft session, seeded from a shared value neither player controls alone.** Nothing about the
-Combine's own UI needs to change — the same 12-round player-card grid, the same respin economy
-(`cs.respinEraLeft`/`respinPlayersLeft`/the ad-bonus-respin flow), the same `finishCombine()` →
-`computeCombineScore()` → draft-night flow, all completely unchanged. The only two additions:
+Combine/draft session, seeded from a shared value neither player controls alone.** The comparison
+underneath is unchanged — the same 12-round player-card grid, the same `finishCombine()` →
+`computeCombineScore()` → draft-night flow. Two real restrictions were added on top once this
+actually shipped (not in the original pass above, tightened after a direct follow-up request):
+
+- **Mode is forced to Blind, never Classic**, for the whole duration of a multiplayer Combine.
+  "Best player available" judged blind, on name/reputation alone, is the entire premise of a fair
+  comparison — Classic mode showing the actual attribute rolls up front would let a player simply
+  read off the answer instead of judging it, defeating the point of a blind draft entirely.
+- **No respins of any kind** — not the free era/player respin, not the ad-earned bonus pool. Both
+  players see the exact same single set of four candidates each round with no way to reroll toward
+  a better one; the whole respin UI is hidden outright rather than just shown disabled at "(0)".
+
+Plus the two additions the original pass already called for:
 
 - A **Match Setup** screen, reached from a new "Multiplayer" menu entry, where the seed is created
   or entered (see track-specific flows below) before the Combine begins.
 - A stamp on the resulting `career` object: `career.multiplayerMatchId` (the shared match id/seed)
   and `career.multiplayerSlot` (`"A"` or `"B"`) — needed later purely for the comparison screen to
   find and label the right two saves; it has no gameplay effect at all.
+
+Separately, once an actual career exists, **Fast-Forward is also unavailable** for the life of a
+multiplayer career (each season is meant to be played through deliberately, matching the "no
+shortcuts on the Combine side either" spirit) — the season-actions row simply omits that button
+when `career.multiplayerMatchId` is set.
 
 Genuinely blind is guaranteed by construction in Track A (the players are never looking at the same
 screen at the same time) and needs one explicit design rule in Track B (section 7B): **neither
@@ -281,9 +296,18 @@ mechanism for match setup and result reporting does.
 
 ## 9. New UI/screens needed (both tracks, additively)
 
-- Menu: new "Multiplayer" entry.
+- Menu: new "Multiplayer" entry, placed with the other primary actions (Start the Combine/Trophy
+  Room/Achievements) rather than buried lower on the page — building the whole menu around
+  primary-action buttons first, marketing copy after, once this shipped.
 - Match Setup screen: Track A shows Create/Join with a code field; Track B shows
   Find Match / matchmaking status instead.
+- **Combine Setup screen (solo path)**, added once this actually shipped: Mode (Classic/Blind) and
+  Key Moments are no longer a persistent menu-level toggle — they're asked on a dedicated screen
+  shown right after "Start the Combine" is clicked, before the Combine itself begins. Multiplayer's
+  own Create/Join screens ask their own equivalent: Key Moments only (a personal, per-player
+  preference, not part of the shared match code — it only affects that player's own playoff
+  mini-game, never anything about the shared seed), since Mode is forced to Blind for multiplayer
+  and isn't a real choice there.
 - A small persistent "Multiplayer Match" indicator during play (so a player mid-Combine/career
   remembers which match they're in, especially if they also have solo saves going).
 - Result/Export screen (Track A) or automatic result screen (Track B) once a career ends.

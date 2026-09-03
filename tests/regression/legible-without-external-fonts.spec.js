@@ -53,6 +53,8 @@ test("legible-without-external-fonts", async ({ page }) => {
 
   // The combine (a second, content-heavy screen) is equally legible without the external fonts.
   await page.click("#startBtn");
+  await page.waitForSelector("#combineSetupBeginBtn", { timeout: 10_000 });
+  await page.click("#combineSetupBeginBtn");
   await page.waitForSelector(".player-card", { timeout: 10_000 });
   const card = page.locator(".player-card").first();
   await expect(card).toBeVisible();

@@ -16,6 +16,8 @@ test("ad-countdown-does-not-drop-button-focus", async ({ page }) => {
   // (it only appears on an active combine round).
   await page.goto("/");
   await page.click("#startBtn");
+  await page.waitForSelector("#combineSetupBeginBtn", { timeout: 10_000 });
+  await page.click("#combineSetupBeginBtn");
   await page.waitForSelector(".player-card", { timeout: 10_000 });
 
   const adBtn = page.locator("#watchAdRespinBtn");

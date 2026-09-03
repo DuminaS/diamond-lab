@@ -12,6 +12,12 @@ const SAVE_KEY = "gridironlab.activeCareer";
 export async function startCareer(page, { name = null, decadeIndex = 0 } = {}) {
   await page.goto("/");
   await page.click("#startBtn");
+  // Mode + Key Moments now live on a dedicated Combine Setup screen shown right before the Combine
+  // itself starts (not a persistent menu-level toggle) -- callers that need Blind mode or Key
+  // Moments enabled should check/click those on #screen-combine-setup themselves, between this
+  // click and startCareer's own "Begin the Combine" click below.
+  await page.waitForSelector("#combineSetupBeginBtn", { timeout: 10_000 });
+  await page.click("#combineSetupBeginBtn");
   for (let i = 0; i < 12; i++) {
     await page.waitForSelector(".player-card", { timeout: 10_000 });
     await page.click(".player-card >> nth=0");

@@ -26,6 +26,17 @@ see PROGRESS.md's dated entry for the two real bugs found and fixed during the b
 import that broke the Compare button; an unclamped score component that could go negative or over
 100 on malformed input).
 
+Immediate follow-up shipped the same day: **multiplayer is now always played Blind, with no
+respins and no Fast-Forward** (a direct request to close the "just judge Classic ratings instead of
+actually going blind" and "burn a respin to see a better option" loopholes a fair blind-draft
+comparison can't tolerate). Also reorganized the menu -- the four primary buttons (Start the
+Combine/Trophy Room/Achievements/Multiplayer) now sit at the very top, above the hero copy, and the
+Mode/Key Moments choices moved off the menu entirely onto a new pre-Combine `#screen-combine-setup`
+step (solo) / the Create-Join screens' own Key-Moments-only option (multiplayer, since Mode isn't a
+real choice there anymore). `resetToSoloSession()` resets `cs.mode` back to Classic and
+`syncModeToggleDisplay()` re-syncs the toggle's visible state on every visit, specifically so a
+forced-blind multiplayer session can never leave a stale mode showing on a later solo attempt.
+
 A visual overflow audit (development-plan picker + the exportable baseball card + a broader sweep)
 shipped 2026-09-03: fixed a real achievement-name-wrapping bug on the baseball card's SVG back face
 (`cardWrapLines` in `src/main.js`, now supports 3 lines instead of silently bleeding into the next

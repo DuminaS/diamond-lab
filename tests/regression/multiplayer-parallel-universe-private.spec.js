@@ -216,3 +216,75 @@ test("Compare screen rejects two result codes from different matches", async ({ 
   expect(errorText).toContain("different matches");
   expect(await page.evaluate(() => document.querySelectorAll(".mp-scoreboard").length)).toBe(0);
 });
+
+test("multiplayer is always played Blind and never offers respins, even if Classic mode was left selected from a prior solo Combine", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto("/");
+  // Deliberately leave the game in a state a real player could land in: having just done a SOLO
+  // Combine Setup and explicitly picked Classic mode, before ever touching Multiplayer.
+  await page.click("#startBtn");
+  await page.waitForSelector(".mode-toggle button[data-mode='classic']", { timeout: 10_000 });
+  await page.click(".mode-toggle button[data-mode='classic']");
+  await page.click("#combineSetupBackBtn");
+
+  await page.click("#multiplayerBtn");
+  await page.click("#mpCreateBtn");
+  await page.waitForSelector("#mpCreateDecadeGrid .decade-card", { timeout: 10_000 });
+  await page.click("#mpCreateDecadeGrid .decade-card >> nth=0");
+  await page.waitForSelector("#mpCreateCodePanel", { state: "visible", timeout: 10_000 });
+  await page.click("#mpCreateStartBtn");
+  await page.waitForSelector(".player-card", { timeout: 10_000 });
+
+  const combineState = await page.evaluate(() => ({
+    roundLabel: document.getElementById("draftPosLabel")?.textContent || "",
+    hasBlindCopy: !!document.querySelector(".pc-blind"),
+    hasVisibleStat: !!document.querySelector(".pc-stat"),
+    respinRowsVisible: Array.from(document.querySelectorAll(".respin-row")).some(r => getComputedStyle(r).display !== "none"),
+  }));
+  expect(combineState.roundLabel).toContain("Blind");
+  expect(combineState.hasBlindCopy).toBe(true);
+  expect(combineState.hasVisibleStat).toBe(false);
+  expect(combineState.respinRowsVisible, "no respin UI should be visible in a multiplayer Combine").toBe(false);
+});
+
+test("multiplayer offers a Key Moments preference on Create/Join but never a Mode choice (forced Blind)", async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.goto("/");
+  await page.click("#multiplayerBtn");
+  await page.click("#mpCreateBtn");
+  await page.waitForSelector("#mpCreateDecadeGrid .decade-card", { timeout: 10_000 });
+  await page.click("#mpCreateDecadeGrid .decade-card >> nth=0");
+  await page.waitForSelector("#mpCreateCodePanel", { state: "visible", timeout: 10_000 });
+  const createPanelState = await page.evaluate(() => ({
+    hasKeyMomentsToggle: !!document.getElementById("mpCreateKeyMomentsToggle"),
+    hasModeToggle: !!document.querySelector("#screen-mp-create .mode-toggle"),
+  }));
+  expect(createPanelState.hasKeyMomentsToggle).toBe(true);
+  expect(createPanelState.hasModeToggle).toBe(false);
+});
+
+test("multiplayer career hub never offers Fast-Forward", async ({ page }) => {
+  test.setTimeout(60_000);
+  await installSeededRandom(page, 271828);
+  await page.goto("/");
+  await page.click("#multiplayerBtn");
+  await page.click("#mpCreateBtn");
+  await page.waitForSelector("#mpCreateDecadeGrid .decade-card", { timeout: 10_000 });
+  await page.click("#mpCreateDecadeGrid .decade-card >> nth=1");
+  await page.waitForSelector("#mpCreateCodePanel", { state: "visible", timeout: 10_000 });
+  await page.click("#mpCreateStartBtn");
+  for (let i = 0; i < 12; i++) {
+    await page.waitForSelector(".player-card", { timeout: 10_000 });
+    await page.click(".player-card >> nth=0");
+  }
+  await page.waitForSelector("#goProBtn", { timeout: 10_000 });
+  await page.click("#goProBtn");
+  await page.waitForSelector("#enterDraftNightBtn:not([disabled])", { timeout: 10_000 });
+  await page.click("#enterDraftNightBtn");
+  await page.waitForSelector("#startCareerBtn", { state: "visible", timeout: 10_000 });
+  await page.click("#startCareerBtn");
+  await page.waitForSelector("#careerContent .season-card", { timeout: 15_000 });
+
+  expect(await page.evaluate(() => !!document.getElementById("fastForwardBtn"))).toBe(false);
+  expect(await page.evaluate(() => !!document.getElementById("continueBtn"))).toBe(true);
+});

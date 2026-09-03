@@ -909,6 +909,61 @@ not yet tuned against hand-built archetype careers the way the balance brief's M
 result codes and match codes are both honor-system-only (no server exists to prevent hand-editing a
 result code before sharing it, exactly as the spec's own "honest limitations" section predicted).
 
+## 2026-09-03 — Multiplayer: forced Blind mode, no respins/Fast-Forward, menu reorg
+
+Direct follow-up requests on the just-shipped Parallel Universe Private feature: (1) multiplayer
+must always be Blind, never Classic; (2) the Multiplayer button should sit with the other primary
+menu actions, not lower on the page; (3) Mode + Key Moments should be asked right before the
+Combine starts (solo) / when creating or joining a lobby (multiplayer), not as a persistent
+menu-level toggle; (4) no respins ("run it back") and no Fast-Forward during a multiplayer session.
+
+### What shipped
+
+- **Menu reorg**: the four primary action buttons (Start the Combine/Trophy Room/Achievements/
+  Multiplayer) moved to the very top of `#screen-menu`, above the hero headline/lede copy. The
+  persistent Mode toggle and Key Moments checkbox were removed from the menu entirely.
+- **New Combine Setup screen** (`#screen-combine-setup`): both solo entry points (`#startBtn`,
+  `#playAgainBtn`) now route here instead of straight into `startCombine()` -- Mode and Key Moments
+  are asked here, once, right before the Combine begins, using the exact same toggle/checkbox
+  markup and wiring that used to live on the menu (only relocated, not reimplemented). A new
+  `syncModeToggleDisplay()` re-syncs the toggle's visible "active" state to `cs.mode`'s actual
+  current value every time this screen is shown -- needed because a multiplayer session can silently
+  force `cs.mode="blind"` without this screen ever rendering, which would otherwise leave a LATER
+  solo visit showing a stale "Classic" highlight while the real value was still "blind" underneath.
+  `resetToSoloSession()` (already the reset point for every solo entry) now also resets
+  `cs.mode="classic"`, so a solo Combine right after a multiplayer match never inherits its forced
+  mode.
+- **Multiplayer: Mode forced to Blind, no exceptions.** `beginMultiplayerCombine()` sets
+  `cs.mode="blind"` directly; the Create/Join screens never show a mode toggle at all, only a
+  Key Moments checkbox (a personal, per-player preference -- it only affects that player's own
+  playoff mini-game, not the shared seed, so it doesn't need to be part of the match code).
+- **Multiplayer: no respins.** `startCombine()` zeroes `cs.respinEraLeft`/`respinPlayersLeft`
+  (and the ad-bonus pool was already 0 by default) whenever `currentMultiplayerContext` is set;
+  `renderRound()` hides the whole `.respin-row` UI outright in that case rather than showing
+  disabled buttons at "(0)" -- both players see the exact same four candidates every round with no
+  way to reroll toward a better one.
+- **Multiplayer: no Fast-Forward.** The season-actions row simply omits the Fast-Forward button
+  whenever `career.multiplayerMatchId` is set; Continue/trade-request are unaffected.
+
+### Verification
+
+Fixed 6 existing Playwright tests whose shared click-through pattern (`#startBtn` -> immediately
+wait for `.player-card`) broke once Combine Setup became a real intermediate screen --
+`careerFlow.mjs`'s own `startCareer()` helper plus 5 direct call sites across other spec files, all
+updated to click through `#combineSetupBeginBtn` first (mirroring the exact fix pattern this
+project used the last time a shared click sequence needed a new step inserted). Added 3 new
+Playwright tests to `multiplayer-parallel-universe-private.spec.js`: multiplayer is Blind with no
+respin UI visible even when Classic was explicitly selected on a prior solo attempt (the actual
+regression `resetToSoloSession`'s mode fix and `cs.mode="blind"`'s forcing exist to prevent);
+Create/Join expose a Key Moments checkbox but never a Mode toggle; a multiplayer career's season
+hub never renders `#fastForwardBtn`. `npm test`: 58/58 balance tests (unaffected, no pure-module
+changes this pass), production build clean, 55/55 Playwright (52 prior + 3 new).
+
+### Not done this pass
+
+Everything from the prior entry's "Not done" list still applies unchanged (Same League Mode, the
+Public track, mid-career snapshot comparisons, untuned scoring weights, honor-system-only codes).
+
 ## Testing methodology (established pattern, reuse every round)
 - jsdom in `/tmp/gtest`, debug hooks (`window.__debug`) injected only into throwaway copies (`index.debugN.html`), never the real file. Latest debug build: `index.debug24.html` (Round 4, item 3).
 - `grep -c "__debug" index.html` must return 0 on the real file before every publish.

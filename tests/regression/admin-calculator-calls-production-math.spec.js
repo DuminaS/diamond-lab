@@ -29,6 +29,8 @@ test("admin-calculator-calls-production-math", async ({ page }) => {
   // pattern careerFlow.mjs's startCareer uses, inlined here since that helper always targets the
   // default (preview) baseURL's port implicitly via relative navigation assumptions.
   await page.click("#startBtn");
+  await page.waitForSelector("#combineSetupBeginBtn", { timeout: 10_000 });
+  await page.click("#combineSetupBeginBtn");
   for (let i = 0; i < 12; i++) {
     await page.waitForSelector(".player-card", { timeout: 10_000 });
     await page.click(".player-card >> nth=0");
