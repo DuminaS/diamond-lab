@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  maxConsecutive, seasonRule, consecutiveSeasonRule, eventCountRule, sequenceRule, ledgerStep,
-  allOf, anyOf, not,
+  maxConsecutive, seasonRule, consecutiveSeasonRule, everySeasonRule, eventCountRule, sequenceRule,
+  ledgerStep, sameFieldAs, groupCountRule, allOf, anyOf, not,
 } from "../../src/sim/achievementRules.js";
 
 test("maxConsecutive finds the longest run, not just the total count", () => {
@@ -75,6 +75,82 @@ test("sequenceRule fails cleanly (not throws) against an empty ledger", () => {
   const rule = sequenceRule([ledgerStep({ eventId: "anything" })]);
   assert.equal(rule({}), false);
   assert.equal(rule({ eventLedger: [] }), false);
+});
+
+test("everySeasonRule fails if ANY season breaks the predicate, unlike a mere streak", () => {
+  const cleanCareer = { seasonLog: Array.from({ length: 10 }, () => ({ injured: false })) };
+  assert.equal(everySeasonRule((s) => !s.injured, 10)(cleanCareer), true);
+  const oneBadSeason = { seasonLog: [
+    ...Array.from({ length: 10 }, () => ({ injured: false })),
+    { injured: true },
+    ...Array.from({ length: 5 }, () => ({ injured: false })),
+  ] };
+  // A 10-season clean streak already happened, but the career as a WHOLE has a bad season in it --
+  // everySeasonRule must fail here even though consecutiveSeasonRule on the same data would pass,
+  // which is exactly the distinction this builder exists for.
+  assert.equal(everySeasonRule((s) => !s.injured, 10)(oneBadSeason), false);
+  assert.equal(consecutiveSeasonRule((s) => !s.injured, 10)(oneBadSeason), true);
+});
+
+test("everySeasonRule also fails below the minimum season count even if every season so far qualifies", () => {
+  const career = { seasonLog: [{ injured: false }, { injured: false }] };
+  assert.equal(everySeasonRule((s) => !s.injured, 10)(career), false);
+});
+
+test("sameFieldAs (revenge-chain matcher) requires the SAME opponent as an earlier step, not just any", () => {
+  const fakeLedgerCareer = (entries) => ({ eventLedger: entries.map((e, i) => ({ sequenceIndex: i + 1, seasonIndex: e.seasonIndex ?? 0, ...e })) });
+  const revengeRule = sequenceRule([
+    ledgerStep({ eventId: "championship_lost" }),
+    sameFieldAs(0, { eventId: "championship_won" }),
+  ]);
+  const realRevenge = fakeLedgerCareer([
+    { eventId: "championship_lost", opponentId: "BUF" },
+    { eventId: "championship_won", opponentId: "BUF" },
+  ]);
+  assert.equal(revengeRule(realRevenge), true);
+  const differentOpponent = fakeLedgerCareer([
+    { eventId: "championship_lost", opponentId: "BUF" },
+    { eventId: "championship_won", opponentId: "MIA" },
+  ]);
+  assert.equal(revengeRule(differentOpponent), false);
+  const nullOpponent = fakeLedgerCareer([
+    { eventId: "championship_lost", opponentId: null },
+    { eventId: "championship_won", opponentId: null },
+  ]);
+  // Two null opponentIds must never count as "the same" -- that would trivially match any career
+  // with pre-oppId-tracking data instead of only a genuine repeat matchup.
+  assert.equal(revengeRule(nullOpponent), false);
+});
+
+test("groupCountRule requires the count against ONE group value, not the total across all", () => {
+  const career = {
+    eventLedger: [
+      { eventId: "championship_won", opponentId: "BUF" },
+      { eventId: "championship_won", opponentId: "MIA" },
+      { eventId: "championship_won", opponentId: "NYJ" },
+    ],
+  };
+  // 3 total wins, but no single opponent beaten twice -- must fail at threshold 2.
+  assert.equal(groupCountRule({ eventId: "championship_won" }, "opponentId", 2)(career), false);
+  const repeatOpponent = {
+    eventLedger: [
+      { eventId: "championship_won", opponentId: "BUF" },
+      { eventId: "championship_won", opponentId: "BUF" },
+      { eventId: "championship_won", opponentId: "MIA" },
+    ],
+  };
+  assert.equal(groupCountRule({ eventId: "championship_won" }, "opponentId", 2)(repeatOpponent), true);
+});
+
+test("groupCountRule never lets null/missing opponentId entries count as \"the same\" group", () => {
+  const career = {
+    eventLedger: [
+      { eventId: "championship_won", opponentId: null },
+      { eventId: "championship_won", opponentId: null },
+      { eventId: "championship_won" }, // opponentId entirely absent
+    ],
+  };
+  assert.equal(groupCountRule({ eventId: "championship_won" }, "opponentId", 2)(career), false);
 });
 
 test("allOf/anyOf/not compose rules the way boolean logic implies", () => {

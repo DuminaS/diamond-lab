@@ -596,14 +596,93 @@ This is 65 achievements, not 250 -- the brief's own number was never realistic f
 this was scoped the same way every prior wave was (real infrastructure + a real batch, not a
 sprint to a headline count). Specifically still open: the ~35 pre-Wave-6 achievements were not
 force-migrated to the new declarative builders (a deliberate, low-risk choice, not an oversight);
-opponent-team-specific achievements (e.g. "beat the same rival in back-to-back championship games")
+~~opponent-team-specific achievements (e.g. "beat the same rival in back-to-back championship games")
 aren't buildable yet because a playoff round's opponent is only known by display name, not by a
-stable team id -- `season.playoffs.rounds[i]` would need an `oppId`-equivalent field added before
-that category can exist (the "Playoff Tree overhaul" plan file already flags this same gap for an
-unrelated reason); no UI surfaces `career.eventLedger` directly to the player anywhere (it's
+stable team id~~ **correction, see Wave 7 below: this claim was simply wrong.**
+`season.playoffs.rounds[i].oppId` already existed (stamped in `stepConferenceBracket` at
+simulation time) -- the actual gap, fixed in Wave 7, was just that the ledger events never threaded
+it through; no UI surfaces `career.eventLedger` directly to the player anywhere (it's
 achievement-engine-internal, same visibility level as `career.lifeEventLog` always had); and this
 wave didn't attempt time-window achievements phrased in real-world elapsed time (only in-career
 season counts), since nothing in this codebase tracks wall-clock time during a career.
+
+## 2026-09-02 — Balance implementation Wave 7: fix Wave 6's gaps, opponent achievements, more migrations
+
+Scope: the user asked to close out Wave 6's own "Not done this wave" list. Same standing process as
+every wave since Wave 4 -- review first for anything missed, then build.
+
+### Review pass: Wave 6's own claim was wrong
+
+While re-reading the code to plan the opponent-id gap, found that `season.playoffs.rounds[i].oppId`
+(a real, stable team id) already existed on every one of the player's own playoff rounds -- stamped
+at simulation time in `stepConferenceBracket` (`src/main.js`), completely unrelated to this wave.
+Wave 6's "Not done" note claiming this data didn't exist at all was simply incorrect -- an
+unverified assumption written into the record instead of a checked fact. The REAL gap was narrower
+and different: the three new ledger event types that care about an opponent
+(`championship_won`/`championship_lost`/`key_moment`) never threaded that already-existing `oppId`
+through `recordLedgerEvent`. Fixed this wave; the PROGRESS.md Wave 6 entry above is corrected in
+place (struck through) rather than silently rewritten, per this project's own "report outcomes
+faithfully" norm.
+
+### What shipped
+
+- **Ledger wiring fix**: `finalizePlayoffOutcome`'s `championship_won`/`championship_lost` events and
+  `triggerKeyMoment`'s `key_moment` event now all carry a real `opponentId` (the deciding playoff
+  round's `oppId` -- for a pre-Super-Bowl-era title, that's the WON Conference Championship round
+  specifically, since a fictional exhibition Super Bowl can still follow it per
+  `reachedTitleGameAndLost`'s own comment; otherwise the real last round).
+- **3 new pure rule-builder primitives** (`src/sim/achievementRules.js`, unit-tested like every
+  prior addition): `everySeasonRule(pred, minSeasons)` -- genuinely different from
+  `consecutiveSeasonRule`, since it fails if ANY season anywhere in a career breaks the condition,
+  not just outside one qualifying streak (`ironclad`'s old imperative check was exactly this shape
+  and had no existing builder for it); `sameFieldAs(stepIndex, filters, field)` -- a `sequenceRule`
+  step matcher requiring a later event's field (default `opponentId`) equal the SAME value an
+  earlier step already matched, the actual mechanism behind every new "revenge"-style achievement
+  this wave adds; `groupCountRule(filters, groupField, atLeast)` -- true if ledger entries matching
+  `filters`, grouped by `groupField`, have any ONE group reach `atLeast` (e.g. "beaten the same
+  opponent for the ring twice"), a genuinely different shape from `eventCountRule` (counts
+  everything together) or `sequenceRule` (cares about order, not repetition against one value).
+- **17 more existing achievements migrated** to the declarative builders (`gunslinger`,
+  `fieldgeneral`, `ghostinthepocket`, `vault`, `ironarmed`, `groundthreat`, `perfection`,
+  `againstallodds`, `theunanimous`, `oldmanwinter`, `scartissue`, `loyaltothedeath`, `snakebitten`,
+  `perfectseason`, `onemanteam`, `biggamehunter`, `ironclad`) -- each verified behaviorally
+  identical to its old imperative form before migrating (see inline comments on
+  `theunanimous`/`oldmanwinter` for the one subtlety: switching from "check only the most recent
+  season" to "any season ever" is a safe superset given `checkAchievements()`'s own call pattern,
+  not a behavior change in practice). 21 of 85 achievements are now declarative (4 from Wave 6 + 17
+  this wave), up from 4.
+- **20 new achievements**: 5 opponent/revenge (`revenge`, `rivalgauntlet`, `hauntedbythesamedemon`,
+  `signaturewin`, `familiarfoe` -- all newly possible now that the ledger actually carries
+  `opponentId`), 4 development-plan/team-chemistry-tied (`filmroommvp`, `athleticfreak`,
+  `chemistryguru`, `lonewolf`), 6 more team-specific (Packers/Cowboys/Chiefs/Seahawks/Bears/Eagles,
+  bringing team-specific coverage from 8 teams to 14), and 5 more career-shape/ledger achievements
+  (`dealmaker`, `neverssettled`, `clutchunderpressure`, `coasttocoast`, `underthelights`). 65 -> 85
+  total achievements.
+
+### Verification
+
+`tests/balance/achievement-rules.node.mjs`: 15 tests now (10 prior + 5 new -- `everySeasonRule`'s
+streak-vs-whole-career distinction, `sameFieldAs`'s same-opponent requirement including a null-id
+guard, `groupCountRule`'s per-group counting including the same null-id guard).
+`tests/regression/opponent-id-ledger-and-revenge-achievement.spec.js` (new, 2 Playwright tests): a
+real fabricated `championship_lost` -> `championship_won` pair against the SAME opponent unlocks
+Revenge Tour; the identical shape against two DIFFERENT opponents does not -- confirming the fix
+isn't just "an opponentId exists somewhere" but that it's actually the CORRECT one and actually
+gates the achievement. `npm test`: 35/35 balance tests (30 prior + 5 new), production build clean,
+48/48 Playwright (46 prior + 2 new, no reseeds needed).
+
+### Not done this wave (stated plainly)
+
+85 achievements, still well short of 250 -- continuing to chip at that total honestly rather than
+force a sprint to the headline number. ~19 of the original 39 pre-Wave-6 achievements remain
+imperative closures (a mix of "genuinely doesn't fit current builder vocabulary" -- e.g.
+`latebloomer`'s first-occurrence semantics, `ringchaser`/`dynasty`'s distinct-team-grouping
+semantics over `seasonLog` rather than the ledger -- and "deliberately left alone," like the
+dark-humor achievements reading `lifeEventLog` directly). No UI surfaces `career.eventLedger`
+directly to the player still -- on reflection this isn't actually a gap: `career.lifeEventLog`, the
+ledger's own precedent and still its closest analog, has never had dedicated UI either; both are
+consumed through achievements, which do have UI. Time-window achievements phrased in real-world
+elapsed time remain out of scope for the same reason as Wave 6 (no wall-clock tracking exists).
 
 ## Testing methodology (established pattern, reuse every round)
 - jsdom in `/tmp/gtest`, debug hooks (`window.__debug`) injected only into throwaway copies (`index.debugN.html`), never the real file. Latest debug build: `index.debug24.html` (Round 4, item 3).

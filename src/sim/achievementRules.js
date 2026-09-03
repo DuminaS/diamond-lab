@@ -34,6 +34,19 @@ export function consecutiveSeasonRule(predicate, atLeast) {
   return (career) => maxConsecutive(career.seasonLog, predicate) >= atLeast;
 }
 
+// True if the career has at least `minSeasons` seasons AND every single one of them (not just a
+// streak within a longer career) satisfies `predicate` -- a genuinely different shape from
+// consecutiveSeasonRule, which is satisfied by any qualifying run inside a longer, mixed career.
+// ("Play 10+ seasons and never once miss a game to injury" fails the moment ANY season anywhere in
+// the career breaks it, even after 10 clean years already happened -- consecutiveSeasonRule would
+// wrongly still call that a pass.)
+export function everySeasonRule(predicate, minSeasons = 1) {
+  return (career) => {
+    const log = career.seasonLog || [];
+    return log.length >= minSeasons && log.every(predicate);
+  };
+}
+
 // True if at least `atLeast` ledger entries match every provided filter field. A filter field left
 // undefined is not checked at all (so {eventId:"contract_signed"} alone counts every signing,
 // regardless of team/choice/outcome).
@@ -48,18 +61,24 @@ export function eventCountRule({ eventId, teamId, opponentId, outcomeId, severit
   ).length >= atLeast;
 }
 
-// True if `steps` (each a predicate over one ledger entry) all match IN ORDER somewhere in
-// career.eventLedger -- the Nth step must match a later sequenceIndex than the (N-1)th. Doesn't
-// require adjacency, just order. `opts.withinSeasons`, if set, additionally requires the whole
-// chain to complete within that many seasons of its first matched step (a "time window").
+// True if `steps` (each a predicate over one ledger entry, OR a (entry, matchedSoFar)=>boolean for
+// steps that need to reference an earlier step's own matched entry -- see sameFieldAs) all match IN
+// ORDER somewhere in career.eventLedger -- the Nth step must match a later sequenceIndex than the
+// (N-1)th. Doesn't require adjacency, just order. `opts.withinSeasons`, if set, additionally
+// requires the whole chain to complete within that many seasons of its first matched step (a "time
+// window"). `matchedSoFar` is the array of entries already matched by earlier steps, in step order
+// -- plain ledgerStep()-built matchers ignore it (they only take one argument), so this is a
+// backward-compatible addition, not a breaking change to the step signature.
 export function sequenceRule(steps, opts = {}) {
   return (career) => {
     const ledger = career.eventLedger || [];
     let cursor = -1;
     let firstSeasonIdx = null;
+    const matched = [];
     for (const step of steps) {
-      const match = ledger.find((e) => e.sequenceIndex > cursor && step(e));
+      const match = ledger.find((e) => e.sequenceIndex > cursor && step(e, matched));
       if (!match) return false;
+      matched.push(match);
       if (firstSeasonIdx === null) firstSeasonIdx = match.seasonIndex;
       cursor = match.sequenceIndex;
       if (opts.withinSeasons != null && (match.seasonIndex - firstSeasonIdx) > opts.withinSeasons) return false;
@@ -78,6 +97,40 @@ export function ledgerStep(filters = {}) {
     (outcomeId === undefined || e.outcomeId === outcomeId) &&
     (severity === undefined || e.severity === severity) &&
     (choiceId === undefined || e.choiceId === choiceId);
+}
+
+// True if ledger entries matching `filters` (ledgerStep-style), grouped by `groupField` (default
+// "opponentId"), have ANY single group reach `atLeast` -- e.g. "beaten the SAME opponent for the
+// ring 2+ times" (groupCountRule({eventId:"championship_won"}, "opponentId", 2)), a genuinely
+// different shape from eventCountRule (which counts ALL matches together, regardless of which
+// opponent) or sequenceRule (which cares about order, not repetition against one specific value).
+// Entries with a null/undefined groupField value are excluded from every group (a career predating
+// opponentId tracking must never count as "the same opponent" as anything).
+export function groupCountRule(filters = {}, groupField = "opponentId", atLeast = 2) {
+  const match = ledgerStep(filters);
+  return (career) => {
+    const counts = {};
+    (career.eventLedger || []).forEach((e) => {
+      if (!match(e)) return;
+      const key = e[groupField];
+      if (key == null) return;
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    return Object.values(counts).some((c) => c >= atLeast);
+  };
+}
+
+// A sequenceRule step matcher for "revenge"-shaped achievements: matches an entry with the given
+// eventId (plus any other ledgerStep-style filters) whose `field` (default "opponentId") equals the
+// SAME value an earlier step in the chain already matched -- e.g. lose a championship to opponent X,
+// then beat that SAME X (not just any opponent) in a later one. `stepIndex` is which earlier step
+// (0-based) to compare against.
+export function sameFieldAs(stepIndex, filters = {}, field = "opponentId") {
+  const base = ledgerStep(filters);
+  return (e, matchedSoFar) => {
+    const anchor = matchedSoFar[stepIndex];
+    return !!anchor && anchor[field] != null && e[field] === anchor[field] && base(e);
+  };
 }
 
 // Composition: combine several rules (or plain (career)=>boolean closures) into one. Lets an
