@@ -2684,7 +2684,7 @@ import {
 
     const myOff = regularSeasonOffenseGrade(effOverall, age, decade);
     const games = [];
-    let tComp=0,tAtt=0,tYards=0,tTd=0,tInt=0,tSacks=0,tRushAtt=0,tRushYards=0,tRushTd=0,wins=0,ties=0,started=0;
+    let tComp=0,tAtt=0,tYards=0,tTd=0,tInt=0,tSacks=0,tRushAtt=0,tRushYards=0,tRushTd=0,wins=0,ties=0,started=0,personalTies=0;
     let backupWins=0, backupLosses=0, incumbentWins=0, incumbentLosses=0;
     mySlots.forEach((slot, idx)=>{
       const oppId = slot.opponentId;
@@ -2723,7 +2723,10 @@ import {
       const oppOffense = opponentOffenseGrade(oppId, QB_INFLUENCE_REGULAR);
       const scoreSim = simulateGameScore(myOff, oppOffense, career.defense, tieProbConditional, career.year, false, opponentDefenseGrade(oppId));
       const won = scoreSim.won;
-      if(scoreSim.tie) ties++; else if(won) wins++;
+      // ties (shared with the missed-games/incumbent-covered branch above, since season.teamTies
+      // needs every tie regardless of who was under center) is NOT the right subtrahend for
+      // personal `losses` below -- see personalTies.
+      if(scoreSim.tie){ ties++; personalTies++; } else if(won) wins++;
       bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won: scoreSim.tie?false:won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
 
       // per-game noise ranges are all built to average to exactly 1.0x the season rate over a
@@ -2764,7 +2767,7 @@ import {
         rushAtt: gRushAtt, rushYards: gRushYards, rushTd: gRushTd });
     });
     return { games, comp:tComp, att:tAtt, yards:tYards, td:tTd, int:tInt, sacks:tSacks,
-      rushAtt:tRushAtt, rushYards:tRushYards, rushTd:tRushTd, wins, losses: started-wins-ties, ties,
+      rushAtt:tRushAtt, rushYards:tRushYards, rushTd:tRushTd, wins, losses: started-wins-personalTies, ties,
       backupWins, backupLosses, incumbentWins, incumbentLosses };
   }
 

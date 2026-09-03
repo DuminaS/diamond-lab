@@ -226,9 +226,8 @@ rare pre-existing branch. Both were investigated before touching anything, per t
    confirming a real, reproducible, low-frequency defect somewhere in 1960s-era schedule/standings
    reconciliation, genuinely pre-existing and unrelated to this wave (which never touches
    scheduling/standings code). Reseeded to 54321 (clean, still exercises a real tie) so this wave
-   isn't blocked on it. **Not fixed. Documented here as a known, open issue for a future session**:
-   something in the pre-1970 schedule/standings path can occasionally lose exactly one recorded game
-   for one team in one season -- worth a dedicated investigation, not a Wave 2 detour.
+   wasn't blocked on it at the time. **Root-caused and fixed in the wave-review pass that follows
+   this one** -- see the "Wave review" entry below; the test is back on the original 33221 seed.
 2. **`fa-role-matches-post-signing-depth-chart.spec.js`** (seed 24681, the "competition" attempt)
    started failing: an offer labeled "Camp competition, no guarantees" left `career.isBackup===false`
    after signing. Root cause: `signFreeAgentOffer` sets `isBackup=true` synchronously but then calls
@@ -334,6 +333,52 @@ change, and was judged too large to fold into this wave); and coach-trust/contra
 `career.keyMomentRecord`. Contracts/cap pressure, the coordinator carousel, wear-affects-availability,
 win-above-expectation award scoring, and the declarative achievement ledger (items 3-5 of the "Next
 balance waves" list) remain entirely unstarted.
+
+## 2026-09-02 — Wave review pass: root-caused and fixed the open 1960s schedule/standings defect
+
+Before starting Wave 4, went back through Waves 1-3's own "known limitation"/"not done" callouts
+looking for anything that should actually be fixed rather than left open. One came back real and
+fixable.
+
+### Fixed: `simulateRegularSeasonGames`'s personal-losses miscount
+
+Root cause, found via a disposable diagnostic (temporary `console.log` in a throwaway rebuild,
+reverted before committing -- never landed in the real file): the function tracks a single shared
+`ties` counter across BOTH branches of its per-week loop -- the player's own personally-started
+games AND the weeks a backup/incumbent covered for him (missed to injury/suspension/depth-chart
+competition). `season.teamTies` correctly wants that combined total. But the function's `losses`
+was computed as `started - wins - ties`, where `started`/`wins` count ONLY personally-started games
+-- silently subtracting incumbent/backup-covered ties from a purely-personal tally. For a
+mostly-or-fully backed-up season with at least one incumbent-covered tie (DET, 1965, seed 33221:
+`started=0`, one incumbent tie), this produced a negative "personal losses" value that quietly ate
+one real win/loss from the team's recorded standings total -- the season's real per-game log showed
+DET 7-6-1 (14 games), but the recorded standings said 7-5-1 (13). Fixed by tracking a separate
+`personalTies` counter (incremented only alongside `wins`/`started`, in the personally-played
+branch) and using THAT in the `losses` subtraction instead of the shared `ties`. Verified against
+both seeds the original investigation found (33221 and 90909): both now pass with zero mismatches,
+and `standings-and-history-preserve-wlt.spec.js` is back on its original 33221 seed rather than
+staying reseeded around the bug.
+
+This was a genuinely pre-existing defect (the formula predates every balance wave this session
+shipped) that Wave 2's added per-rival RNG draw merely made more likely to surface for a given seed
+-- not something introduced by the balance work itself.
+
+### Everything else re-checked, nothing else found
+
+Spot-checked the other "not done"/"known limitation" callouts from Waves 1-3 for anything that had
+silently drifted or was actually fixable in scope: AI still correctly lacks the player's
+offseason-plan mechanic (unchanged, intentional); the Key Moment mini-game's remaining scope gaps
+(regular-season key drives, predictability penalty, coach-trust hooks) are genuinely large, separate
+features, not oversights; save-schema lazy-init patterns for all the new per-entity/per-career
+fields introduced across Waves 1-3 (`devCeilingBonus`, `breakthroughMomentum`,
+`_earnedBreakthroughCount`, `keyMomentRecord`, entity-level `_talentCeilingBonus`, etc.) were
+re-checked and all self-heal correctly on read for old saves, matching the established convention.
+
+### Verification
+
+`npm test`: 14/14 balance tests, production build clean, 38/38 Playwright (including both the
+restored-seed standings test and an independent re-check against seed 90909, the other seed the
+original sweep found).
 
 ## Testing methodology (established pattern, reuse every round)
 - jsdom in `/tmp/gtest`, debug hooks (`window.__debug`) injected only into throwaway copies (`index.debugN.html`), never the real file. Latest debug build: `index.debug24.html` (Round 4, item 3).

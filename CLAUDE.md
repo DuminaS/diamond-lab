@@ -19,11 +19,10 @@ Key-Moment math has begun moving out of the IIFE into pure production modules un
 production build, and full browser suite. Do not restore the old QB-to-all-five-team-grades feedback,
 the self-amplifying breakout/devSpeed loop, or a fixed tendency-to-play-call answer key.
 
-**Known, documented, NOT yet fixed**: a rare (~2/8 seeds in one sweep) pre-existing bug somewhere in
-1960s-era schedule/standings reconciliation can lose exactly one recorded game for one team in one
-season (see the Wave 2 continuation's PROGRESS.md entry for the exact repro). Unrelated to the
-balance work; a dedicated future session should investigate it directly rather than reseeding around
-it again.
+The 1960s-era schedule/standings mismatch found during Wave 2's review (a rare personal-losses
+miscount in `simulateRegularSeasonGames` for backup-heavy seasons with an incumbent-covered tie) has
+been root-caused and fixed -- see the "Wave review pass" PROGRESS.md entry. No other open findings
+from Waves 1-3 as of that review.
 
 ## What this is
 

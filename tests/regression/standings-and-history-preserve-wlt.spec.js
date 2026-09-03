@@ -12,17 +12,18 @@ import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("standings-and-history-preserve-wlt", async ({ page }) => {
   test.setTimeout(180_000);
-  // Balance Wave 2 (AI parity): simulatePlayerSeasonStats now rolls a real season-level
-  // performance-index swing per rival per season (see src/sim/development.js), shifting the RNG
-  // stream enough that seed 33221 lands on a genuine, pre-existing, rare standings/schedule-log
-  // mismatch this test correctly catches (DET, 1965: standings recorded 7-5-1, the real per-game
-  // log summed to 7-6-1 -- a real bug, not test noise). Confirmed via an 8-seed sweep on the current
-  // build: 2/8 seeds (33221, 90909) hit this exact shape, 6/8 are clean -- a real, reproducible,
-  // low-frequency defect somewhere in 1960s-era schedule/standings reconciliation, independent of
-  // this wave's own changes (this wave never touches scheduling/standings code at all). Reseeded to
-  // one of the clean seeds so this wave can land; the underlying defect is a known, documented,
-  // NOT-yet-fixed issue for a future session (see PROGRESS.md) -- not silently swept under the seed.
-  await installSeededRandom(page, 54321);
+  // Balance Wave 2 (AI parity)'s added per-rival RNG draw shifted the stream enough that this seed
+  // used to land on a genuine, now-fixed bug: simulateRegularSeasonGames computed a fully-backed-up
+  // player's personal `losses` as `started-wins-ties`, but `ties` is a SHARED counter that also
+  // accumulates ties from incumbent/backup-covered weeks (the missed-games branch increments the
+  // same variable) -- so any season with an incumbent/backup tie and few-to-no personal starts
+  // (DET, 1965 here: started=0, one incumbent tie) produced a negative "personal losses" that
+  // silently ate one real win/loss from the team's recorded standings total (7-5-1 recorded vs. the
+  // real per-game log's true 7-6-1). Fixed by tracking `personalTies` separately and using it in
+  // that subtraction instead of the shared `ties`. Restored to the original seed that found this
+  // (rather than staying reseeded around it) specifically to prove the fix holds against the exact
+  // case that broke.
+  await installSeededRandom(page, 33221);
   await startCareer(page, { decadeIndex: 1 }); // 1960s -- real, meaningful tie rate to actually exercise this
 
   let checkedAnyTie = false;
