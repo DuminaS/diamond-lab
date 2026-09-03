@@ -161,7 +161,7 @@
   <section class="screen" id="screen-career-setup">
     <div class="section-label">Career mode</div>
     <h2 style="font-size:clamp(1.6rem,5vw,2.2rem);">Pick the era you're walking into.</h2>
-    <p class="lede" style="margin-top:0.6rem;">Your build stays the same. The league around it doesn't — passing environment, schedule length, even franchise names shift with the decade you enter.</p>
+    <p class="lede" style="margin-top:0.6rem;">Your tools stay the same. The league around them doesn't — the run-scoring environment, the strike zone, ballpark sizes, even franchise names shift with the decade you enter.</p>
 
     <div class="section-label">Prospect profile <button type="button" class="id-reroll" id="identityRerollAllBtn">🎲 Randomize all</button></div>
     <div class="identity-panel">
@@ -171,16 +171,25 @@
           <input type="text" id="identityNameInput" maxlength="40" placeholder="Leave blank for a random name" />
         </div>
         <div class="id-field">
-          <label for="identityCollegeInput">College</label>
+          <label for="identityCollegeInput">School / academy</label>
           <input type="text" id="identityCollegeInput" maxlength="40" placeholder="Leave blank for a random program" list="collegeList" />
           <datalist id="collegeList"></datalist>
         </div>
       </div>
-      <div class="id-field">
-        <label>Hometown</label>
-        <div class="id-hometown">
-          <span class="id-hometown-value" id="identityHometownValue">—</span>
-          <button type="button" class="id-reroll" id="identityHometownRerollBtn">🎲 Re-roll</button>
+      <div class="identity-fields">
+        <div class="id-field">
+          <label>Position</label>
+          <div class="id-hometown">
+            <span class="id-hometown-value" id="identityPositionValue">—</span>
+            <button type="button" class="id-reroll" id="identityPositionRerollBtn">🎲 Re-roll</button>
+          </div>
+        </div>
+        <div class="id-field">
+          <label>Hometown</label>
+          <div class="id-hometown">
+            <span class="id-hometown-value" id="identityHometownValue">—</span>
+            <button type="button" class="id-reroll" id="identityHometownRerollBtn">🎲 Re-roll</button>
+          </div>
         </div>
       </div>
     </div>
@@ -189,7 +198,7 @@
     <div class="decade-grid" id="decadeGrid"></div>
 
     <div class="menu-actions" style="margin-top:1.75rem;">
-      <button class="btn btn-leather" id="enterDraftNightBtn" disabled>Declare for the draft</button>
+      <button class="btn btn-leather" id="enterDraftNightBtn" disabled>Enter the draft</button>
       <button class="btn btn-ghost" id="backToResultsBtn">Back to build</button>
     </div>
   </section>
@@ -198,7 +207,7 @@
   <section class="screen" id="screen-draftnight">
     <div class="draftnight-card" id="draftNightCard"></div>
     <div class="menu-actions" id="draftNightActions" style="margin-top:1.5rem; justify-content:center; visibility:hidden;">
-      <button class="btn btn-primary" id="startCareerBtn">Report to camp</button>
+      <button class="btn btn-primary" id="startCareerBtn">Report to spring training</button>
     </div>
   </section>
 

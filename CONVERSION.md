@@ -76,7 +76,22 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [ ] career length looks short in spot checks (~4-6 seasons) — watch during Phase 4/5 (waiver/durability)
 - [ ] seeded tuning sweep still owed on all Phase 3 coefficients
 
-### Phase 4 — player entity / roster / league
+### Phase 4 — player entity / roster / league  ✅ (functional; deep identifier rename deferred)
+- [x] POSITIONS + randomPosition + positionLabel; identity.position field + picker in career setup
+- [x] career.position stored, shown on draft night / HOF header / baseball card / roster row
+- [x] draftSlotFor → MLB draft (20 rounds, 1st round 1-30, Day 1/2/3 labels)
+- [x] draft-night flavor + "MLB Draft" + "Report to spring training" + draft screen label
+- [x] league-news feed titles → baseball (Designates a Bench Bat / Signs a Free-Agent Bench Bat /
+      Drafts a Prospect / Bench Bat Wins an Everyday Job / Regular Hits the IL / Free-Agent Signing)
+- [x] buildDepthChartRowHTML → "Roster — <position>", Everyday/Bench instead of QB1/QB2/QB3
+- [x] backup/incumbent season narratives → bench-year / everyday-job framing, HR/RBI/OPS+ snapshot
+- [x] FA offer reason strings + GM press-conference flavor
+- [ ] internal identifiers kept opaque: assignQuarterbackToRoster, QB1/QB2/QB3 role keys,
+      USER_QB_ID, career.qbsById, leagueRivals, leagueDepthCharts, career.isBackup — load-bearing
+      across ~40 sites, no functional gain in renaming; visible labels handled in Phase 10
+- [ ] League/Depth tab column headers (QB / Comp% / Att / Yds / TD / INT) — Phase 10
+- [ ] rival/bench totals objects don't init the new bb/ab/2b/3b fields (guarded at accumulation)
+
 ### Phase 5 — contracts / FA / injuries / events
 ### Phase 6 — Key Moments (batter vs pitcher)
 ### Phase 7 — awards / records / HOF (Cooperstown)

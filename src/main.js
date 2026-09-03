@@ -535,6 +535,29 @@ import {
   ];
   function randomHometown(){ const h = pick(HOMETOWNS); return { city:h[0], state:h[1] }; }
 
+  // Fielding position -- an identity/flavor field that also gates the Gold Glove and gives a
+  // small defensive contribution. Weighted a little toward the bat-first spots most star hitters
+  // actually play. `key` is the internal code, `label` the display name, `defWeight` how much the
+  // Arm Strength tool matters for that spot's defensive value.
+  const POSITIONS = [
+    { key:"C",  label:"Catcher",       w:8,  defWeight:0.9 },
+    { key:"1B", label:"First Base",    w:14, defWeight:0.3 },
+    { key:"2B", label:"Second Base",   w:11, defWeight:0.6 },
+    { key:"3B", label:"Third Base",    w:12, defWeight:0.8 },
+    { key:"SS", label:"Shortstop",     w:11, defWeight:0.9 },
+    { key:"LF", label:"Left Field",    w:12, defWeight:0.4 },
+    { key:"CF", label:"Center Field",  w:10, defWeight:0.7 },
+    { key:"RF", label:"Right Field",   w:12, defWeight:0.7 },
+    { key:"DH", label:"Designated Hitter", w:8, defWeight:0.0 },
+  ];
+  function positionLabel(key){ const p = POSITIONS.find(x=>x.key===key); return p ? p.label : (key||"—"); }
+  function randomPosition(){
+    const total = POSITIONS.reduce((s,p)=>s+p.w,0);
+    let r = Math.random()*total;
+    for(const p of POSITIONS){ if((r-=p.w)<=0) return p.key; }
+    return "RF";
+  }
+
   function divisionsForYear(year){
     const table = year>=2013 ? DIVISIONS
       : (year>=1994 ? DIVISIONS_1994_2012
@@ -1668,6 +1691,7 @@ import {
     const overflowHtml = overflow>0 ? cardCenteredText(200, startY+GRID_ROWS*cellH-6, `+${overflow} more`, {size:10, weight:700, color:CARD_HEX.goldStrong}) : "";
     let y = 340;
     const infoLines = [];
+    if(entry.position) infoLines.push(["POSITION", positionLabel(entry.position)]);
     infoLines.push(["DRAFTED", entry.draftLine ? entry.draftLine.replace(/^\d{4}:\s*/,"") : "Undrafted"]);
     infoLines.push(["HOW IT ENDED", cardExitLine(entry.exitReason)]);
     if(entry.relationshipLine) infoLines.push(["OFF THE FIELD", entry.relationshipLine]);
@@ -2242,7 +2266,7 @@ import {
   }
   function renderRound(){
     const attr = cs.order[cs.round];
-    document.getElementById("draftPosLabel").textContent = "Quarterback Combine · " + (cs.mode==="blind" ? "Blind" : "Classic");
+    document.getElementById("draftPosLabel").textContent = "Draft Showcase · " + (cs.mode==="blind" ? "Blind" : "Classic");
     document.getElementById("draftAttrLabel").textContent = attr.label;
     document.getElementById("roundNum").textContent = cs.round+1;
     document.getElementById("eraPill").textContent = cs.currentDecade;
@@ -2717,17 +2741,20 @@ import {
 
   /* ----- identity panel: prefill with random defaults every time career setup is entered,
      but never clobber text the user already typed in this session. ----- */
-  let identity = { name: "", college: "", hometown: null };
+  let identity = { name: "", college: "", hometown: null, position: "" };
   function renderIdentityPanel(){
     const nameInput = document.getElementById("identityNameInput");
     const collegeInput = document.getElementById("identityCollegeInput");
     const hometownValue = document.getElementById("identityHometownValue");
+    const positionValue = document.getElementById("identityPositionValue");
     if(!identity.name) identity.name = randomFullName();
     if(!identity.college) identity.college = randomCollege();
     if(!identity.hometown) identity.hometown = randomHometown();
+    if(!identity.position) identity.position = randomPosition();
     nameInput.value = identity.name;
     collegeInput.value = identity.college;
     hometownValue.textContent = `${identity.hometown.city}, ${identity.hometown.state}`;
+    if(positionValue) positionValue.textContent = positionLabel(identity.position);
     const dl = document.getElementById("collegeList");
     if(!dl.childElementCount) dl.innerHTML = COLLEGES.map(c=>`<option value="${c}"></option>`).join("");
   }
@@ -2737,10 +2764,15 @@ import {
     identity.hometown = randomHometown();
     document.getElementById("identityHometownValue").textContent = `${identity.hometown.city}, ${identity.hometown.state}`;
   });
+  document.getElementById("identityPositionRerollBtn").addEventListener("click", ()=>{
+    identity.position = randomPosition();
+    document.getElementById("identityPositionValue").textContent = positionLabel(identity.position);
+  });
   document.getElementById("identityRerollAllBtn").addEventListener("click", ()=>{
     identity.name = randomFullName();
     identity.college = randomCollege();
     identity.hometown = randomHometown();
+    identity.position = randomPosition();
     renderIdentityPanel();
   });
 
@@ -2944,12 +2976,14 @@ import {
     return parts.join(" · ").replace(/^./, c=>c.toUpperCase());
   }
 
+  // MLB draft: ~20 rounds, first round ~1-30. A prospect's slot follows the same weighted hitter
+  // rating the career engine uses; the Showcase grade stays a separate measure of completeness.
   function draftSlotFor(score){
-    if(score>=72) return { round:1, pickLo:1, pickHi:10, label:"Round 1 — Top 10" };
-    if(score>=62) return { round:1, pickLo:11, pickHi:32, label:"Round 1" };
-    if(score>=52) return { round:randInt(2,3), pickLo:33, pickHi:96, label:"Day 2" };
-    if(score>=42) return { round:randInt(4,5), pickLo:97, pickHi:170, label:"Day 3" };
-    if(score>=32) return { round:randInt(6,7), pickLo:171, pickHi:257, label:"Day 3" };
+    if(score>=72) return { round:1, pickLo:1, pickHi:10, label:"First Round — Top 10" };
+    if(score>=62) return { round:1, pickLo:11, pickHi:30, label:"First Round" };
+    if(score>=52) return { round:randInt(2,3), pickLo:31, pickHi:100, label:"Day 1 (Rounds 2–3)" };
+    if(score>=42) return { round:randInt(4,10), pickLo:101, pickHi:310, label:"Day 2 (Rounds 4–10)" };
+    if(score>=32) return { round:randInt(11,20), pickLo:311, pickHi:610, label:"Day 3 (Rounds 11–20)" };
     return { round:0, pickLo:0, pickHi:0, label:"Undrafted Free Agent" };
   }
 
@@ -2979,7 +3013,8 @@ import {
     const playerName = (identity.name||"").trim() || randomFullName();
     const playerCollege = (identity.college||"").trim() || randomCollege();
     const playerHometown = identity.hometown || randomHometown();
-    identity.name = playerName; identity.college = playerCollege; identity.hometown = playerHometown;
+    const playerPosition = identity.position || randomPosition();
+    identity.name = playerName; identity.college = playerCollege; identity.hometown = playerHometown; identity.position = playerPosition;
 
     career = {
       decade, league, draftYear, slot, overallPick,
@@ -2988,6 +3023,7 @@ import {
       name: playerName,
       college: playerCollege,
       hometown: playerHometown,
+      position: playerPosition,
       teamId: team.id,
       draftTeamId: team.id,
       leagueStrength,
@@ -3091,8 +3127,8 @@ import {
     const [c1, c2] = teamColors(career.teamId);
     card.innerHTML = `
       <div class="dn-badge cycling" id="dnBadge" style="background:linear-gradient(135deg, var(--surface-raised), var(--surface-raised));"></div>
-      <div class="dn-eyebrow">${draftYear} NFL Draft · ${decade}</div>
-      <div class="dn-eyebrow" style="margin-top:0.2rem;">${svgEscape(career.name)} · ${svgEscape(career.college)} · ${svgEscape(career.hometown.city)}, ${svgEscape(career.hometown.state)}</div>
+      <div class="dn-eyebrow">${draftYear} MLB Draft · ${decade}</div>
+      <div class="dn-eyebrow" style="margin-top:0.2rem;">${svgEscape(career.name)} · ${svgEscape(positionLabel(career.position))} · ${svgEscape(career.college)} · ${svgEscape(career.hometown.city)}, ${svgEscape(career.hometown.state)}</div>
       <div class="dn-team cycling" id="dnTeamText">On the clock…</div>
       <div class="dn-pick" id="dnPickText" style="visibility:hidden;">${pickLabel}</div>
       <div class="dn-flavor" id="dnFlavorText" style="visibility:hidden;">${draftNightFlavor(slot, lastCombine.grade)}</div>`;
@@ -3128,10 +3164,11 @@ import {
 
   function draftNightFlavor(slot, grade){
     const name = svgEscape(career.name), college = svgEscape(career.college);
-    if(slot.round===1 && slot.pickLo===1) return `The cameras find ${name} in the green room. Scouts loved the ${college} tape — ${grade.flavor.toLowerCase()} — and someone just bet a franchise on it.`;
-    if(slot.round===1) return `A first-round grade out of ${college}, a late slide, and a locker room that expects ${name} to start soon.`;
-    if(slot.round===0) return `No call on draft weekend for the ${college} product. ${name} signs a make-good deal and a shot at a training camp roster spot.`;
-    return `A solid combine out of ${college} and a mid-round investment on ${name} — the kind of pick that either starts by year three or bounces to a third team.`;
+    const pos = positionLabel(career.position).toLowerCase();
+    if(slot.round===1 && slot.pickLo===1) return `The cameras find ${name} at the podium. Scouts loved the ${college} bat — ${grade.flavor.toLowerCase()} — and a front office just spent a top-10 pick on a ${pos}.`;
+    if(slot.round===1) return `A first-round grade out of ${college}, a small slide, and an organization that expects ${name} to move quickly through the system.`;
+    if(slot.round===0) return `No call over the three days for the ${college} product. ${name} signs a non-drafted free-agent deal and a shot at an affiliate roster.`;
+    return `A solid showcase out of ${college} and a mid-round flier on ${name} — the kind of pick that either forces its way up the ladder in three years or gets released.`;
   }
 
   document.getElementById("startCareerBtn").addEventListener("click", ()=>{
@@ -5900,7 +5937,7 @@ import {
       // missing real time is genuine team news the same way a trade or succession event is.
       if(r.availability){
         career.leagueNewsLog.push({ year, teamId: r.teamId,
-          title: r.availability.reason==="suspension" ? "Starter Suspended" : "Starter Injured",
+          title: r.availability.reason==="suspension" ? "Regular Suspended" : "Regular Hits the IL",
           delta: 0,
           flavor: r.availability.reason==="suspension"
             ? `${teamNameAt(r.teamId, year)} starter ${r.name} is suspended for part of the season (${r.availability.label}).`
@@ -6131,8 +6168,8 @@ import {
         enterFreeAgentPool(p, "waived");
         const repl = generateBenchPlayer(teamId, decade, year, career.leagueStrength[teamId] ?? 60, Math.random()<0.4);
         assignQuarterbackToRoster(repl.id, teamId, slot==="qb2"?"QB2":"QB3");
-        career.leagueNewsLog.push({ year, teamId, title:"Waives a Depth QB", delta:0,
-          flavor:`${teamNameAt(teamId, year)} part ways with ${p.name} to open up a roster spot.` });
+        career.leagueNewsLog.push({ year, teamId, title:"Designates a Bench Bat", delta:0,
+          flavor:`${teamNameAt(teamId, year)} designate ${p.name} for assignment to open a roster spot.` });
       }
     });
   }
@@ -6198,8 +6235,8 @@ import {
           entity.joblessSeasons = 0;
           assignQuarterbackToRoster(entity.id, teamId, slot==="qb2"?"QB2":"QB3");
           toRemove.add(entity);
-          career.leagueNewsLog.push({ year, teamId, title:"Signs a Free-Agent Backup", delta:0,
-            flavor:`${teamNameAt(teamId, year)} bring in ${entity.name} off the open market to compete for QB depth.` });
+          career.leagueNewsLog.push({ year, teamId, title:"Signs a Free-Agent Bench Bat", delta:0,
+            flavor:`${teamNameAt(teamId, year)} bring in ${entity.name} off the open market for bench depth.` });
         }
       }
     });
@@ -6239,8 +6276,8 @@ import {
       if(chart.qb3) enterFreeAgentPool(chart.qb3, "replaced-by-prospect");
       const newQb3 = generateBenchPlayer(teamId, decade, year, teamGrade, true);
       assignQuarterbackToRoster(newQb3.id, teamId, "QB3");
-      career.leagueNewsLog.push({ year, teamId, title:"Drafts a QB to Develop", delta:0,
-        flavor:`${teamNameAt(teamId, year)} use a mid-round pick on a developmental quarterback — no pressure on the current starter yet, but the clock is quietly ticking.` });
+      career.leagueNewsLog.push({ year, teamId, title:"Drafts a Prospect to Develop", delta:0,
+        flavor:`${teamNameAt(teamId, year)} use an early pick on a position-player prospect — no pressure on the current regular yet, but the clock is quietly ticking.` });
     }
     // Contract/entrenchment bookkeeping still ticks down every season -- it's real flavor, and it's
     // still what the "survives, signs an extension" branch below reads to reset -- but Wave 2B
@@ -6313,7 +6350,7 @@ import {
       assignQuarterbackToRoster(repl.id, teamId, fromSlot);
       const delta = randInt(-3,6);
       adjustTeamStrength(teamId, delta, 0);
-      career.leagueNewsLog.push({ year, teamId, title:"Backup Wins the Starting Job", delta, flavor: flavor(oldName, promoted.name) });
+      career.leagueNewsLog.push({ year, teamId, title:"Bench Bat Wins an Everyday Job", delta, flavor: flavor(oldName, promoted.name) });
     }
     if(bestChallenger && bestChallengerVal-rivalVal>=SUCCESSION_PROMOTION_GAP){
       const isQb3 = bestChallenger===qb3;
@@ -6366,7 +6403,7 @@ import {
       }
       const delta = randInt(-4,8);
       adjustTeamStrength(teamId, delta, 0);
-      career.leagueNewsLog.push({ year, teamId, title:"Free-Agent Quarterback Signing", delta,
+      career.leagueNewsLog.push({ year, teamId, title:"Free-Agent Signing", delta,
         flavor: poolCandidate===signed
           ? `${teamName} move on from ${oldName} and hand the job to ${signed.name}, plucked off the open market after his last team let him go.`
           : `${teamName} move on from ${oldName} and hand the job to a veteran brought in from outside.` });
@@ -6797,7 +6834,7 @@ import {
       const incumbentAfter = getQuarterbackById(career._backupUsagePlan.qbId);
       const incumbentSeasonRow = incumbentAfter && incumbentAfter.seasons.find(s=>s.year===career.year);
       if(incumbentSeasonRow){
-        season.incumbentSeasonSnapshot = { yards: incumbentSeasonRow.yards, td: incumbentSeasonRow.td, int: incumbentSeasonRow.int, rating: incumbentSeasonRow.rating };
+        season.incumbentSeasonSnapshot = { hr: incumbentSeasonRow.hr ?? incumbentSeasonRow.td, rbi: incumbentSeasonRow.rbi ?? 0, avg: incumbentSeasonRow.avg, opsPlus: incumbentSeasonRow.opsPlus ?? incumbentSeasonRow.rating };
       }
     }
     simulateDepthChartSeasons(decade, league, career.year);
@@ -7421,7 +7458,7 @@ import {
     { id:"gmbadblood", title:"Bad Blood With the GM", repDelta:0, strengthDelta:[0,0], gmDelta:[-18,-8], setFlag:null,
       flavor:()=>"A disagreement over usage, money, or just how a press conference got handled turns into something personal. The GM doesn't forget it." },
     { id:"gmtrust", title:"GM Publicly Backs Him", repDelta:[2,5], strengthDelta:[0,0], gmDelta:[10,18], setFlag:null,
-      flavor:()=>"The general manager goes out of his way in a press conference to make it clear: this is his quarterback, full stop, no caveats." },
+      flavor:()=>"The general manager goes out of his way in a press conference to make it clear: this is his guy, full stop, no caveats." },
   ];
   // Called only for coachfired/newgm — front-office churn is the natural point a new play-caller
   // (and with him, a new offensive identity) shows up. Deliberately excludes the CURRENT scheme
@@ -8592,10 +8629,10 @@ import {
       // player instead of just felt through the numbers.
       const window = needProfile.window;
       const reason = role==="starter" && window==="rebuild" ? "Rebuilding, and they don't have a real answer at the position."
-        : window==="win-now" ? "In win-now mode — they want a proven arm, not a project."
-        : window==="contender" ? "A real contender, and QB is exactly where they'd upgrade first."
+        : window==="win-now" ? "In win-now mode — they want a proven bat, not a project."
+        : window==="contender" ? "A real contender, and this is exactly where they'd upgrade first."
         : window==="rebuild" ? "Rebuilding, and open to seeing what he's got."
-        : "Retooling, and QB is squarely in the mix.";
+        : "Retooling, and the position is squarely in the mix.";
       offers.push({
         teamId: t.id, role, isHome:false, reason,
         apy: Math.round(baseApy*repMult*leverage*comeback*awayGmMult*(0.88+Math.random()*0.3)),
@@ -8629,7 +8666,7 @@ import {
     const live = offers.filter(o=>!o.withdrawn);
     const cards = live.map((o,i)=>{
       const teamName = teamNameAt(o.teamId, career.year);
-      const roleLabel = o.role==="competition" ? "Camp competition, no guarantees" : (o.isHome ? "Re-sign as the starter" : "Sign as the starter");
+      const roleLabel = o.role==="competition" ? "Compete for the job in spring, no guarantees" : (o.isHome ? "Re-sign as the everyday guy" : "Sign as the everyday guy");
       const agentNote = o.agentEvent==="lucky" ? `<div class="rep-note">His agent found something special here.</div>`
         : o.agentEvent==="bad" ? `<div class="rep-note">This one feels light — the agent may have undersold him.</div>` : "";
       const canNegotiate = o.patience>0 && o.pushCount<3;
@@ -9338,7 +9375,7 @@ import {
         const box = match.realRound && match.realRound.box;
         const line = box ? `${box.comp}/${box.att}, ${box.yards} yds, ${box.td} TD, ${box.int} INT` : "";
         const startedByOther = match.realRound && match.realRound.qbId;
-        const label = startedByOther ? svgEscape(match.realRound.qbName || "Backup") : svgEscape(career.name);
+        const label = startedByOther ? svgEscape(match.realRound.qbName || "a fill-in") : svgEscape(career.name);
         return `<div class="bracket-qb-line"><b>${label}</b>${line ? ` — ${line}` : ""}</div>`;
       }
       const qb = rivalForTeam(teamId);
@@ -10068,21 +10105,22 @@ import {
         ${sub?`<div class="fo-row-sub">${sub}</div>`:""}
       </div>`;
   }
-  // The player's own team's depth chart -- QB1 is either the player (starter) or the entrenched
-  // incumbent they're stuck behind (backup); QB2/QB3 are purely informational/flavor (see
-  // PROGRESS.md Round 7 for why they never autonomously threaten the player's own job).
+  // The player's own spot on the roster at his position -- the everyday job is either the player's
+  // or held by the entrenched veteran he's stuck behind; the two bench names are informational
+  // flavor (see PROGRESS.md Round 7 for why they never autonomously threaten the player's job).
   function buildDepthChartRowHTML(){
     const chart = (career.leagueDepthCharts||{})[career.teamId];
     const incumbent = career.isBackup ? rivalForTeam(career.teamId) : null;
+    const posLbl = positionLabel(career.position);
     const qb1Line = career.isBackup && incumbent
-      ? `QB1 ${svgEscape(incumbent.name)} (${rivalEffTalent(incumbent)} ovr) · QB2 You`
-      : `QB1 You`;
+      ? `Everyday ${svgEscape(incumbent.name)} (${rivalEffTalent(incumbent)} ovr) · Bench You`
+      : `Everyday You`;
     const benchLine = chart
-      ? `${career.isBackup ? "" : "QB2 "}${career.isBackup ? "" : `${svgEscape(chart.qb2.name)} (${rivalEffTalent(chart.qb2)} ovr) · `}QB3 ${svgEscape(chart.qb3.name)} (${rivalEffTalent(chart.qb3)} ovr)`
+      ? `${career.isBackup ? "" : "Bench "}${career.isBackup ? "" : `${svgEscape(chart.qb2.name)} (${rivalEffTalent(chart.qb2)} ovr) · `}Bench ${svgEscape(chart.qb3.name)} (${rivalEffTalent(chart.qb3)} ovr)`
       : "";
     return `<div class="fo-row">
-        <div class="fo-row-head"><span class="fo-row-label">Depth Chart</span></div>
-        <div class="fo-row-sub">${qb1Line}${benchLine?` · ${benchLine}`:""}${career.isBackup ? " — you're competing for the starting job." : ""}</div>
+        <div class="fo-row-head"><span class="fo-row-label">Roster — ${svgEscape(posLbl)}</span></div>
+        <div class="fo-row-sub">${qb1Line}${benchLine?` · ${benchLine}`:""}${career.isBackup ? " — you're fighting for the everyday job." : ""}</div>
       </div>`;
   }
   // Balance Wave 3: a lightweight, visible tally of Key Moment decision quality across the whole
@@ -10271,12 +10309,12 @@ import {
     }
     if(season.missedGamesBackup>0 && season.games===0){
       const snap = season.incumbentSeasonSnapshot;
-      narratives.push(`A clipboard year — ${svgEscape(season.incumbentName||"the incumbent")} started all ${season.missedGamesBackup} games ahead of him${snap ? ` (${snap.yards.toLocaleString()} yds, ${snap.td} TD, ${snap.rating.toFixed(1)} rating)` : ""}.`);
+      narratives.push(`A bench year — ${svgEscape(season.incumbentName||"the veteran ahead of him")} played all ${season.missedGamesBackup} games at the position${snap ? ` (${snap.hr} HR, ${snap.rbi} RBI, ${snap.opsPlus!=null?snap.opsPlus+" OPS+":""})` : ""}.`);
     } else if(season.missedGamesBackup>0){
-      narratives.push(`Got ${season.games} start${season.games===1?"":"s"} behind ${svgEscape(season.incumbentName||"the incumbent")}, who took the other ${season.missedGamesBackup}.`);
+      narratives.push(`Got into ${season.games} game${season.games===1?"":"s"} behind ${svgEscape(season.incumbentName||"the veteran ahead of him")}, who took the other ${season.missedGamesBackup}.`);
     }
-    if(season.wonStartingJob===true) narratives.push(`Wins the starting job — QB1 heading into next season.`);
-    else if(season.wonStartingJob===false) narratives.push(`Still fighting for the starting job — back to camp next year to try again.`);
+    if(season.wonStartingJob===true) narratives.push(`Wins the everyday job — the regular at ${positionLabel(career.position)} heading into next season.`);
+    else if(season.wonStartingJob===false) narratives.push(`Still on the bench — back to spring training next year to fight for the job again.`);
     if(career.seasonsWithTeam===1 && career.seasonNumber>1) narratives.push(`First season in a new uniform with the ${season.teamName}.`);
     if(season.contractTier==="minimum") narratives.push(`A minimum-deal roster spot — every snap has to be earned.`);
     else if(season.contractTier==="backup") narratives.push(`A backup-caliber deal — the job isn't guaranteed week to week.`);
@@ -11465,7 +11503,7 @@ import {
       banned:"banned from the league", injury:"career-ending injury", retired:"retired on his own terms" };
     const exitTag = EXIT_TAGS[career.exitReason] || "retired on his own terms";
     hero.innerHTML = `
-      <div class="hh-eyebrow">${svgEscape(career.name)} · out of ${svgEscape(career.college)} · ${svgEscape(career.hometown.city)}, ${svgEscape(career.hometown.state)}</div>
+      <div class="hh-eyebrow">${svgEscape(career.name)} · ${svgEscape(positionLabel(career.position))} · out of ${svgEscape(career.college)} · ${svgEscape(career.hometown.city)}, ${svgEscape(career.hometown.state)}</div>
       <div class="hh-verdict">${verdict.tier}</div>
       <div class="hh-sub">${career.seasonLog.length}-season career · ${career.draftYear}–${career.year} · ${exitTag}<br>${verdict.note}</div>`;
 
@@ -11480,7 +11518,7 @@ import {
     });
     const trophyEntry = {
       id: `${Date.now()}_${Math.round(Math.random()*1e6)}`,
-      name: career.name, college: career.college,
+      name: career.name, college: career.college, position: career.position,
       hometownCity: career.hometown.city, hometownState: career.hometown.state,
       decade: career.decade, draftYear: career.draftYear, finalYear: career.year,
       verdict: verdict.tier, seasons: career.seasonLog.length, exitReason: career.exitReason,
