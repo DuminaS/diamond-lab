@@ -789,6 +789,126 @@ visual in the app -- the admin/dev-only calculator screen, the rare-event/infrac
 cards, and the Playoff Tree bracket's own node cards (still the pre-overhaul renderer per the
 still-open "Playoff Tree overhaul" plan) weren't separately re-audited this pass.
 
+## 2026-09-03 — Multiplayer: Parallel Universe Mode, Private Match (first real build)
+
+Full design mapped across three planning passes first (see `MULTIPLAYER_MODE_SPEC.md`); this is the
+actual implementation of the one combination the user asked to build: Parallel Universe Mode (two
+fully independent leagues from a shared seed) on the Private track (no backend, a code shared
+between two people). Same League Mode and the public/matchmaking track remain planning-only, per
+that doc's own scoping.
+
+### What shipped
+
+- **`src/sim/prng.js`** (new pure module): a real, production seeded-RNG mechanism -- this codebase
+  had none before today; every `Math.random()` call in `src/main.js`/`src/sim/*.js` was live and
+  unseeded. Rather than refactoring the hundreds of call sites that implies, this promotes the exact
+  mulberry32 algorithm `tests/helpers/seededRandom.mjs` already used (page-injected, test-only)
+  into a real module (`createSeededRandom`, `installSeededRandom`, `restoreRandom`,
+  `isSeededRandomActive`) that overrides the GLOBAL `Math.random` for a session -- zero call sites
+  changed anywhere else in the codebase. Verified byte-identical to the pre-existing test-harness
+  algorithm before relying on it (a disposable comparison script, not kept).
+- **Seeding window, narrowed from the original plan during the actual build (a real discovery, not
+  a plan change)**: only Combine + Draft Night need to be seeded, not the whole career. "The exact
+  same rolls in order" is about the blind build/draft comparison specifically; once a real `career`
+  exists, each player's own season-by-season play goes back to genuine, unseeded randomness exactly
+  like solo play always has -- there's no requirement, and no practical way without a much bigger
+  undertaking, to keep two independently-played, possibly-days-apart careers in lockstep for their
+  whole multi-season length. `installSeededRandom` fires on "Start My Combine";
+  `restoreRandom` fires on "Report to Camp" (`startCareerBtn`), right before the first season
+  simulates. This also means a resumed multiplayer career needs no seed carried forward at all.
+- **`src/sim/matchCode.js`** (new pure module): a self-describing match code (no server to look
+  anything up in) encoding `{seed, decadeIndex}` into an 8-character, checksum-protected string over
+  a 32-symbol alphabet excluding visually-ambiguous characters (0/O, 1/I) -- e.g. `K7QX-9BWM`. Also
+  carries the separate RESULT code format (`encodeResultCode`/`decodeResultCode`, prefixed `GLR1-`,
+  base64 JSON + checksum) for a finished career's small scoring summary, pasted back and forth
+  between the two players once both are done.
+- **`src/sim/multiplayerScore.js`** (new pure module): the weighted composite that decides a
+  head-to-head winner -- rings 30% / accolades 25% / peak-and-rate quality 20% / career totals 10% /
+  achievements 10% / earnings 5%, explicitly reusing this codebase's own established
+  rate-vs-totals philosophy (the same lesson Balance Wave 5's MVP rewrite already learned: a short
+  brilliant career must be able to beat a long mediocre one). Every component clamped to a sane
+  0-100 range regardless of malformed/extreme input.
+- **Save-key namespacing**: `ACTIVE_CAREER_KEY` (a single constant every save/load/clear function
+  already routed through) became `activeCareerKey`, a mutable variable defaulting to the untouched
+  plain solo key. A multiplayer session points it at `gridironlab.activeCareer.mp.<matchId>.<slot>`
+  instead, so a device can hold any number of concurrent multiplayer matches plus one ordinary solo
+  save without collision. `resetToSoloSession()` (called from every vanilla combine entry point --
+  `#startBtn`, `#playAgainBtn`, `#newCareerBtn`) points it back at the solo key and restores real
+  randomness, so a solo game started right after a multiplayer match never silently inherits either.
+- **Menu UI**: a new "Multiplayer" entry -> a hub screen (Create / Join / Compare Results). Create
+  locks an era once (`renderDecadeGrid` renders a single non-interactive locked card instead of the
+  normal pick-any grid whenever a multiplayer context is active -- "the exact same rolls" only means
+  something fair to compare if both careers play the same league era) and generates the match code;
+  Join decodes a pasted code and confirms the era before starting; both funnel into the ordinary,
+  completely unchanged solo Combine/draft flow from there. An "Active Multiplayer Matches" strip on
+  the menu scans `localStorage` directly for in-progress (`*.mp.*`) and finished
+  (`gridironlab.mpResult.*`) matches -- deliberately not a separate index that could drift out of
+  sync -- with Resume/Copy-Result-Code actions.
+- **Result export + Compare**: `finishCareer()`, when `career.multiplayerMatchId` is set, builds the
+  scoring summary from the exact same fields the Trophy Room entry already computed (no
+  re-derivation), persists it under its own key (the in-progress save is already gone by this point
+  -- `clearActiveCareer()` runs at the top of `finishCareer()`), and shows a copyable Result Code
+  panel on the HOF screen. The Compare screen decodes two pasted result codes, refuses to compare
+  two different matches, and renders a side-by-side scoreboard with a declared winner via
+  `computeMatchScore`.
+
+### Bugs found and fixed during the build
+
+- Forgot to import `encodeResultCode`/`decodeResultCode` into `main.js` at all -- the Compare
+  screen's "Compare" button threw a silent `ReferenceError` on click. Caught immediately by the
+  first real Playwright run (a `pageerror` listener in a disposable debug script pinpointed it in
+  seconds) rather than shipped.
+- `scoreComponents`' peak/rate component averaged `s.peakOverall` directly into an already-clamped
+  0-100 `ratingScaled` value without clamping `peakOverall` itself first -- malformed input
+  (`peakOverall: 500`) produced a component of 300; negative input produced a negative component.
+  Caught by the pure module's own unit tests (deliberately written to probe extreme/malformed
+  input, not just typical values) before this ever reached a Playwright run. Fixed by clamping
+  `peakOverall` to its real 0-99 range before averaging.
+- Test-authoring bugs, not app bugs, but worth recording since they cost real debugging time: (a)
+  a first cut of the "resume a multiplayer career after reload" test used `#resumeCareerBtn`, which
+  is driven by `activeCareerKey` -- an in-memory variable a full page reload always resets to the
+  solo default, so it never fires for a multiplayer save after a reload. The actual mechanism
+  (`renderMultiplayerMatchesStrip`'s `[data-mp-resume-key]` buttons) exists specifically because it
+  scans `localStorage` directly instead of trusting an in-memory pointer to survive a reload -- the
+  test needed to use that selector instead. (b) The lifecycle test's own match seed is picked with
+  real ambient randomness at match-creation time (correct, intentional -- see the seeding-window
+  note above), which made an unseeded test run hit a different, occasionally slower combine/draft
+  outcome every run; wrapping the whole test in the pre-existing `installSeededRandom(page, seed)`
+  test-harness convention made the real ambient `Math.random()` call that PICKS the match seed
+  itself reproducible too, eliminating the flakiness. (c) A resumed season card can still have a
+  pending playoff reveal from before the save was checkpointed -- needed the pre-existing
+  `ensureBracketFinalized` helper, same as every other season-advancing test in this suite. (d) The
+  HOF/career-summary screen only offers a "Back to menu" button, not a way to reach Multiplayer
+  directly -- the test needed an extra navigation step it initially skipped.
+
+### Verification
+
+`tests/balance/prng.node.mjs` (new, 6 tests), `tests/balance/matchCode.node.mjs` (new, 10 tests --
+match-code round-trip/checksum/tolerance plus result-code round-trip/checksum), `tests/balance/
+multiplayerScore.node.mjs` (new, 7 tests, including the short-brilliant-career-beats-long-mediocre-
+one property mirrored from `awards.node.mjs`'s own convention). `tests/regression/multiplayer-
+parallel-universe-private.spec.js` (new, 3 Playwright tests): the actual guarantee the whole feature
+exists to deliver -- a match code shared across two genuinely SEPARATE browser contexts produces
+byte-identical Combine round-1 (and round-2, after one identical-shaped pick each) candidate pools,
+then real divergence once the two sessions pick differently; the full lifecycle wired end-to-end
+(create -> seeded combine -> locked-era draft night -> a forced-quick career -> a real exported
+result code -> Compare screen decode/validate/scoreboard render); Compare correctly refuses two
+result codes from different matches. `npm test`: 81/81 balance tests (58 prior + 23 new across three
+new pure modules), production build clean, 52/52 Playwright (49 prior + 3 new).
+
+### Not done this wave (stated plainly)
+
+Same League Mode (`MULTIPLAYER_MODE_SPEC.md` section 13) remains entirely unbuilt -- still
+correctly scoped as meaningfully larger than Parallel Mode, for the reasons that doc already lays
+out (one shared mutable league, a real draft-collision house rule, a genuinely unsolved head-to-head
+game wrinkle). The Public/matchmaking track (section 8) also remains unbuilt -- no accounts, no
+backend, no real-time sync of any kind exists in this codebase. Within Private + Parallel itself: no
+mid-career "as of season N" snapshot comparison (only finished-vs-finished, per the spec's own
+recommended default); the scoring weights in `multiplayerScore.js` are the spec's own first proposal,
+not yet tuned against hand-built archetype careers the way the balance brief's MVP formula was;
+result codes and match codes are both honor-system-only (no server exists to prevent hand-editing a
+result code before sharing it, exactly as the spec's own "honest limitations" section predicted).
+
 ## Testing methodology (established pattern, reuse every round)
 - jsdom in `/tmp/gtest`, debug hooks (`window.__debug`) injected only into throwaway copies (`index.debugN.html`), never the real file. Latest debug build: `index.debug24.html` (Round 4, item 3).
 - `grep -c "__debug" index.html` must return 0 on the real file before every publish.

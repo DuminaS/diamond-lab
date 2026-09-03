@@ -6,6 +6,26 @@ when you need the detailed "why" behind a specific mechanic, formula, or bug fix
 
 ## Current local status — 2026-09-03
 
+**Multiplayer: Parallel Universe Mode, Private Match is built and shipped** -- the first real
+combination out of `MULTIPLAYER_MODE_SPEC.md` (a full design map written across three planning
+passes before any code). Two players share a match code, each drafts blind from the exact same
+seeded Combine rolls, and each plays a fully independent solo-style career; a Compare screen scores
+both on a weighted composite (rings/accolades/peak-rate-quality/totals/achievements/earnings) once
+both export a result code. No backend, no accounts -- everything is a copy-pasted code, matching
+this project's own "stay browser-local" decision. New pure modules: `src/sim/prng.js` (a real,
+production seeded-RNG mechanism -- promotes the test-only mulberry32 generator into a global
+`Math.random` override, so zero of the hundreds of existing `Math.random()` call sites anywhere
+else in the codebase had to change), `src/sim/matchCode.js` (match + result code encode/decode),
+`src/sim/multiplayerScore.js` (the scoring composite). New menu flow (Multiplayer hub -> Create/
+Join/Compare), a namespaced save-key scheme (`activeCareerKey`, was a single constant, now a
+session variable) so multiplayer saves can't collide with the solo save or each other, and an
+"Active Multiplayer Matches" strip that scans `localStorage` directly rather than trusting an
+in-memory pointer to survive a reload. Same League Mode and the public/matchmaking track remain
+planning-only -- read `MULTIPLAYER_MODE_SPEC.md` before touching anything multiplayer-related, and
+see PROGRESS.md's dated entry for the two real bugs found and fixed during the build (a forgotten
+import that broke the Compare button; an unclamped score component that could go negative or over
+100 on malformed input).
+
 A visual overflow audit (development-plan picker + the exportable baseball card + a broader sweep)
 shipped 2026-09-03: fixed a real achievement-name-wrapping bug on the baseball card's SVG back face
 (`cardWrapLines` in `src/main.js`, now supports 3 lines instead of silently bleeding into the next

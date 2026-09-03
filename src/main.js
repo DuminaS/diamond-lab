@@ -18,6 +18,9 @@ import {
   maxConsecutive as ruleMaxConsecutive, seasonRule, consecutiveSeasonRule, everySeasonRule,
   eventCountRule, sequenceRule, ledgerStep, sameFieldAs, groupCountRule, allOf, anyOf, not as ruleNot,
 } from "./sim/achievementRules.js";
+import { installSeededRandom, restoreRandom } from "./sim/prng.js";
+import { encodeMatchCode, decodeMatchCode, encodeResultCode, decodeResultCode, DECADE_COUNT as MP_DECADE_COUNT } from "./sim/matchCode.js";
+import { computeMatchScore } from "./sim/multiplayerScore.js";
 import {
   DEVELOPMENT_PLAN_LIST,
   advanceDevelopmentSeason,
@@ -1815,7 +1818,30 @@ import {
   // retiredQbIds registry (Section 5's target schema). See syncQbRegistryFromLegacy for what
   // building it actually involves.
   const SAVE_SCHEMA_VERSION = 3;
-  const ACTIVE_CAREER_KEY = "gridironlab.activeCareer";
+  const SOLO_ACTIVE_CAREER_KEY = "gridironlab.activeCareer";
+  // Multiplayer Parallel Universe Mode (MULTIPLAYER_MODE_SPEC.md section 12.3): solo play always
+  // uses the plain key above, completely untouched -- a multiplayer session (Create/Join Private
+  // Match, or resuming one from the "Active Multiplayer Matches" list) points this at a namespaced
+  // key instead, `gridironlab.activeCareer.mp.<matchId>.<slot>`, so a device can hold any number of
+  // concurrent multiplayer matches (plus one ordinary solo save) without any of them colliding.
+  // Every read/write in this file already goes through saveActiveCareer/loadActiveCareer/
+  // clearActiveCareer, which all read this ONE variable -- switching it is the entire mechanism.
+  let activeCareerKey = SOLO_ACTIVE_CAREER_KEY;
+  function multiplayerSaveKey(matchId, slot){ return `${SOLO_ACTIVE_CAREER_KEY}.mp.${matchId}.${slot}`; }
+  // The current multiplayer session context, if any -- null for ordinary solo play. Stamped onto
+  // a career the moment it's created (see the career={...} object literal) so a finished career
+  // still remembers which match it belonged to even after this in-memory context is gone.
+  let currentMultiplayerContext = null; // { matchId, slot, seed, decadeIndex } | null
+  // Every ordinary (non-multiplayer) combine entry point calls this first: points saves back at the
+  // plain solo key, drops any lingering multiplayer context, and restores real (unseeded)
+  // Math.random if a previous multiplayer session left it installed. Without this, starting a solo
+  // combine right after playing a multiplayer match would silently keep running on that match's
+  // seed and save into that match's slot instead of a fresh solo save.
+  function resetToSoloSession(){
+    activeCareerKey = SOLO_ACTIVE_CAREER_KEY;
+    currentMultiplayerContext = null;
+    restoreRandom();
+  }
   let _lastCheckpoint = null;
   // Pure -- never mutates `raw` in place (spreads into new objects instead), and never rolls fresh
   // Math.random() (migration requirement #9: the same save must migrate identically every time).
@@ -1923,7 +1949,7 @@ import {
       const base = _lastCheckpoint || { phase:"regular_season", year: career.year, eventId:null, playoffRoundIndex:null };
       const checkpoint = { ...base, year: career.year, ...(checkpointPatch||{}) };
       _lastCheckpoint = checkpoint;
-      store.setItem(ACTIVE_CAREER_KEY, JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(), checkpoint, career, build }));
+      store.setItem(activeCareerKey, JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(), checkpoint, career, build }));
     }catch(e){}
   }
   // Migration requirement #12: persist the migrated/repaired envelope immediately once it's built,
@@ -1936,19 +1962,24 @@ import {
   // migration bug discovered later still has the pre-migration data to recover from; it's
   // overwritten (never accumulated) on each subsequent real migration, so this never grows
   // unbounded.
-  function loadActiveCareer(){
+  // `keyOverride` lets a caller peek at a SPECIFIC save (e.g. the "Active Multiplayer Matches" list
+  // reading several different matches' saves to render summaries) without disturbing
+  // `activeCareerKey` -- the key the game is actually currently playing against. Defaults to that
+  // live key, matching every existing call site's behavior unchanged.
+  function loadActiveCareer(keyOverride){
     if(!store) return null;
+    const key = keyOverride || activeCareerKey;
     try{
-      const raw = store.getItem(ACTIVE_CAREER_KEY);
+      const raw = store.getItem(key);
       if(!raw) return null;
       const parsed = JSON.parse(raw);
       const wasCurrent = parsed.schemaVersion===SAVE_SCHEMA_VERSION && parsed.career && parsed.career.qbsById;
       const migrated = migrateSaveEnvelope(parsed);
       if(migrated && !wasCurrent){
-        try{ store.setItem(ACTIVE_CAREER_KEY+".backup", raw); }catch(e){}
+        try{ store.setItem(key+".backup", raw); }catch(e){}
       }
       if(migrated){
-        try{ store.setItem(ACTIVE_CAREER_KEY, JSON.stringify(migrated)); }catch(e){}
+        try{ store.setItem(key, JSON.stringify(migrated)); }catch(e){}
       }
       return migrated;
     }catch(e){ return null; }
@@ -1956,7 +1987,7 @@ import {
   function clearActiveCareer(){
     if(!store) return;
     _lastCheckpoint = null;
-    try{ store.removeItem(ACTIVE_CAREER_KEY); }catch(e){}
+    try{ store.removeItem(activeCareerKey); }catch(e){}
   }
   function renderActiveCareerStrip(){
     const el = document.getElementById("activeCareerStrip");
@@ -2086,6 +2117,10 @@ import {
     careerSummary: document.getElementById("screen-career-summary"),
     trophyroom: document.getElementById("screen-trophyroom"),
     achievements: document.getElementById("screen-achievements"),
+    mpHub: document.getElementById("screen-mp-hub"),
+    mpCreate: document.getElementById("screen-mp-create"),
+    mpJoin: document.getElementById("screen-mp-join"),
+    mpCompare: document.getElementById("screen-mp-compare"),
   };
   function showScreen(name){
     Object.values(screens).forEach(s=>s.classList.remove("active"));
@@ -2131,9 +2166,9 @@ import {
     el.innerHTML = `Best combine grade <b>${best.score}</b> (${best.grade}) — best career: <b>${best.careerVerdict || "—"}</b>`;
   }
 
-  document.getElementById("startBtn").addEventListener("click", startCombine);
-  document.getElementById("brandHome").addEventListener("click", ()=>{ renderBestStrip(); renderLastBuildStrip(); renderActiveCareerStrip(); showScreen("menu"); });
-  document.getElementById("playAgainBtn").addEventListener("click", startCombine);
+  document.getElementById("startBtn").addEventListener("click", ()=>{ resetToSoloSession(); startCombine(); });
+  document.getElementById("brandHome").addEventListener("click", ()=>{ resetToSoloSession(); renderBestStrip(); renderLastBuildStrip(); renderActiveCareerStrip(); renderMultiplayerMatchesStrip(); showScreen("menu"); });
+  document.getElementById("playAgainBtn").addEventListener("click", ()=>{ resetToSoloSession(); startCombine(); });
 
   function startCombine(){
     cs.order = shuffle(ATTRIBUTES);
@@ -2350,6 +2385,24 @@ import {
   function renderDecadeGrid(){
     const grid = document.getElementById("decadeGrid");
     grid.innerHTML = "";
+    // Multiplayer Parallel Universe Mode (MULTIPLAYER_MODE_SPEC.md section 12): the era is locked
+    // into the match code at creation time, for both players -- "the exact same rolls" only means
+    // something fair to compare if both careers play out in the same league era, so this isn't a
+    // free choice once a multiplayer context is active. Renders a single non-interactive card
+    // showing the locked era instead of the normal pick-any grid.
+    if(currentMultiplayerContext){
+      chosenDecade = DECADES[currentMultiplayerContext.decadeIndex];
+      chosenDecadeWasRandom = false;
+      const league = LEAGUE[chosenDecade];
+      const lockedCard = document.createElement("div");
+      lockedCard.className = "decade-card selected";
+      lockedCard.innerHTML = `<div class="dc-label">🔒 ${chosenDecade}</div><div class="dc-blurb">${DECADE_BLURB[chosenDecade]}</div>
+        <div class="dc-facts">${league.games}-game season · ${fmtPct(league.comp)} lg. completion</div>
+        <div class="dc-era-lean">Locked for this Private Match — both players play the same era.</div>`;
+      grid.appendChild(lockedCard);
+      document.getElementById("enterDraftNightBtn").disabled = false;
+      return;
+    }
     const randomCard = document.createElement("button");
     randomCard.type = "button";
     randomCard.className = "decade-card decade-card-random" + (chosenDecadeWasRandom ? " selected" : "");
@@ -2385,6 +2438,229 @@ import {
     showScreen("careerSetup");
   });
   document.getElementById("backToResultsBtn").addEventListener("click", ()=> showScreen("results"));
+
+  /* ================= Multiplayer: Parallel Universe Mode, Private Match =================
+     MULTIPLAYER_MODE_SPEC.md sections 2/3/6/12. Purely additive -- a player who never opens the
+     Multiplayer menu entry sees zero behavior change anywhere else in the app.
+
+     Seeding window: the shared seed only needs to cover COMBINE + DRAFT NIGHT (installSeededRandom
+     at "Start My Combine", restoreRandom at "Report to Camp"/startCareerBtn) -- "the exact same
+     rolls in order" is specifically about the blind build/draft comparison, not the ongoing season
+     simulation afterward. Once a career actually exists, each player's own season-by-season play
+     (injuries, development swings, AI behavior) runs on genuine, unseeded randomness exactly like
+     solo play always has -- there is no requirement, and no practical way without a much bigger
+     undertaking, to keep two independently-played, possibly-days-apart careers deterministically in
+     lockstep for their whole multi-season length. This also means a resumed multiplayer career
+     needs no seed/decade at all -- only which save key to point at. */
+  document.getElementById("multiplayerBtn").addEventListener("click", ()=> showScreen("mpHub"));
+  document.getElementById("mpHubBackBtn").addEventListener("click", ()=>{ renderBestStrip(); renderLastBuildStrip(); renderActiveCareerStrip(); renderMultiplayerMatchesStrip(); showScreen("menu"); });
+
+  // ----- Create -----
+  let mpCreateDecadeIndex = null;
+  let mpCreateSeed = null;
+  let mpCreateCode = null;
+  function renderMpCreateDecadeGrid(){
+    const grid = document.getElementById("mpCreateDecadeGrid");
+    grid.innerHTML = "";
+    DECADES.forEach((d,i)=>{
+      const league = LEAGUE[d];
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "decade-card" + (mpCreateDecadeIndex===i ? " selected" : "");
+      card.innerHTML = `<div class="dc-label">${d}</div><div class="dc-blurb">${DECADE_BLURB[d]}</div>
+        <div class="dc-facts">${league.games}-game season · ${fmtPct(league.comp)} lg. completion</div>`;
+      card.addEventListener("click", ()=>{
+        mpCreateDecadeIndex = i;
+        renderMpCreateDecadeGrid();
+        // The seed itself is picked with REAL ambient randomness, once, at creation time -- it's
+        // an arbitrary starting point, not part of the shared roll sequence it goes on to produce.
+        mpCreateSeed = Math.floor(Math.random()*0x100000000);
+        mpCreateCode = encodeMatchCode(mpCreateSeed, mpCreateDecadeIndex);
+        document.getElementById("mpCreateCodeText").textContent = mpCreateCode;
+        document.getElementById("mpCreateCodePanel").style.display = "block";
+      });
+      grid.appendChild(card);
+    });
+  }
+  document.getElementById("mpCreateBtn").addEventListener("click", ()=>{
+    mpCreateDecadeIndex = null; mpCreateSeed = null; mpCreateCode = null;
+    document.getElementById("mpCreateCodePanel").style.display = "none";
+    renderMpCreateDecadeGrid();
+    showScreen("mpCreate");
+  });
+  document.getElementById("mpCreateBackBtn").addEventListener("click", ()=> showScreen("mpHub"));
+  document.getElementById("mpCreateCopyBtn").addEventListener("click", ()=> copyText(mpCreateCode, document.getElementById("mpCreateCopyBtn")));
+  document.getElementById("mpCreateStartBtn").addEventListener("click", ()=>{
+    if(mpCreateCode==null) return;
+    beginMultiplayerCombine(mpCreateCode, mpCreateSeed, mpCreateDecadeIndex, "A");
+  });
+
+  // ----- Join -----
+  let mpJoinDecoded = null;
+  document.getElementById("mpJoinBtn").addEventListener("click", ()=>{
+    document.getElementById("mpJoinCodeInput").value = "";
+    document.getElementById("mpJoinError").style.display = "none";
+    document.getElementById("mpJoinConfirmPanel").style.display = "none";
+    mpJoinDecoded = null;
+    showScreen("mpJoin");
+  });
+  document.getElementById("mpJoinBackBtn").addEventListener("click", ()=> showScreen("mpHub"));
+  document.getElementById("mpJoinCheckBtn").addEventListener("click", ()=>{
+    const code = document.getElementById("mpJoinCodeInput").value;
+    const decoded = decodeMatchCode(code);
+    const errEl = document.getElementById("mpJoinError");
+    const confirmPanel = document.getElementById("mpJoinConfirmPanel");
+    if(!decoded){
+      errEl.textContent = "That code doesn't look right — double-check it and try again.";
+      errEl.style.display = "block";
+      confirmPanel.style.display = "none";
+      mpJoinDecoded = null;
+      return;
+    }
+    errEl.style.display = "none";
+    mpJoinDecoded = decoded;
+    document.getElementById("mpJoinConfirmText").textContent =
+      `Joining a ${DECADES[decoded.decadeIndex]} Private Match. Once you start, you'll draft blind from the exact same rolls your opponent did — don't compare notes until you've both locked in a build.`;
+    confirmPanel.style.display = "block";
+  });
+  document.getElementById("mpJoinStartBtn").addEventListener("click", ()=>{
+    if(!mpJoinDecoded) return;
+    const code = document.getElementById("mpJoinCodeInput").value.trim().toUpperCase();
+    beginMultiplayerCombine(code, mpJoinDecoded.seed, mpJoinDecoded.decadeIndex, "B");
+  });
+
+  // Shared by Create's and Join's "Start My Combine": installs the shared seed, points saves at
+  // this match's own namespaced key so it can't collide with any other save on this device, then
+  // runs the ordinary solo combine flow completely unchanged from here on.
+  function beginMultiplayerCombine(matchId, seed, decadeIndex, slot){
+    currentMultiplayerContext = { matchId, slot, seed, decadeIndex };
+    activeCareerKey = multiplayerSaveKey(matchId, slot);
+    installSeededRandom(seed);
+    startCombine();
+  }
+
+  // ----- Compare -----
+  document.getElementById("mpCompareBtn").addEventListener("click", ()=>{
+    document.getElementById("mpCompareCodeA").value = "";
+    document.getElementById("mpCompareCodeB").value = "";
+    document.getElementById("mpCompareError").style.display = "none";
+    document.getElementById("mpCompareResult").innerHTML = "";
+    showScreen("mpCompare");
+  });
+  document.getElementById("mpCompareBackBtn").addEventListener("click", ()=> showScreen("mpHub"));
+  document.getElementById("mpCompareRunBtn").addEventListener("click", ()=>{
+    const errEl = document.getElementById("mpCompareError");
+    const resultEl = document.getElementById("mpCompareResult");
+    errEl.style.display = "none"; resultEl.innerHTML = "";
+    const payloadA = decodeResultCode(document.getElementById("mpCompareCodeA").value);
+    const payloadB = decodeResultCode(document.getElementById("mpCompareCodeB").value);
+    if(!payloadA || !payloadB){
+      errEl.textContent = "One or both result codes don't look right — double-check them and try again.";
+      errEl.style.display = "block";
+      return;
+    }
+    if(payloadA.matchId !== payloadB.matchId){
+      errEl.textContent = "These two result codes are from different matches — make sure you're comparing the right pair.";
+      errEl.style.display = "block";
+      return;
+    }
+    resultEl.innerHTML = buildMultiplayerScoreboardHTML(payloadA, payloadB);
+  });
+
+  function buildMultiplayerScoreboardHTML(payloadA, payloadB){
+    const { componentsA, componentsB, winner } = computeMatchScore(payloadA.summary, payloadB.summary);
+    const round = v => Math.round(v);
+    const rowsFor = c => `
+      <div class="mp-score-row"><span>Rings</span><span>${round(c.rings)}</span></div>
+      <div class="mp-score-row"><span>Accolades</span><span>${round(c.accolades)}</span></div>
+      <div class="mp-score-row"><span>Peak &amp; Rate</span><span>${round(c.peakAndRate)}</span></div>
+      <div class="mp-score-row"><span>Career Totals</span><span>${round(c.careerTotals)}</span></div>
+      <div class="mp-score-row"><span>Achievements</span><span>${round(c.achievements)}</span></div>
+      <div class="mp-score-row"><span>Earnings</span><span>${round(c.earnings)}</span></div>
+      <div class="mp-score-row mp-score-total"><span>TOTAL</span><span>${round(c.total)}</span></div>`;
+    const winnerLabel = winner==="A" ? svgEscape(payloadA.name) : winner==="B" ? svgEscape(payloadB.name) : null;
+    return `
+      <div class="calc-refnote" style="text-align:center; font-size:1.1rem;">${winnerLabel ? `<b>${winnerLabel}</b> wins the match` : "It's a tie!"}</div>
+      <div class="mp-scoreboard">
+        <div class="mp-score-col${winner==="A"?" winner":""}">
+          <div class="section-label">${svgEscape(payloadA.name)}${payloadA.decade?` — ${svgEscape(payloadA.decade)}`:""}</div>
+          ${rowsFor(componentsA)}
+        </div>
+        <div class="mp-score-vs">VS</div>
+        <div class="mp-score-col${winner==="B"?" winner":""}">
+          <div class="section-label">${svgEscape(payloadB.name)}${payloadB.decade?` — ${svgEscape(payloadB.decade)}`:""}</div>
+          ${rowsFor(componentsB)}
+        </div>
+      </div>`;
+  }
+
+  // ----- Active Multiplayer Matches (menu strip) -----
+  // Scans localStorage directly rather than maintaining a separate index that could drift out of
+  // sync -- two prefixes cover everything: in-progress saves (SOLO_ACTIVE_CAREER_KEY+".mp."), and
+  // finished-match results (persisted separately, see finishCareer's multiplayer hook, since
+  // clearActiveCareer() removes the in-progress save the instant a career actually ends).
+  const MP_RESULT_KEY_PREFIX = "gridironlab.mpResult.";
+  function multiplayerResultKey(matchId, slot){ return `${MP_RESULT_KEY_PREFIX}${matchId}.${slot}`; }
+  function splitMatchSlotSuffix(rest){
+    const lastDot = rest.lastIndexOf(".");
+    if(lastDot===-1) return null;
+    return { matchId: rest.slice(0,lastDot), slot: rest.slice(lastDot+1) };
+  }
+  function renderMultiplayerMatchesStrip(){
+    const el = document.getElementById("multiplayerMatchesStrip");
+    if(!el) return;
+    if(!store){ el.style.display = "none"; return; }
+    const inProgressPrefix = SOLO_ACTIVE_CAREER_KEY + ".mp.";
+    const items = [];
+    for(let i=0;i<store.length;i++){
+      const key = store.key(i);
+      if(!key) continue;
+      if(key.startsWith(inProgressPrefix) && !key.endsWith(".backup")){
+        const parts = splitMatchSlotSuffix(key.slice(inProgressPrefix.length));
+        if(!parts) continue;
+        const saved = loadActiveCareer(key);
+        if(!saved || !saved.career) continue;
+        items.push({ ...parts, key, status:"in-progress", saved });
+      } else if(key.startsWith(MP_RESULT_KEY_PREFIX)){
+        const parts = splitMatchSlotSuffix(key.slice(MP_RESULT_KEY_PREFIX.length));
+        if(!parts) continue;
+        let data = null;
+        try{ data = JSON.parse(store.getItem(key)); }catch(e){}
+        if(!data) continue;
+        items.push({ ...parts, key, status:"finished", data });
+      }
+    }
+    if(!items.length){ el.style.display = "none"; return; }
+    el.classList.add("mp-matches-strip");
+    el.style.display = "flex";
+    el.innerHTML = `<div class="mp-match-header">Active Multiplayer Matches</div>` + items.map(item=>{
+      if(item.status==="in-progress"){
+        const c = item.saved.career;
+        return `<div class="mp-match-row">
+          <span>Match <b>${svgEscape(item.matchId)}</b> · Slot ${svgEscape(item.slot)} — <b>${svgEscape(c.name)}</b>, ${c.seasonLog.length} season${c.seasonLog.length===1?"":"s"} played</span>
+          <button type="button" class="btn-ghost-inline" data-mp-resume-key="${svgEscape(item.key)}">Resume →</button>
+        </div>`;
+      }
+      return `<div class="mp-match-row">
+        <span>Match <b>${svgEscape(item.matchId)}</b> · Slot ${svgEscape(item.slot)} — <b>${svgEscape(item.data.name)}</b>, finished</span>
+        <button type="button" class="btn-ghost-inline" data-mp-export-code="${svgEscape(item.data.resultCode)}">Copy Result Code</button>
+      </div>`;
+    }).join("");
+    el.querySelectorAll("[data-mp-resume-key]").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        const key = btn.dataset.mpResumeKey;
+        const saved = loadActiveCareer(key);
+        if(!saved || !saved.career) return;
+        activeCareerKey = key;
+        currentMultiplayerContext = { matchId: saved.career.multiplayerMatchId, slot: saved.career.multiplayerSlot };
+        const lastSeason = saved.career.seasonLog[saved.career.seasonLog.length-1];
+        resumeActiveCareer(saved, lastSeason);
+      });
+    });
+    el.querySelectorAll("[data-mp-export-code]").forEach(btn=>{
+      btn.addEventListener("click", ()=> copyText(btn.dataset.mpExportCode, btn));
+    });
+  }
 
   /* ----- identity panel: prefill with random defaults every time career setup is entered,
      but never clobber text the user already typed in this session. ----- */
@@ -2727,6 +3003,12 @@ import {
       // Balance Wave 6: the structured event ledger -- see recordLedgerEvent's own comment.
       eventLedger: [],
       _eventSequenceCounter: 0,
+      // Multiplayer Parallel Universe Mode (MULTIPLAYER_MODE_SPEC.md section 3): null for an
+      // ordinary solo career. Read-only bookkeeping from here on -- nothing about gameplay checks
+      // these, they only matter to finishCareer()'s result-export hook and the "Active Multiplayer
+      // Matches" menu strip.
+      multiplayerMatchId: currentMultiplayerContext ? currentMultiplayerContext.matchId : null,
+      multiplayerSlot: currentMultiplayerContext ? currentMultiplayerContext.slot : null,
       originalBuild: {...build},
       // Wave 2A (MASTER_REMEDIATION_SPEC.md): the canonical, ID-based QB registry -- see the
       // "Canonical QB registry" block above rivalForTeam for what owns these and how they stay in
@@ -2809,7 +3091,14 @@ import {
     return `A solid combine out of ${college} and a mid-round investment on ${name} — the kind of pick that either starts by year three or bounces to a third team.`;
   }
 
-  document.getElementById("startCareerBtn").addEventListener("click", ()=>{ showScreen("career"); advanceCareer(); });
+  document.getElementById("startCareerBtn").addEventListener("click", ()=>{
+    // Multiplayer's shared-seed window ends here (see the section header comment above the
+    // Multiplayer wiring block) -- combine + draft night are done, so the ongoing season-by-season
+    // simulation goes back to genuine, unseeded randomness exactly like solo play. A no-op for solo
+    // play, which was never seeded in the first place.
+    restoreRandom();
+    showScreen("career"); advanceCareer();
+  });
 
   /* ----- season generation ----- */
   // temporary attribute nudges from life events (a legend's mentorship, a scheme that fits, a
@@ -11026,6 +11315,46 @@ import {
     };
     saveTrophyRoomEntry(trophyEntry);
     lastFinishedCareerEntry = trophyEntry;
+    // Multiplayer Parallel Universe Mode (MULTIPLAYER_MODE_SPEC.md sections 6/12.5): a
+    // multiplayer-stamped career, on finishing, gets a small scoring-input summary (built from
+    // exactly the same fields trophyEntry above already computed -- no re-derivation) persisted
+    // under its OWN key (clearActiveCareer() already removed the in-progress save at the top of
+    // this function, so this can't just live there) and offered as a copyable Result Code. Restores
+    // real randomness and drops the in-memory multiplayer context -- the match's own work in THIS
+    // browser session is done; anything after this point (Play Again, a new solo combine) is
+    // ordinary solo play.
+    const mpPanel = document.getElementById("mpResultPanel");
+    if(career.multiplayerMatchId){
+      const summary = {
+        rings: trophyEntry.rings, mvps: trophyEntry.mvps, allPros: trophyEntry.allPros, proBowls: trophyEntry.proBowls,
+        peakOverall: trophyEntry.peakOverall, rating: trophyEntry.rating,
+        yards: trophyEntry.yards, td: trophyEntry.td, games: trophyEntry.games,
+        achievementCount: trophyEntry.achievements.length, earnings: trophyEntry.earnings,
+      };
+      const resultCode = encodeResultCode({
+        matchId: career.multiplayerMatchId, slot: career.multiplayerSlot,
+        name: career.name, decade: career.decade, summary,
+      });
+      const resultKey = multiplayerResultKey(career.multiplayerMatchId, career.multiplayerSlot);
+      try{
+        if(store) store.setItem(resultKey, JSON.stringify({ resultCode, name: career.name, decade: career.decade, finishedAt: Date.now() }));
+      }catch(e){}
+      if(mpPanel){
+        mpPanel.style.display = "block";
+        mpPanel.innerHTML = `
+          <div class="section-label">Multiplayer · Private Match Result</div>
+          <p class="mode-help">This career is part of a multiplayer match. Share this code with your opponent — once you both have each other's, compare them from the Multiplayer menu.</p>
+          <div class="mp-code-display" id="mpFinishCodeText" style="font-size:0.85rem; word-break:break-all; user-select:all;">${svgEscape(resultCode)}</div>
+          <div class="menu-actions" style="margin-top:0.75rem;"><button class="btn btn-ghost" id="mpFinishCopyBtn" type="button">Copy Result Code</button></div>`;
+        const copyBtn = document.getElementById("mpFinishCopyBtn");
+        if(copyBtn) copyBtn.addEventListener("click", ()=> copyText(resultCode, copyBtn));
+      }
+    } else if(mpPanel){
+      mpPanel.style.display = "none";
+      mpPanel.innerHTML = "";
+    }
+    restoreRandom();
+    currentMultiplayerContext = null;
     const careerRecBy = {}; checkCareerRecords(t).forEach(r=> careerRecBy[r.key]=r);
     document.getElementById("totalsGrid").innerHTML = [
       ["Seasons", career.seasonLog.length],
@@ -11076,8 +11405,8 @@ import {
     ];
     copyText(lines.join("\n"), document.getElementById("shareCareerBtn"));
   });
-  document.getElementById("newCareerBtn").addEventListener("click", ()=>{ chosenDecade=null; chosenDecadeWasRandom=false; renderDecadeGrid(); renderIdentityPanel(); showScreen("careerSetup"); });
-  document.getElementById("careerMenuBtn").addEventListener("click", ()=>{ renderBestStrip(); renderLastBuildStrip(); renderActiveCareerStrip(); updateHeaderCareerTicker(); showScreen("menu"); });
+  document.getElementById("newCareerBtn").addEventListener("click", ()=>{ resetToSoloSession(); chosenDecade=null; chosenDecadeWasRandom=false; renderDecadeGrid(); renderIdentityPanel(); showScreen("careerSetup"); });
+  document.getElementById("careerMenuBtn").addEventListener("click", ()=>{ renderBestStrip(); renderLastBuildStrip(); renderActiveCareerStrip(); renderMultiplayerMatchesStrip(); updateHeaderCareerTicker(); showScreen("menu"); });
 
   /* ================= Admin / testing panel (V10.1) =================
      A visible, always-on debug panel for browsing the full player and event data and for firing
@@ -11723,6 +12052,7 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
   renderBestStrip();
   renderLastBuildStrip();
   renderActiveCareerStrip();
+  renderMultiplayerMatchesStrip();
   initSoundToggle();
   initKeyMomentsToggle();
   initAdminPanel();

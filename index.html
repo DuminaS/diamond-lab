@@ -59,9 +59,11 @@
       <button class="btn btn-primary" id="startBtn">Start the combine</button>
       <button class="btn btn-ghost" id="trophyRoomBtn">Trophy Room</button>
       <button class="btn btn-ghost" id="achievementsBtn">Achievements</button>
+      <button class="btn btn-ghost" id="multiplayerBtn">Multiplayer</button>
     </div>
 
     <div class="active-career-strip" id="activeCareerStrip"></div>
+    <div class="active-career-strip" id="multiplayerMatchesStrip"></div>
     <div class="best-strip" id="bestStrip"></div>
     <div class="last-build-strip" id="lastBuildStrip"></div>
   </section>
@@ -199,6 +201,8 @@
 
     <div class="hof-narrative" id="hofNarrative"></div>
 
+    <div id="mpResultPanel" style="display:none;"></div>
+
     <div class="totals-grid" id="totalsGrid"></div>
 
     <div class="section-label">Trophy case</div>
@@ -250,6 +254,98 @@
 
     <div class="menu-actions" style="margin-top:1.75rem;">
       <button class="btn btn-ghost" id="achievementsBackBtn">Back to menu</button>
+    </div>
+  </section>
+
+  <!-- MULTIPLAYER: Private Match hub (Parallel Universe Mode -- MULTIPLAYER_MODE_SPEC.md section 12) -->
+  <section class="screen" id="screen-mp-hub">
+    <div class="section-label">Multiplayer · Private Match</div>
+    <h2 style="font-size:clamp(1.6rem,5vw,2.2rem);">Same rolls. Different builds. Whoever built better wins.</h2>
+    <p class="lede" style="margin-top:0.6rem;">Two players, one shared seed, one blind Combine each. No accounts, no server — just a short code you share with whoever you're playing against, and another one you trade back once both careers are done.</p>
+
+    <div class="menu-actions" style="margin-top:1.75rem;">
+      <button class="btn btn-primary" id="mpCreateBtn">Create Private Match</button>
+      <button class="btn btn-ghost" id="mpJoinBtn">Join Private Match</button>
+      <button class="btn btn-ghost" id="mpCompareBtn">Compare Results</button>
+      <button class="btn btn-ghost" id="mpHubBackBtn">Back to menu</button>
+    </div>
+  </section>
+
+  <!-- MULTIPLAYER: create -->
+  <section class="screen" id="screen-mp-create">
+    <div class="section-label">Multiplayer · Create Private Match</div>
+    <h2 style="font-size:clamp(1.6rem,5vw,2.2rem);">Pick the era, then share the code.</h2>
+    <p class="lede" style="margin-top:0.6rem;">This locks the era for both players — your build and your opponent's both draw from the exact same rolls, so the comparison is only fair if you're both looking at the same league.</p>
+
+    <div class="section-label" style="margin-top:1.25rem;">Era</div>
+    <div class="decade-grid" id="mpCreateDecadeGrid"></div>
+
+    <div id="mpCreateCodePanel" style="display:none; margin-top:1.5rem;">
+      <div class="section-label">Your match code</div>
+      <div class="mp-code-display" id="mpCreateCodeText"></div>
+      <p class="mode-help">Share this with your opponent. Don't watch each other's screen or stream until you've both locked in a build — this game can't enforce that for you, it's on the honor system.</p>
+      <div class="menu-actions" style="margin-top:1rem;">
+        <button class="btn btn-ghost" id="mpCreateCopyBtn">Copy code</button>
+        <button class="btn btn-primary" id="mpCreateStartBtn">Start My Combine</button>
+      </div>
+    </div>
+
+    <div class="menu-actions" style="margin-top:1.75rem;">
+      <button class="btn btn-ghost" id="mpCreateBackBtn">Back</button>
+    </div>
+  </section>
+
+  <!-- MULTIPLAYER: join -->
+  <section class="screen" id="screen-mp-join">
+    <div class="section-label">Multiplayer · Join Private Match</div>
+    <h2 style="font-size:clamp(1.6rem,5vw,2.2rem);">Enter the code you were sent.</h2>
+    <p class="lede" style="margin-top:0.6rem;">You'll draft blind from the exact same rolls your opponent did — don't compare notes until you've both locked in a build.</p>
+
+    <div class="id-field" style="margin-top:1.25rem; max-width:20rem;">
+      <label for="mpJoinCodeInput">Match code</label>
+      <input type="text" id="mpJoinCodeInput" maxlength="9" placeholder="XXXX-XXXX" autocapitalize="characters" />
+    </div>
+    <p class="mode-help" id="mpJoinError" style="display:none; color:var(--danger);"></p>
+
+    <div id="mpJoinConfirmPanel" style="display:none; margin-top:1rem;">
+      <p class="mode-help" id="mpJoinConfirmText"></p>
+      <div class="menu-actions" style="margin-top:1rem;">
+        <button class="btn btn-primary" id="mpJoinStartBtn">Start My Combine</button>
+      </div>
+    </div>
+
+    <div class="menu-actions" style="margin-top:1.75rem;">
+      <button class="btn btn-ghost" id="mpJoinCheckBtn">Check code</button>
+      <button class="btn btn-ghost" id="mpJoinBackBtn">Back</button>
+    </div>
+  </section>
+
+  <!-- MULTIPLAYER: compare results -->
+  <section class="screen" id="screen-mp-compare">
+    <div class="section-label">Multiplayer · Compare Results</div>
+    <h2 style="font-size:clamp(1.6rem,5vw,2.2rem);">Paste both result codes.</h2>
+    <p class="lede" style="margin-top:0.6rem;">Once a career ends, it offers a result code to export. Paste your own and your opponent's here — this runs entirely on your device, nothing is sent anywhere.</p>
+
+    <div class="identity-fields" style="margin-top:1.25rem;">
+      <div class="id-field">
+        <label for="mpCompareCodeA">Player A's result code</label>
+        <input type="text" id="mpCompareCodeA" placeholder="Paste result code" />
+      </div>
+      <div class="id-field">
+        <label for="mpCompareCodeB">Player B's result code</label>
+        <input type="text" id="mpCompareCodeB" placeholder="Paste result code" />
+      </div>
+    </div>
+    <p class="mode-help" id="mpCompareError" style="display:none; color:var(--danger);"></p>
+
+    <div class="menu-actions" style="margin-top:1rem;">
+      <button class="btn btn-primary" id="mpCompareRunBtn">Compare</button>
+    </div>
+
+    <div id="mpCompareResult" style="margin-top:1.5rem;"></div>
+
+    <div class="menu-actions" style="margin-top:1.75rem;">
+      <button class="btn btn-ghost" id="mpCompareBackBtn">Back</button>
     </div>
   </section>
 
