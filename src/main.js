@@ -5583,8 +5583,10 @@ import {
   }
   function checkCareerRecords(totals){
     const broken = [];
-    if(totals.hr > MLB_RECORDS.careerHR.value) broken.push({ key:"hr", ...MLB_RECORDS.careerHR });
-    if(totals.hits > MLB_RECORDS.careerHits.value) broken.push({ key:"hits", ...MLB_RECORDS.careerHits });
+    // career.totals carries the legacy aliases: td = HR, comp = hits.
+    const hr = totals.hr ?? totals.td, hits = totals.hits ?? totals.comp;
+    if(hr > MLB_RECORDS.careerHR.value) broken.push({ key:"td", ...MLB_RECORDS.careerHR });
+    if(hits > MLB_RECORDS.careerHits.value) broken.push({ key:"comp", ...MLB_RECORDS.careerHits });
     if(totals.rbi > MLB_RECORDS.careerRBI.value) broken.push({ key:"rbi", ...MLB_RECORDS.careerRBI });
     return broken;
   }
@@ -9888,10 +9890,10 @@ import {
           <td class="tabular">${r.hofPct}%</td>
         </tr>`;
     }).join("");
-    return `<div class="calc-refnote">Every QB who's actually played a real game in this league's history, ranked by a single greatness score — the exact same one behind your own Hall of Fame verdict. Updates automatically as the league plays out. Tiers get more exclusive going up: the GOAT is #1, alone. Hall of Famer % is an estimate for anyone still active — it's their résumé's HOF case if their career ended today, nudged up a little for a young player with real accolades already and real seasons still ahead of him.</div>
+    return `<div class="calc-refnote">Every hitter who's actually played a real game in this league's history, ranked by a single greatness score — the exact same one behind your own Hall of Fame verdict. Updates automatically as the league plays out. Tiers get more exclusive going up: the GOAT is #1, alone. Hall of Famer % is an estimate for anyone still active — it's their résumé's HOF case if their career ended today, nudged up a little for a young player with real accolades already and real seasons still ahead of him.</div>
       <div class="table-wrap">
         <table class="league-table">
-          <thead><tr><th>#</th><th>QB</th><th>Team</th><th>Yds</th><th>TD</th><th>INT</th><th>Rating</th><th>Record</th><th>PB</th><th>AP</th><th>MVP</th><th>Rings</th><th>HOF%</th></tr></thead>
+          <thead><tr><th>#</th><th>Hitter</th><th>Team</th><th>TB</th><th>HR</th><th>K</th><th>OPS+</th><th>Team Rec</th><th>AS</th><th>SS</th><th>MVP</th><th>Rings</th><th>HOF%</th></tr></thead>
           <tbody>${bodyHtml}</tbody>
         </table>
       </div>`;
@@ -9921,7 +9923,7 @@ import {
         <h4>Your Draft Class</h4>
         <div class="table-wrap">
           <table class="standings-table">
-            <thead><tr><th>Name</th><th>Team</th><th>Career Yds</th><th>Career TD</th><th>Rating</th><th>PB</th><th>AP</th><th>MVP</th><th>Rings</th></tr></thead>
+            <thead><tr><th>Name</th><th>Team</th><th>Career TB</th><th>Career HR</th><th>OPS+</th><th>AS</th><th>SS</th><th>MVP</th><th>Rings</th></tr></thead>
             <tbody>
               <tr class="me"><td>${svgEscape(career.name)} (you)</td><td>${svgEscape(teamNameAt(career.teamId, year))}</td>
                 <td class="tabular">${career.totals.yards.toLocaleString()}</td><td class="tabular">${career.totals.td}</td>
@@ -11715,14 +11717,15 @@ import {
     document.getElementById("totalsGrid").innerHTML = [
       ["Seasons", career.seasonLog.length],
       ["Career Earnings", fmtMoney(t.earnings)],
-      ["Pass Yards", t.yards.toLocaleString(), careerRecBy.yards],
-      ["Touchdowns", t.td, careerRecBy.td],
-      ["Interceptions", t.int],
-      ["Sacks Taken", t.sacks],
-      ["Rush Yards", t.rushYards.toLocaleString()],
-      ["Rush TDs", t.rushTd],
-      ["Pro Bowls", t.proBowls],
-      ["All-Pros", t.allPros],
+      ["Hits", (t.hits ?? t.comp).toLocaleString(), careerRecBy.comp],
+      ["Home Runs", t.td, careerRecBy.td],
+      ["RBI", (t.rbi||0).toLocaleString(), careerRecBy.rbi],
+      ["Runs", (t.runs||0).toLocaleString()],
+      ["Total Bases", t.yards.toLocaleString()],
+      ["Stolen Bases", (t.sb ?? t.rushYards ?? 0).toLocaleString()],
+      ["Strikeouts", (t.int||0).toLocaleString()],
+      ["All-Star Games", t.proBowls],
+      ["Silver Sluggers", t.allPros],
       ["MVPs", t.mvps],
       ["Rings", t.rings],
     ].map(([label,val,rec])=>`<div class="totals-tile"><div class="tt-label">${label}</div><div class="tt-value tabular">${val}</div>${rec?recordBadgeHtml(rec):""}</div>`).join("");
@@ -11730,13 +11733,14 @@ import {
     document.getElementById("trophyCase").innerHTML = buildTrophyCaseHTML();
 
     const table = document.getElementById("careerTable");
-    table.innerHTML = `<thead><tr><th>Year</th><th>Age</th><th>Team</th><th>G</th><th>Comp/Att</th><th>Pct</th><th>Yds</th><th>TD</th><th>INT</th><th>Rating</th><th>Rush</th><th>Record</th><th>Team Rec</th><th>Playoffs</th><th>Pay</th><th>Awards</th></tr></thead>
+    const avg3 = v => (v==null?0:v).toFixed(3).replace(/^0\./, ".");
+    table.innerHTML = `<thead><tr><th>Year</th><th>Age</th><th>Team</th><th>G</th><th>PA</th><th>H/AB</th><th>AVG</th><th>TB</th><th>HR</th><th>K</th><th>OPS+</th><th>SB</th><th>Team Rec</th><th>Playoffs</th><th>Pay</th><th>Awards</th></tr></thead>
       <tbody>${career.seasonLog.map(s=>`<tr>
         <td>${s.year}</td><td>${s.age}</td><td class="team-cell">${s.teamName}</td><td>${s.games}</td>
-        <td>${s.comp}/${s.att}</td><td>${(s.pct*100).toFixed(1)}%</td><td>${s.yards.toLocaleString()}</td>
+        <td>${s.pa ?? s.att}</td><td>${(s.hits ?? s.comp)}/${s.ab ?? "—"}</td><td>${avg3(s.avg ?? s.pct)}</td><td>${s.yards.toLocaleString()}</td>
         <td>${s.td}</td><td>${s.int}</td><td>${s.rating}</td>
-        <td>${s.rushAtt>0 ? s.rushYards.toLocaleString()+" / "+s.rushTd+"TD" : "—"}</td>
-        <td>${recordLine(s.wins, s.losses, s.ties||0)}</td><td>${recordLine(s.teamWins, s.teamLosses, s.teamTies||0)}</td>
+        <td>${s.rushAtt>0 ? (s.sb ?? s.rushYards).toLocaleString() : "—"}</td>
+        <td>${recordLine(s.teamWins, s.teamLosses, s.teamTies||0)}</td>
         <td>${s.playoffs.made ? "Seed #"+s.playoffs.seed+(s.playoffs.wonRing?" — Champs":"") : "Missed"}</td>
         <td>${fmtMoney(s.contractApy)}</td><td>${s.awards.join(", ")||"—"}</td>
       </tr>`).join("")}</tbody>`;
@@ -11755,7 +11759,7 @@ import {
       `DIAMOND LAB — Career Recap`,
       `${career.seasonLog.length} seasons (${career.draftYear}–${career.year}), starting decade ${career.decade}`,
       `Verdict: ${verdict.tier}`,
-      `${t.yards.toLocaleString()} yds, ${t.td} TD, ${t.int} INT, ${t.proBowls} Pro Bowls, ${t.allPros} All-Pros, ${t.mvps} MVP, ${t.rings} ring(s)`,
+      `${(t.hits ?? t.comp).toLocaleString()} H, ${t.td} HR, ${(t.rbi||0).toLocaleString()} RBI, ${t.proBowls} All-Star, ${t.allPros} Silver Slugger, ${t.mvps} MVP, ${t.rings} ring(s)`,
       `Career earnings: ${fmtMoney(t.earnings)}`,
       window.location.href,
     ];

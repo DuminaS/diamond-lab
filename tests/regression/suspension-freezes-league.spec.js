@@ -11,6 +11,7 @@ import { test, expect } from "@playwright/test";
 import { startCareer, readActiveCareer, writeActiveCareer, ensureBracketFinalized } from "../helpers/careerFlow.mjs";
 
 test("full-year-suspension-still-advances-the-league", async ({ page }) => {
+  test.setTimeout(180_000); // up to 25 simulated seasons -- can exceed the 90s default under full parallel load
   await startCareer(page);
 
   const before = await readActiveCareer(page);
