@@ -101,9 +101,10 @@ actually shipped (not in the original pass above, tightened after a direct follo
   "Best player available" judged blind, on name/reputation alone, is the entire premise of a fair
   comparison — Classic mode showing the actual attribute rolls up front would let a player simply
   read off the answer instead of judging it, defeating the point of a blind draft entirely.
-- **No respins of any kind** — not the free era/player respin, not the ad-earned bonus pool. Both
-  players see the exact same single set of four candidates each round with no way to reroll toward
-  a better one; the whole respin UI is hidden outright rather than just shown disabled at "(0)".
+- ~~No respins of any kind~~ **reversed by a direct follow-up**: respins (the free era/player
+  respin, the ad-earned bonus pool) are available in multiplayer exactly as in solo play. The
+  restriction that stuck is "Run it back" below — a genuinely different button, and per the
+  follow-up, the one that actually mattered for keeping the comparison fair.
 - **No "Run it back" either** — a genuinely separate button from the respins above: the Results
   screen (after all 12 rounds are picked) has its own `#playAgainBtn`, literally labeled "Run it
   back," that discards the whole build and starts the Combine over from scratch. Left available,
@@ -304,8 +305,9 @@ mechanism for match setup and result reporting does.
 ## 9. New UI/screens needed (both tracks, additively)
 
 - Menu: new "Multiplayer" entry, placed with the other primary actions (Start the Combine/Trophy
-  Room/Achievements) rather than buried lower on the page — building the whole menu around
-  primary-action buttons first, marketing copy after, once this shipped.
+  Room/Achievements). A same-day follow-up briefly moved this whole action row above the hero
+  headline/lede, then moved it back below that copy per a further follow-up — it now sits directly
+  under the intro text, same relative position the menu always had, just alongside Multiplayer.
 - Match Setup screen: Track A shows Create/Join with a code field; Track B shows
   Find Match / matchmaking status instead.
 - **Combine Setup screen (solo path)**, added once this actually shipped: Mode (Classic/Blind) and

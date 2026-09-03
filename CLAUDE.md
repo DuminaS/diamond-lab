@@ -39,8 +39,11 @@ forced-blind multiplayer session can never leave a stale mode showing on a later
 "No respins" originally covered only the in-Combine respin buttons; a same-day follow-up caught
 that the Results screen's own `#playAgainBtn` (literally labeled **"Run it back"**, redoes the
 entire Combine from scratch) was the bigger loophole and needed hiding too -- fixed the same way
-(`finishCombine()` hides it whenever `currentMultiplayerContext` is set). See PROGRESS.md for both
-entries.
+(`finishCombine()` hides it whenever `currentMultiplayerContext` is set). A further same-day
+follow-up then reversed the respin restriction itself -- **respins are available in multiplayer
+after all**, exactly like solo play; "Run it back" is the only Combine-side restriction that stuck.
+The menu-button reorg was also partly reverted the same day: they're back below the hero
+headline/lede, not above it. See PROGRESS.md for the full sequence of entries.
 
 A visual overflow audit (development-plan picker + the exportable baseball card + a broader sweep)
 shipped 2026-09-03: fixed a real achievement-name-wrapping bug on the baseball card's SVG back face

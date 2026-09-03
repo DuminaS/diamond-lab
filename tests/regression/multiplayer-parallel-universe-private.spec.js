@@ -217,7 +217,7 @@ test("Compare screen rejects two result codes from different matches", async ({ 
   expect(await page.evaluate(() => document.querySelectorAll(".mp-scoreboard").length)).toBe(0);
 });
 
-test("multiplayer is always played Blind and never offers respins, even if Classic mode was left selected from a prior solo Combine", async ({ page }) => {
+test("multiplayer is always played Blind (even if Classic mode was left selected from a prior solo Combine) and still offers respins", async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto("/");
   // Deliberately leave the game in a state a real player could land in: having just done a SOLO
@@ -240,11 +240,15 @@ test("multiplayer is always played Blind and never offers respins, even if Class
     hasBlindCopy: !!document.querySelector(".pc-blind"),
     hasVisibleStat: !!document.querySelector(".pc-stat"),
     respinRowsVisible: Array.from(document.querySelectorAll(".respin-row")).some(r => getComputedStyle(r).display !== "none"),
+    respinEraEnabled: !document.getElementById("respinEraBtn")?.disabled,
   }));
   expect(combineState.roundLabel).toContain("Blind");
   expect(combineState.hasBlindCopy).toBe(true);
   expect(combineState.hasVisibleStat).toBe(false);
-  expect(combineState.respinRowsVisible, "no respin UI should be visible in a multiplayer Combine").toBe(false);
+  // Respins are available in multiplayer (a direct follow-up reversed the earlier restriction) --
+  // only "Run it back" (the Results screen's whole-Combine redo) stays disabled, tested separately.
+  expect(combineState.respinRowsVisible, "respin UI should be visible in a multiplayer Combine").toBe(true);
+  expect(combineState.respinEraEnabled, "the era respin should start enabled (1 free use), same as solo play").toBe(true);
 });
 
 test("multiplayer never offers \"Run it back\" (redo the whole Combine) on the results screen", async ({ page }) => {

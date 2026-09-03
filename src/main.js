@@ -2201,14 +2201,12 @@ import {
     cs.round = 0;
     cs.picks = [];
     // Respins are a scarce resource for the WHOLE combine, not a per-round freebie: one respin of
-    // the round's era and one respin of its player options, total, across all 12 rounds.
-    // Multiplayer: no "run it back" -- every respin route (the free ones and the ad-earned bonus
-    // pool) is zeroed out, so both players face the exact same single set of candidates each round
-    // with no way to reroll toward a better one. renderRound()/renderWatchAdRespinBtn() hide the
-    // whole respin row entirely in this case rather than just showing disabled buttons at "(0)".
-    const inMultiplayer = !!currentMultiplayerContext;
-    cs.respinEraLeft = inMultiplayer ? 0 : 1;
-    cs.respinPlayersLeft = inMultiplayer ? 0 : 1;
+    // the round's era and one respin of its player options, total, across all 12 rounds. Available
+    // in multiplayer too (a direct follow-up reversed the earlier "no respins" restriction -- the
+    // only combine-side restriction multiplayer keeps is "Run it back," the Results screen's
+    // whole-combine redo, hidden separately in finishCombine()).
+    cs.respinEraLeft = 1;
+    cs.respinPlayersLeft = 1;
     cs.bonusRespinLeft = 0;
     cs.adWatchesUsed = 0;
     renderYardTicks();
@@ -2244,18 +2242,13 @@ import {
     document.getElementById("yardFill").style.width = pct+"%";
     cs.order.forEach((a,i)=>{ const t=document.getElementById("tick-"+i); if(t) t.classList.toggle("done", i<cs.round); });
 
-    // Multiplayer: hide the respin UI entirely rather than just disabling it at "(0)" -- see
-    // startCombine's own comment on why respins are zeroed out for a multiplayer session.
-    document.querySelectorAll(".respin-row").forEach(row=> row.style.display = currentMultiplayerContext ? "none" : "");
-    if(!currentMultiplayerContext){
-      const eraBtn = document.getElementById("respinEraBtn");
-      const playersBtn = document.getElementById("respinPlayersBtn");
-      eraBtn.disabled = cs.respinEraLeft<=0 && cs.bonusRespinLeft<=0;
-      playersBtn.disabled = (cs.respinPlayersLeft<=0 && cs.bonusRespinLeft<=0) || decadePool(cs.currentDecade).length<=cs.currentCandidates.length;
-      document.getElementById("respinEraCount").textContent = "("+(cs.respinEraLeft+cs.bonusRespinLeft)+")";
-      document.getElementById("respinPlayersCount").textContent = "("+(cs.respinPlayersLeft+cs.bonusRespinLeft)+")";
-      renderWatchAdRespinBtn();
-    }
+    const eraBtn = document.getElementById("respinEraBtn");
+    const playersBtn = document.getElementById("respinPlayersBtn");
+    eraBtn.disabled = cs.respinEraLeft<=0 && cs.bonusRespinLeft<=0;
+    playersBtn.disabled = (cs.respinPlayersLeft<=0 && cs.bonusRespinLeft<=0) || decadePool(cs.currentDecade).length<=cs.currentCandidates.length;
+    document.getElementById("respinEraCount").textContent = "("+(cs.respinEraLeft+cs.bonusRespinLeft)+")";
+    document.getElementById("respinPlayersCount").textContent = "("+(cs.respinPlayersLeft+cs.bonusRespinLeft)+")";
+    renderWatchAdRespinBtn();
 
     renderCards();
   }

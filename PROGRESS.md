@@ -980,6 +980,38 @@ new).
 Everything from the prior entry's "Not done" list still applies unchanged (Same League Mode, the
 Public track, mid-career snapshot comparisons, untuned scoring weights, honor-system-only codes).
 
+## 2026-09-03 — Multiplayer: menu buttons back below the intro; respins re-enabled
+
+Two more direct follow-ups on the same feature: (1) move the primary action buttons back below the
+hero headline/lede (they'd been moved above it the same day); (2) respins should be available in
+multiplayer after all -- only "Run it back" (the whole-Combine redo) needed to stay restricted.
+
+### What shipped
+
+- **Menu**: `.menu-actions` moved back below `.intro` in `index.html` -- the buttons now sit in
+  their original relative position, directly under the headline/lede copy, same as before the
+  same-day reorg, just now including the Multiplayer entry alongside the other three.
+- **Multiplayer: respins re-enabled.** `startCombine()` no longer zeroes
+  `cs.respinEraLeft`/`respinPlayersLeft` for a multiplayer context -- both start at their normal
+  solo value (1 free use each) regardless. `renderRound()` no longer hides `.respin-row`; the
+  era/player respin buttons and the ad-bonus-reroll flow all render and behave exactly like solo
+  play. The Create/Join screens' explanatory copy was corrected to match ("Respins are available
+  during the Combine, same as solo play -- just no redoing the whole thing once you've declared for
+  the draft"). "Run it back" (`#playAgainBtn`, hidden in the immediately prior pass) is the ONLY
+  Combine-side restriction multiplayer keeps now.
+
+### Verification
+
+Updated the one Playwright test that asserted respins were hidden in multiplayer -- it now asserts
+the opposite (respin UI visible, era-respin button starts enabled) while keeping its original
+"forced Blind even after a prior solo Classic pick" coverage intact. `npm test`: 58/58 balance tests
+(unaffected), production build clean, 57/57 Playwright (unchanged count -- one test's assertions
+flipped, none added or removed).
+
+### Not done this pass
+
+Everything from the prior entries' "Not done" lists still applies unchanged.
+
 ## Testing methodology (established pattern, reuse every round)
 - jsdom in `/tmp/gtest`, debug hooks (`window.__debug`) injected only into throwaway copies (`index.debugN.html`), never the real file. Latest debug build: `index.debug24.html` (Round 4, item 3).
 - `grep -c "__debug" index.html` must return 0 on the real file before every publish.
