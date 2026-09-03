@@ -154,7 +154,25 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - [ ] rival contract terms bumped (elite 5-9 yrs) — light
 - [ ] test helper advanceOneSeason stalls at the FA offer screen (multi-choice) — Phase 11
 
-### Phase 8 — achievements
+### Phase 8 — achievements  ✅
+- [x] ~90 ACHIEVEMENTS rewritten wholesale for baseball, keeping every rule-builder pattern
+      (seasonRule / consecutiveSeasonRule / everySeasonRule / eventCountRule / sequenceRule /
+      ledgerStep / sameFieldAs / groupCountRule) and every ledger eventId hook
+- [x] season stat achievements → 30-30, 40-40, 50 HR, 200 hits, .430 OBP, Triple Crown, the Eye,
+      Can't Be Struck Out, the Green Light (45 SB), Video-Game Numbers (175 OPS+), Gap to Gap
+- [x] accolade achievements → All-Star ×10, Silver Slugger ×5, Gold Glove ×5, Batting Champion ×4,
+      Home Run King ×4, Rookie Phenom, the Ironman (12 yrs no IL), the 500 Club, 3,000 Hits
+- [x] team-specific → real MLB ids + lore: 108 Years (CHC), Reverse the Curse (BOS), Bronx Dynasty
+      (NYY), Cleveland Finally (CLE), Cardinal Way (STL), Even Year Magic (SF), End the Wait (SEA),
+      Worst to First (ATL), the Window (HOU), Two Strikes Away (TEX), We Are Family (PIT),
+      Moneyball (OAK), Homer Hankies (MIN), Back-to-Back in Toronto (TOR), Ya Gotta Believe (NYM),
+      Blue Bloods (LAD)
+- [x] dark-humor achievements kept (same hadLifeEvent hooks on RARE_EVENTS)
+- [x] ledger chains reframed (luxury-tax casualty, coaching carousel, revenge tour, walk-off wins,
+      a ring in each league) — internal "Super Bowl"/"Conference Championship" metadata literals kept
+- [x] achievement-rules.node.mjs 15/15; smoke green
+- [ ] opponent-id-ledger revenge regression fails on the FA-screen helper stall (Phase 11)
+
 ### Phase 9 — multiplayer (matchCode DLR1, score weights)
 ### Phase 10 — UI / copy / CSS
 ### Phase 11 — tests

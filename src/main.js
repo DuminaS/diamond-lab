@@ -802,47 +802,75 @@ import {
 
   const ACHIEVEMENTS = [
     // ----- single-season statistical moments -----
-    // Balance Wave 7: migrated to seasonRule(pred,1) -- career.seasonLog.some(pred) IS
-    // seasonRule(pred,1)(career) by definition, so this is a zero-risk, behavior-identical
-    // refactor, same as Wave 6's wagons/buffalobills/wiretowire/juggernaut migration.
-    { key:"gunslinger", name:"Gunslinger", icon:"bolt",
-      blurb:"A season spent daring defenses to stop the deep ball, consequences be damned.",
-      hint:"Post a season with huge yardage, a big TD count, and a high INT total to match.",
-      check: ()=> seasonRule(s=> s.yards>=4200 && s.td>=32 && s.int>=18)(career) },
-    { key:"fieldgeneral", name:"Field General", icon:"target",
-      blurb:"A season of surgical, mistake-free precision.",
-      hint:"Post a season with elite completion% and very few interceptions on heavy volume.",
-      check: ()=> seasonRule(s=> s.att>=400 && (s.pct||0)>=0.685 && s.int<=7)(career) },
-    { key:"ghostinthepocket", name:"Ghost in the Pocket", icon:"wing",
-      blurb:"A season where the pass rush simply couldn't find him.",
-      hint:"Post a season with a very low sack rate on heavy passing volume.",
-      check: ()=> seasonRule(s=> s.att>=400 && s.sacks/s.att<=0.025)(career) },
-    { key:"vault", name:"Vault", icon:"lock",
-      blurb:"A season of total ball security under a heavy workload.",
-      hint:"Post a high-volume season with almost no interceptions.",
-      check: ()=> seasonRule(s=> s.att>=450 && s.int<=5)(career) },
-    { key:"ironarmed", name:"Iron-Armed", icon:"mountain",
-      blurb:"A season of pure, league-leading workload.",
-      hint:"Post a season with an enormous number of pass attempts.",
-      check: ()=> seasonRule(s=> s.att>=620)(career) },
-    { key:"groundthreat", name:"Threat on the Ground", icon:"football",
-      blurb:"A season defenses had to game-plan for on the ground, not just through the air.",
-      hint:"Post a season with four-digit rushing yardage.",
-      check: ()=> seasonRule(s=> (s.rushYards||0)>=1000)(career) },
-    { key:"perfection", name:"Perfection", icon:"gauge",
-      blurb:"A passer rating so high it barely seems fair.",
-      hint:"Post a season with a passer rating north of 112.",
-      check: ()=> seasonRule(s=> s.rating>=112)(career) },
+    // These reduce to seasonRule(pred, n)(career) -- "n seasons of the player's career satisfy
+    // pred." Season objects carry the full real batting line (pa/ab/hits/doubles/triples/hr/bb/k/
+    // sb/rbi/avg/obp/slg/opsPlus) plus s.awards.
+    { key:"slugger", name:"The Slugger", icon:"flame",
+      blurb:"A season spent turning mistakes into souvenirs.",
+      hint:"Post a season with 45+ home runs and 120+ RBI.",
+      check: ()=> seasonRule(s=> (s.hr||0)>=45 && (s.rbi||0)>=120)(career) },
+    { key:"purehitter", name:"Pure Hitter", icon:"target",
+      blurb:"A season of barrels and almost no whiffs.",
+      hint:"Bat .330 or better over a full workload with 60 or fewer strikeouts.",
+      check: ()=> seasonRule(s=> (s.ab||0)>=450 && (s.avg||0)>=0.330 && (s.k||0)<=60)(career) },
+    { key:"hardtok", name:"Can't Be Struck Out", icon:"wing",
+      blurb:"Pitchers ran out of ideas. He just kept putting it in play.",
+      hint:"Post a season with a strikeout rate at or below 9% on heavy volume.",
+      check: ()=> seasonRule(s=> (s.pa||0)>=550 && (s.k||0)/(s.pa||1)<=0.09)(career) },
+    { key:"theeye", name:"The Eye", icon:"lock",
+      blurb:"A season where the strike zone was a personal opinion.",
+      hint:"Draw 110+ walks in a season with 90 or fewer strikeouts.",
+      check: ()=> seasonRule(s=> (s.bb||0)>=110 && (s.k||0)<=90)(career) },
+    { key:"workhorse", name:"The Workhorse", icon:"mountain",
+      blurb:"Never a day off. Never wanted one.",
+      hint:"Take 720 or more plate appearances in a season.",
+      check: ()=> seasonRule(s=> (s.pa||0)>=720)(career) },
+    { key:"greenlight", name:"The Green Light", icon:"baseball",
+      blurb:"Ninety feet was never safe with him standing on first.",
+      hint:"Steal 45 or more bases in a season.",
+      check: ()=> seasonRule(s=> (s.sb||0)>=45)(career) },
+    { key:"videogamenumbers", name:"Video-Game Numbers", icon:"gauge",
+      blurb:"An OPS+ that barely looks real on the back of the card.",
+      hint:"Post a season with an OPS+ north of 175.",
+      check: ()=> seasonRule(s=> (s.opsPlus||0)>=175)(career) },
+    { key:"thirtythirty", name:"30-30 Club", icon:"star",
+      blurb:"Power and speed in the same uniform, the same year.",
+      hint:"Hit 30 home runs and steal 30 bases in one season.",
+      check: ()=> seasonRule(s=> (s.hr||0)>=30 && (s.sb||0)>=30)(career) },
+    { key:"fortyforty", name:"40-40 Club", icon:"crown",
+      blurb:"One of a handful of players in history to do this once.",
+      hint:"Hit 40 home runs and steal 40 bases in one season.",
+      check: ()=> seasonRule(s=> (s.hr||0)>=40 && (s.sb||0)>=40)(career) },
+    { key:"fiftybombs", name:"The Fifty-Homer Season", icon:"bolt",
+      blurb:"A number that turns a season into a legend.",
+      hint:"Hit 50 or more home runs in a single season.",
+      check: ()=> seasonRule(s=> (s.hr||0)>=50)(career) },
+    { key:"twohundredhits", name:"Two Hundred Hits", icon:"book",
+      blurb:"A hit every single day, and then some.",
+      hint:"Collect 200 or more hits in a season.",
+      check: ()=> seasonRule(s=> (s.hits||0)>=200)(career) },
+    { key:"onbasemachine", name:"On-Base Machine", icon:"gem",
+      blurb:"He was on base more often than he wasn't.",
+      hint:"Post a season with a .430 on-base percentage or better.",
+      check: ()=> seasonRule(s=> (s.obp||0)>=0.430)(career) },
+    { key:"gaptogap", name:"Gap to Gap", icon:"compass",
+      blurb:"An extra-base machine who used the whole ballpark.",
+      hint:"Post a season with 35+ doubles, 5+ triples, and 25+ home runs.",
+      check: ()=> seasonRule(s=> (s.doubles||0)>=35 && (s.triples||0)>=5 && (s.hr||0)>=25)(career) },
+    { key:"triplecrown", name:"The Triple Crown", icon:"trophy",
+      blurb:"Led the league in average, home runs, and RBI in the same season. It almost never happens.",
+      hint:"Win the Batting, Home Run, and RBI titles in one season.",
+      check: ()=> seasonRule(s=> (s.awards||[]).includes("Batting Title") && (s.awards||[]).includes("Home Run Title") && (s.awards||[]).includes("RBI Title"))(career) },
 
     // ----- accolades, arcs, and off-the-field moments -----
     { key:"hollywoodending", name:"Hollywood Ending", icon:"heart",
       blurb:"Won it all the same year he put a ring on it, off the field too.",
-      hint:"Win a championship the same season you get married.",
+      hint:"Win the World Series the same season you get married.",
       check: ()=>{ const last = career.seasonLog[career.seasonLog.length-1];
         return !!(career.relationship && career.relationship.status==="married" && career.relationship.startYear===career.year && last && wonTitle(last)); } },
     { key:"againstallodds", name:"Against All Odds", icon:"compass",
       blurb:"Dragged a roster that had no business contending to the top of the mountain.",
-      hint:"Win an MVP or a championship on a bottom-tier (under 45 grade) team.",
+      hint:"Win an MVP or the World Series on a bottom-tier (under 45 grade) team.",
       check: ()=> seasonRule(s=> s.teamOverall<45 && ((s.awards||[]).includes("MVP") || wonTitle(s)))(career) },
     { key:"phoenixrising", name:"Phoenix Rising", icon:"flame",
       blurb:"Written off after a bust stretch, then came back better than ever.",
@@ -855,48 +883,60 @@ import {
         return false; } },
     { key:"ironwill", name:"Iron Will", icon:"shield",
       blurb:"Played through more pain than the roster around him ever knew.",
-      hint:"Make Pro Bowl or All-Pro in a season your Wear & Tear meter is above 45.",
+      hint:"Make an All-Star team or win a Silver Slugger in a season your Wear & Tear meter is above 45.",
       check: ()=>{ const last = career.seasonLog[career.seasonLog.length-1];
-        return !!(last && (career.wearAndTear||0)>45 && ((last.awards||[]).includes("Pro Bowl")||(last.awards||[]).includes("All-Pro"))); } },
+        return !!(last && (career.wearAndTear||0)>45 && ((last.awards||[]).includes("All-Star")||(last.awards||[]).includes("Silver Slugger"))); } },
     { key:"theunanimous", name:"The Unanimous", icon:"star",
       blurb:"An MVP season nobody in the league could argue with.",
-      hint:"Win MVP with a passer rating of 105 or higher.",
-      // Balance Wave 7: migrated from "check only the MOST RECENT season" to "any season ever" --
-      // behaviorally identical under this codebase's own call pattern (checkAchievements() runs
-      // right after every season, is idempotent once unlocked, so both versions first flip true at
-      // the exact same season) and a strict superset otherwise (also catches a milestone that a
-      // skipped/delayed checkAchievements() call would have missed under the old "last season only"
-      // shape -- an existing-but-unlikely edge case, not a new risk).
-      check: ()=> seasonRule(s=> (s.awards||[]).includes("MVP") && s.rating>=105)(career) },
-    { key:"oldmanwinter", name:"Old Man Winter", icon:"gem",
+      hint:"Win MVP with an OPS+ of 175 or higher.",
+      check: ()=> seasonRule(s=> (s.awards||[]).includes("MVP") && (s.opsPlus||0)>=175)(career) },
+    { key:"oldmanwinter", name:"Old Man River", icon:"gem",
       blurb:"Still doing it well past the age everyone said he'd be done.",
-      hint:"Make Pro Bowl, All-Pro, or win a ring at age 38 or older.",
-      // season.age is stamped from career.age at push time (see generateSeason's season object
-      // literal), so "any season with age>=38" is exactly the old "last season + current age" check.
-      check: ()=> seasonRule(s=> s.age>=38 && ((s.awards||[]).includes("Pro Bowl")||(s.awards||[]).includes("All-Pro")||wonTitle(s)))(career) },
+      hint:"Make an All-Star team, win a Silver Slugger, or win a ring at age 39 or older.",
+      check: ()=> seasonRule(s=> s.age>=39 && ((s.awards||[]).includes("All-Star")||(s.awards||[]).includes("Silver Slugger")||wonTitle(s)))(career) },
     { key:"loyaltothedeath", name:"Loyal to the Death", icon:"anchor",
       blurb:"One team, one city, an entire career — and he walked away on his own terms.",
-      hint:"Retire (not released or traded away) after 10+ seasons with a single team.",
+      hint:"Retire (not released or traded away) after 12+ seasons with a single team.",
       check: ()=> allOf(
         ()=> career.exitReason==="retired",
-        everySeasonRule(s=>s.teamId===career.teamId, 10),
+        everySeasonRule(s=>s.teamId===career.teamId, 12),
       )(career) },
     { key:"latebloomer", name:"Late Bloomer", icon:"sunrise",
       blurb:"Took the long way to stardom, and got there anyway.",
-      hint:"Earn your first Pro Bowl or All-Pro nod at age 30 or older.",
-      // A genuine "first occurrence must itself satisfy X" shape -- doesn't reduce cleanly to any
-      // current rule builder (seasonRule counts ANY match; this needs the FIRST match specifically),
-      // so this one honestly stays a short hand-written closure.
-      check: ()=>{ const first = career.seasonLog.find(s=> (s.awards||[]).includes("Pro Bowl")||(s.awards||[]).includes("All-Pro"));
-        return !!(first && first.age>=30); } },
+      hint:"Make your first All-Star team or win your first Silver Slugger at age 31 or older.",
+      check: ()=>{ const first = career.seasonLog.find(s=> (s.awards||[]).includes("All-Star")||(s.awards||[]).includes("Silver Slugger"));
+        return !!(first && first.age>=31); } },
+    { key:"rookiephenom", name:"Rookie Phenom", icon:"sunrise",
+      blurb:"Hit the ground running and never looked back.",
+      hint:"Win Rookie of the Year.",
+      check: ()=> seasonRule(s=> (s.awards||[]).includes("Rookie of the Year"))(career) },
+    { key:"leatherwork", name:"Leatherwork", icon:"glove",
+      blurb:"Highlight-reel defense, night after night.",
+      hint:"Win a Gold Glove.",
+      check: ()=> seasonRule(s=> (s.awards||[]).includes("Gold Glove"))(career) },
+    { key:"vacuumcleaner", name:"The Vacuum Cleaner", icon:"glove",
+      blurb:"A decade of nothing getting past him.",
+      hint:"Win 5 or more Gold Gloves across a career.",
+      check: ()=> seasonRule(s=> (s.awards||[]).includes("Gold Glove"), 5)(career) },
+    { key:"silvercollection", name:"The Silver Collection", icon:"bat",
+      blurb:"The best bat at the position, over and over again.",
+      hint:"Win 5 or more Silver Sluggers across a career.",
+      check: ()=> seasonRule(s=> (s.awards||[]).includes("Silver Slugger"), 5)(career) },
+    { key:"perennialallstar", name:"Perennial All-Star", icon:"star",
+      blurb:"A fixture in the Midsummer Classic for a decade.",
+      hint:"Make 10 or more All-Star teams across a career.",
+      check: ()=> (career.totals.proBowls||0)>=10 },
+    { key:"battingchamp", name:"Batting Champion", icon:"target",
+      blurb:"The best pure hitter in the league, more than once.",
+      hint:"Win 4 or more Batting Titles across a career.",
+      check: ()=> seasonRule(s=> (s.awards||[]).includes("Batting Title"), 4)(career) },
+    { key:"homerunking", name:"Home Run King", icon:"flame",
+      blurb:"When he came up, the outfielders backed up to the wall.",
+      hint:"Win 4 or more Home Run Titles across a career.",
+      check: ()=> seasonRule(s=> (s.awards||[]).includes("Home Run Title"), 4)(career) },
     { key:"storybook", name:"Storybook Career", icon:"book",
       blurb:"A career people will still be telling stories about decades from now.",
       hint:"Rack up 3 or more legendary career moments.",
-      // Deliberately left reading career.lifeEventLog directly, NOT migrated to eventCountRule over
-      // career.eventLedger -- see Wave 6's own rationale for the dark-humor achievements: an old save
-      // that already had a legendary event happen in a PRE-Wave-6 season has it in lifeEventLog but
-      // NOT in eventLedger (which didn't exist yet), so switching this would make the achievement
-      // permanently unreachable for such saves. Not every eventLedger-shaped check is safe to migrate.
       check: ()=> (career.lifeEventLog||[]).filter(e=>e.legendary).length>=3 },
     { key:"scartissue", name:"Scar Tissue", icon:"mountain",
       blurb:"Broken down more than once, and got back up every single time.",
@@ -904,38 +944,34 @@ import {
       check: ()=> seasonRule(s=>s.wearBreakdown, 2)(career) },
 
     // ----- dynasties, droughts, and history-flavored streaks -----
-    // wagons/buffalobills migrated to the Balance Wave 6 declarative rule builders as a proof-of-
-    // concept -- consecutiveSeasonRule(pred,n)(career) is exactly maxConsecutive(seasonLog,pred)>=n,
-    // so this is byte-for-byte the same condition, just expressed as data (a predicate + a count)
-    // instead of an inline maxConsecutive call.
-    { key:"wagons", name:"No One Circles the Wagons", icon:"crown",
-      blurb:"Four straight championships. The league simply couldn't answer.",
-      hint:"Win the championship in four consecutive seasons.",
-      check: ()=> consecutiveSeasonRule(wonTitle, 4)(career) },
-    { key:"buffalobills", name:"Quiet Like the Buffalo Bills", icon:"snow",
-      blurb:"Four straight trips to the big game. Four straight times the confetti was the wrong color.",
-      hint:"Reach the championship game four seasons in a row without ever winning it.",
-      check: ()=> consecutiveSeasonRule(reachedTitleGameAndLost, 4)(career) },
+    { key:"threepeat", name:"Three-Peat", icon:"crown",
+      blurb:"Three straight titles. The rest of the league is just playing for second.",
+      hint:"Win the World Series in three consecutive seasons.",
+      check: ()=> consecutiveSeasonRule(wonTitle, 3)(career) },
+    { key:"octoberghosts", name:"October Ghosts", icon:"snow",
+      blurb:"Three straight trips to the Fall Classic. Three straight times the other guys got the parade.",
+      hint:"Reach the World Series three seasons in a row without ever winning it.",
+      check: ()=> consecutiveSeasonRule(reachedTitleGameAndLost, 3)(career) },
     { key:"snakebitten", name:"Snake Bitten", icon:"gem",
       blurb:"So close, so many times, and never once close enough.",
-      hint:"Reach the championship game 3+ times across your career without ever winning one.",
+      hint:"Reach the World Series 3+ times across your career without ever winning one.",
       check: ()=> allOf(()=> career.totals.rings===0, seasonRule(reachedTitleGameAndLost, 3))(career) },
     { key:"ringchaser", name:"Ring Chaser", icon:"chain",
-      blurb:"Found a way to win it all no matter which jersey he was wearing.",
-      hint:"Win a championship with two or more different teams.",
+      blurb:"Found a way to win it all no matter which cap he was wearing.",
+      hint:"Win the World Series with two or more different teams.",
       check: ()=> new Set(career.seasonLog.filter(wonTitle).map(s=>s.teamId)).size>=2 },
     { key:"dynasty", name:"Dynasty", icon:"trophy",
       blurb:"Built something that lasted — the trophy case has one team's name all over it.",
-      hint:"Win 4 or more championships with a single team.",
+      hint:"Win 4 or more World Series with a single team.",
       check: ()=>{ const counts={}; career.seasonLog.filter(wonTitle).forEach(s=> counts[s.teamId]=(counts[s.teamId]||0)+1);
         return Object.values(counts).some(c=>c>=4); } },
-    { key:"perfectseason", name:"Perfect Season", icon:"star",
-      blurb:"Not one single loss, all year.",
-      hint:"Finish a season with a perfect team record.",
-      check: ()=> seasonRule(s=> s.teamGames>0 && s.teamLosses===0)(career) },
-    { key:"turnaround", name:"The Turnaround", icon:"sunrise",
+    { key:"hundredwins", name:"The 100-Win Team", icon:"star",
+      blurb:"A juggernaut of a regular season — a full six months of dominance.",
+      hint:"Play a season on a team that wins 100 or more games.",
+      check: ()=> seasonRule(s=> (s.teamWins||0)>=100)(career) },
+    { key:"turnaround", name:"Worst to First", icon:"sunrise",
       blurb:"Walked into a rebuild and walked out a champion.",
-      hint:"Join a bottom-tier (under 45 grade) team and win a championship with them within 3 seasons.",
+      hint:"Join a bottom-tier (under 45 grade) team and win the World Series with them within 3 seasons.",
       check: ()=>{
         for(let i=0;i<career.seasonLog.length;i++){
           if(career.seasonLog[i].teamOverall<45){
@@ -949,39 +985,32 @@ import {
       blurb:"The best player in the league, two years running.",
       hint:"Win MVP in back-to-back seasons.",
       check: ()=> consecutiveSeasonRule(s=>(s.awards||[]).includes("MVP"), 2)(career) },
-    { key:"faceoftheleague", name:"Face of the League", icon:"star",
+    { key:"faceoftheleague", name:"Face of the Game", icon:"star",
       blurb:"The league ran through him for the better part of a decade.",
       hint:"Win MVP three or more times across your career.",
       check: ()=> career.totals.mvps>=3 },
     { key:"juggernaut", name:"Juggernaut", icon:"shield",
-      blurb:"Three straight years fielding one of the best rosters in football.",
+      blurb:"Three straight years on one of the deepest rosters in baseball.",
       hint:"Keep your team grade at 90 or higher for three consecutive seasons.",
       check: ()=> consecutiveSeasonRule(s=>s.teamOverall>=90, 3)(career) },
-    { key:"onemanteam", name:"One-Man Team", icon:"mountain",
+    { key:"onemanteam", name:"One-Man Lineup", icon:"mountain",
       blurb:"Carried a bad roster to individual honors again and again.",
-      hint:"Make Pro Bowl or All-Pro three or more times on a bottom-tier (under 45 grade) team.",
-      check: ()=> seasonRule(s=> s.teamOverall<45 && ((s.awards||[]).includes("Pro Bowl")||(s.awards||[]).includes("All-Pro")), 3)(career) },
-    { key:"biggamehunter", name:"Big Game Hunter", icon:"flame",
-      blurb:"Walked into the championship as the lesser team, and walked out with the trophy anyway.",
-      hint:"Win the championship as the lower-graded team in the Super Bowl.",
+      hint:"Make an All-Star team or win a Silver Slugger three or more times on a bottom-tier (under 45 grade) team.",
+      check: ()=> seasonRule(s=> s.teamOverall<45 && ((s.awards||[]).includes("All-Star")||(s.awards||[]).includes("Silver Slugger")), 3)(career) },
+    { key:"davidvsgoliath", name:"David vs. Goliath", icon:"flame",
+      blurb:"Walked into the Fall Classic as the lesser team, and walked out with the trophy anyway.",
+      hint:"Win the World Series as the lower-graded team.",
       check: ()=> seasonRule(s=>{
         if(!wonTitle(s) || !s.playoffs.rounds.length) return false;
         const last = s.playoffs.rounds[s.playoffs.rounds.length-1];
         return last.round==="Super Bowl" && last._defOverall!=null && s.teamOverall<last._defOverall;
       })(career) },
-    { key:"ironclad", name:"Ironclad", icon:"shield",
-      blurb:"A full decade-plus in the league, and never once missed a game to injury.",
-      hint:"Play 10+ seasons without ever missing a game to injury.",
-      // The genuine "every season of a 10+ year career, not just a 10-season streak within a longer
-      // one" shape everySeasonRule (Wave 7) exists specifically to express -- see its own header
-      // comment for why consecutiveSeasonRule would silently be a different, more lenient condition.
-      check: ()=> everySeasonRule(s=>(s.missedGamesInjury||0)===0, 10)(career) },
+    { key:"ironman", name:"The Ironman", icon:"shield",
+      blurb:"A full decade-plus in the lineup, and never once on the IL for a game.",
+      hint:"Play 12+ seasons without ever missing a game to injury.",
+      check: ()=> everySeasonRule(s=>(s.missedGamesInjury||0)===0, 12)(career) },
 
     // ----- dark-humor achievements, tied to specific rare/infraction scandal events -----
-    // Each hooks a single specific event via its stable achievementId (see RARE_EVENTS/animalring
-    // above) rather than a generic stat threshold -- these are jokes about a specific bad night, not
-    // a pattern of behavior, so a title-only match (in case an event's flavor text ever changes)
-    // would be fragile where the id-based hadLifeEvent() lookup isn't.
     { key:"gotthatdawg", name:"He Got That Dawg in Him", icon:"paw",
       blurb:"Not the kind of \"dawg in him\" anyone meant. A very, very wrong kind of dog story.",
       hint:"Get caught up in a career-altering federal investigation.",
@@ -1000,7 +1029,7 @@ import {
       check: ()=> hadLifeEvent("master_of_disguise") },
     { key:"walkabout", name:"Walkabout", icon:"sunrise",
       blurb:"No scandal, no arrest — just up and gone, mid-career, to go find himself.",
-      hint:"Walk away from football entirely, mid-career, with no explanation.",
+      hint:"Walk away from the game entirely, mid-career, with no explanation.",
       check: ()=> hadLifeEvent("walked_away") },
     { key:"wrongplacewrongtime", name:"Wrong Place, Wrong Time", icon:"clock",
       blurb:"Wasn't the shooter. Was, unfortunately, still there.",
@@ -1019,126 +1048,151 @@ import {
       hint:"Have your partner get caught up in a scandal with a bitter rival.",
       check: ()=> hadLifeEvent("two_time_loser") },
 
-    // ----- Balance Wave 6: team-specific declarative achievements -----
-    // Each reads career.seasonLog (already a rich, structured, per-season record -- teamId,
-    // teamOverall, awards, playoffs) through the achievementRules.js rule builders, so the LOGIC is
-    // data (a predicate + a count/ordering) rather than a bespoke scan -- the actual "declarative"
-    // half of this wave. A couple (clevelandfirst, jetsredemption, bayarearesurgence) still read as
-    // a short hand-written closure because the exact ordering they need (first-ever win at 20+
-    // seasons; a stat threshold that must hold BEFORE a later award) doesn't reduce cleanly to the
-    // current rule vocabulary -- that's an honest limit of this wave's engine, not an oversight.
-    { key:"buffaloclosure", name:"Buffalo Closure", icon:"snow",
-      blurb:"Four straight heartbreaks in Buffalo, and then, finally, the one that counted.",
-      hint:"Lose four straight championship games with the Bills, then eventually win one with them.",
-      check: ()=> allOf(
-        consecutiveSeasonRule(s=>s.teamId==="BUF"&&reachedTitleGameAndLost(s), 4),
-        seasonRule(s=>s.teamId==="BUF"&&wonTitle(s), 1),
-      )(career) },
-    { key:"clevelandfirst", name:"Cleveland, Finally", icon:"sunrise",
-      blurb:"Two decades of waiting, and the city finally gets its parade.",
-      hint:"Win the Browns' first championship of your career after 20+ seasons with no ring at all.",
+    // ----- team-specific declarative achievements (real MLB franchise lore) -----
+    { key:"cubs108", name:"108 Years", icon:"sunrise",
+      blurb:"The goat, the black cat, Bartman, all of it — and then, finally, the parade.",
+      hint:"Win the Cubs' first title of your career after 15+ seasons in the league without a ring.",
+      check: ()=>{
+        const idx = career.seasonLog.findIndex(s=>s.teamId==="CHC"&&wonTitle(s));
+        return idx>=15 && career.seasonLog.slice(0,idx).every(s=>!wonTitle(s));
+      } },
+    { key:"reversethecurse", name:"Reverse the Curse", icon:"crown",
+      blurb:"Eighty-six years of heartbreak in Boston, twice paid back.",
+      hint:"Win two or more World Series with the Red Sox.",
+      check: ()=> seasonRule(s=>s.teamId==="BOS"&&wonTitle(s), 2)(career) },
+    { key:"bronxdynasty", name:"Bronx Dynasty", icon:"crown",
+      blurb:"In pinstripes, a championship is the expectation, not the ceiling.",
+      hint:"Win three or more World Series with the Yankees.",
+      check: ()=> seasonRule(s=>s.teamId==="NYY"&&wonTitle(s), 3)(career) },
+    { key:"clevelandfinally", name:"Cleveland, Finally", icon:"gem",
+      blurb:"The longest wait in the sport, and the city finally gets its parade.",
+      hint:"Win the Guardians' first title of your career after 18+ ringless seasons.",
       check: ()=>{
         const idx = career.seasonLog.findIndex(s=>s.teamId==="CLE"&&wonTitle(s));
-        return idx>=20 && career.seasonLog.slice(0,idx).every(s=>!wonTitle(s));
+        return idx>=18 && career.seasonLog.slice(0,idx).every(s=>!wonTitle(s));
       } },
-    { key:"motorcitymiracle", name:"Motor City Miracle", icon:"gem",
-      blurb:"Nobody outside the city gave this Detroit team a single chance. They didn't need one.",
-      hint:"Win a championship with the Lions in a season that started with a team grade under 50.",
-      check: ()=> seasonRule(s=>s.teamId==="DET"&&s.teamOverall<50&&wonTitle(s), 1)(career) },
-    { key:"purplepain", name:"Purple Pain", icon:"compass",
-      blurb:"Minnesota gets there. Minnesota just never, ever finishes it.",
-      hint:"Reach the championship game 3+ times with the Vikings without ever winning one there.",
+    { key:"cardinalway", name:"The Cardinal Way", icon:"shield",
+      blurb:"St. Louis doesn't rebuild. St. Louis just keeps showing up in October.",
+      hint:"Win two or more World Series with the Cardinals.",
+      check: ()=> seasonRule(s=>s.teamId==="STL"&&wonTitle(s), 2)(career) },
+    { key:"evenyearmagic", name:"Even Year Magic", icon:"gem",
+      blurb:"Nobody could explain it. It just kept happening, every other autumn.",
+      hint:"Win two World Series with the Giants, both in even-numbered years.",
+      check: ()=> seasonRule(s=>s.teamId==="SF"&&wonTitle(s)&&s.year%2===0, 2)(career) },
+    { key:"endthewait", name:"End the Wait", icon:"compass",
+      blurb:"One franchise has never once played for it all. He got them there.",
+      hint:"Reach the World Series with the Mariners.",
+      check: ()=> seasonRule(s=>s.teamId==="SEA"&&(wonTitle(s)||reachedTitleGameAndLost(s)))(career) },
+    { key:"worsttofirstatl", name:"Worst to First", icon:"sunrise",
+      blurb:"Last place one year, a parade down Peachtree the next.",
+      hint:"With the Braves, go from a sub-50 team grade to a World Series within 3 seasons.",
+      check: ()=>{
+        for(let i=0;i<career.seasonLog.length;i++){
+          const a = career.seasonLog[i];
+          if(a.teamId==="ATL" && a.teamOverall<50){
+            for(let j=i;j<Math.min(career.seasonLog.length,i+4);j++){
+              if(career.seasonLog[j].teamId==="ATL" && wonTitle(career.seasonLog[j])) return true;
+            }
+          }
+        }
+        return false; } },
+    { key:"astroswindow", name:"The Window", icon:"trophy",
+      blurb:"Houston pushed all the chips in and cashed them, more than once.",
+      hint:"Win two or more World Series with the Astros.",
+      check: ()=> seasonRule(s=>s.teamId==="HOU"&&wonTitle(s), 2)(career) },
+    { key:"rangersfinally", name:"Two Strikes Away, Then Finally", icon:"snow",
+      blurb:"One strike from the title, twice, and then years later, the one that stuck.",
+      hint:"Lose a World Series with the Rangers, then later win one with them.",
       check: ()=> allOf(
-        seasonRule(s=>s.teamId==="MIN"&&reachedTitleGameAndLost(s), 3),
-        ruleNot(seasonRule(s=>s.teamId==="MIN"&&wonTitle(s), 1)),
+        seasonRule(s=>s.teamId==="TEX"&&reachedTitleGameAndLost(s), 1),
+        seasonRule(s=>s.teamId==="TEX"&&wonTitle(s), 1),
       )(career) },
-    { key:"steeltown", name:"Steel Town", icon:"shield",
-      blurb:"Pittsburgh doesn't rebuild. Pittsburgh reloads.",
-      hint:"Win two or more championships with the Steelers.",
-      check: ()=> seasonRule(s=>s.teamId==="PIT"&&wonTitle(s), 2)(career) },
-    { key:"jetsredemption", name:"Broadway Reboot", icon:"star",
-      blurb:"Buried on the bench once. Impossible to bench by the end.",
-      hint:"Earn Pro Bowl, All-Pro, or MVP with the Jets in a later season after logging real bench time with them.",
-      check: ()=>{
-        const bIdx = career.seasonLog.findIndex(s=>s.teamId==="NYJ"&&(s.missedGamesBackup||0)>0);
-        if(bIdx===-1) return false;
-        return career.seasonLog.slice(bIdx+1).some(s=>s.teamId==="NYJ"&&((s.awards||[]).includes("Pro Bowl")||(s.awards||[]).includes("All-Pro")||(s.awards||[]).includes("MVP")));
-      } },
-    { key:"bayarearesurgence", name:"Bay Area Resurgence", icon:"mountain",
-      blurb:"Walked into a rebuild in the Bay. Walked out with a real contender.",
-      hint:"Improve the 49ers' team grade by 30+ points from your first season there to a later one.",
-      check: ()=>{
-        const sf = career.seasonLog.filter(s=>s.teamId==="SF");
-        if(sf.length<2) return false;
-        return sf[sf.length-1].teamOverall - sf[0].teamOverall >= 30;
-      } },
-    { key:"patriotway", name:"The Patriot Way", icon:"crown",
-      blurb:"Five straight years of one of the best rosters in football, all under one hood in Foxborough.",
-      hint:"Keep a 85+ team grade for 5 consecutive seasons with the Patriots.",
-      check: ()=> consecutiveSeasonRule(s=>s.teamId==="NE"&&s.teamOverall>=85, 5)(career) },
+    { key:"wearefamily", name:"We Are Family", icon:"heart",
+      blurb:"A Pittsburgh clubhouse that felt more like a block party, and a trophy to show for it.",
+      hint:"Win the World Series with the Pirates.",
+      check: ()=> seasonRule(s=>s.teamId==="PIT"&&wonTitle(s))(career) },
+    { key:"moneyball", name:"Moneyball", icon:"gauge",
+      blurb:"Smallest budget in the division, three straight Octobers anyway.",
+      hint:"Reach the playoffs 3 seasons in a row with the A's while the team grade never tops 74.",
+      check: ()=> consecutiveSeasonRule(s=>s.teamId==="OAK"&&s.playoffs&&s.playoffs.made&&s.teamOverall<=74, 3)(career) },
+    { key:"homerhankies", name:"Homer Hankies", icon:"crown",
+      blurb:"The loudest building in the sport, waving white, twice over.",
+      hint:"Win two World Series with the Twins.",
+      check: ()=> seasonRule(s=>s.teamId==="MIN"&&wonTitle(s), 2)(career) },
+    { key:"backtobacktoronto", name:"Back-to-Back in Toronto", icon:"infinity",
+      blurb:"The whole country north of the border, on its feet, two Octobers running.",
+      hint:"Win the World Series in consecutive seasons with the Blue Jays.",
+      check: ()=> consecutiveSeasonRule(s=>s.teamId==="TOR"&&wonTitle(s), 2)(career) },
+    { key:"yagottabelieve", name:"Ya Gotta Believe", icon:"flame",
+      blurb:"Nobody in New York gave this Mets team a chance. That's exactly how they like it.",
+      hint:"Win the World Series with the Mets as the lower-graded team.",
+      check: ()=> seasonRule(s=>{
+        if(s.teamId!=="NYM" || !wonTitle(s) || !s.playoffs.rounds.length) return false;
+        const last = s.playoffs.rounds[s.playoffs.rounds.length-1];
+        return last.round==="Super Bowl" && last._defOverall!=null && s.teamOverall<last._defOverall;
+      })(career) },
+    { key:"bluebloods", name:"Blue Bloods", icon:"crown",
+      blurb:"Chavez Ravine expects a ring, and he delivered a stack of them.",
+      hint:"Win three or more World Series with the Dodgers.",
+      check: ()=> seasonRule(s=>s.teamId==="LAD"&&wonTitle(s), 3)(career) },
 
-    // ----- Balance Wave 6: achievements tied to the newer Development/Contract/Key Moment/
-    // Coordinator-Carousel systems (Waves 2-5), showcasing mechanics the original 39 achievements
-    // predate. Several of these are the first achievements built against career.eventLedger (see
-    // recordLedgerEvent in main.js), the new structured event log this wave adds. -----
+    // ----- development, contract, key-moment, and coaching-carousel achievements -----
     { key:"earnedit", name:"Earned It", icon:"bolt",
-      blurb:"Not a gift from the dice. A breakthrough he actually played his way into.",
+      blurb:"Not a gift from the dice. A breakthrough he actually worked his way into.",
       hint:"Trigger at least one earned development breakthrough.",
       check: ()=> (career._earnedBreakthroughCount||0)>=1 },
     { key:"selfmade", name:"Self-Made", icon:"mountain",
-      blurb:"Every real leap in this career traces back to a Sunday, not a die roll.",
+      blurb:"Every real leap in this career traces back to the cage, not a die roll.",
       hint:"Trigger three or more earned development breakthroughs across a career.",
       check: ()=> (career._earnedBreakthroughCount||0)>=3 },
     { key:"betonyourself", name:"Bet on Yourself", icon:"gauge",
-      blurb:"Took the record-setting number every time, cap pressure be damned.",
+      blurb:"Took the record-setting number every time, luxury-tax bill be damned.",
       hint:"Sign three or more record-setting contract structures across a career.",
       check: ()=> eventCountRule({ eventId:"contract_signed", choiceId:"recordSetting" }, 3)(career) },
     { key:"hometowndiscount", name:"Hometown Discount", icon:"heart",
       blurb:"Left real money on the table, more than once, to keep the roster around him whole.",
       hint:"Sign three or more team-friendly contract structures across a career.",
       check: ()=> eventCountRule({ eventId:"contract_signed", choiceId:"teamFriendly" }, 3)(career) },
-    { key:"capcasualty", name:"Cap Casualty", icon:"chain",
-      blurb:"The record deal looked great on signing day. The front office remembered it two years later.",
+    { key:"luxurytaxcasualty", name:"Luxury-Tax Casualty", icon:"chain",
+      blurb:"The record deal looked great on signing day. The payroll ledger remembered it two years later.",
       hint:"Sign a record-setting contract, then get traded within 2 seasons.",
       check: ()=> sequenceRule(
         [ledgerStep({ eventId:"contract_signed", choiceId:"recordSetting" }), ledgerStep({ eventId:"traded" })],
         { withinSeasons:2 },
       )(career) },
-    { key:"coordinatorsnightmare", name:"Coordinator's Nightmare", icon:"wing",
-      blurb:"His own staff keeps getting head-coaching interviews. It's a compliment that costs him every time.",
-      hint:"Have the coordinator carousel hit your own team's coaching grade twice in a career.",
+    { key:"coachcarousel", name:"The Coaching Carousel", icon:"wing",
+      blurb:"His hitting coach keeps getting offered a manager's chair. It's a compliment that costs him every time.",
+      hint:"Have the coaching-staff carousel hit your own team's coaching grade twice in a career.",
       check: ()=> eventCountRule({ eventId:"coordinator_carousel" }, 2)(career) },
     { key:"icecold", name:"Ice Cold", icon:"clock",
-      blurb:"When it mattered most, the read was wrong more often than it was right.",
-      hint:"Come up short in 8 or more Key Moment decisions across a career.",
+      blurb:"When it mattered most, the guess was wrong more often than it was right.",
+      hint:"Come up short in 8 or more clutch at-bat decisions across a career.",
       check: ()=> ((career.keyMomentRecord&&career.keyMomentRecord.bad)||0)>=8 },
     { key:"clutchgene", name:"Clutch Gene", icon:"target",
-      blurb:"When the possession decides it, he's the one you want holding the ball.",
-      hint:"Deliver 10 or more good Key Moment decisions across a career.",
+      blurb:"When the at-bat decides it, he's the one you want at the plate.",
+      hint:"Deliver 10 or more good clutch at-bat decisions across a career.",
       check: ()=> ((career.keyMomentRecord&&career.keyMomentRecord.good)||0)>=10 },
     { key:"moneymoment", name:"Money Moment", icon:"trophy",
-      blurb:"The right call, executed exactly right, with a Super Bowl hanging on it.",
-      hint:"Deliver a good Key Moment decision that flips the result of a Super Bowl in your favor.",
+      blurb:"The right read, the right swing, with a World Series hanging on it.",
+      hint:"Deliver a good clutch at-bat that flips the result of a World Series game in your favor.",
       check: ()=> (career.eventLedger||[]).some(e=> e.eventId==="key_moment" && e.severity==="good" && e.metadata && e.metadata.round==="Super Bowl" && e.metadata.flippedResult) },
     { key:"heartbreaker", name:"Heartbreaker", icon:"flame",
-      blurb:"One wrong read, one Super Bowl, gone.",
-      hint:"Come up short on a Key Moment decision that flips a Super Bowl win into a loss.",
+      blurb:"One wrong read, one World Series, gone.",
+      hint:"Come up short on a clutch at-bat that flips a World Series win into a loss.",
       check: ()=> (career.eventLedger||[]).some(e=> e.eventId==="key_moment" && e.severity==="bad" && e.metadata && e.metadata.round==="Super Bowl" && e.metadata.flippedResult) },
 
-    // ----- Balance Wave 6: multi-event chains, using career.eventLedger's sequenceIndex to require
-    // real ORDER (not just that both things happened somewhere in the career) -- the kind of
-    // condition the old lifeEventLog-only system had no clean way to express at all. -----
+    // ----- multi-event chains (ordered via the ledger's sequenceIndex) -----
     { key:"redemptionarc", name:"Redemption Arc", icon:"sunrise",
       blurb:"Lost the big one once. Made sure it didn't define him.",
-      hint:"Lose a championship game, then win one in a later season.",
+      hint:"Lose a World Series, then win one in a later season.",
       check: ()=> sequenceRule([ledgerStep({ eventId:"championship_lost" }), ledgerStep({ eventId:"championship_won" })])(career) },
-    { key:"backtobackheartbreak", name:"Third Time's the Charm", icon:"infinity",
+    { key:"thirdtimescharm", name:"Third Time's the Charm", icon:"infinity",
       blurb:"Lost the big one twice running. Didn't let there be a third.",
-      hint:"Lose two straight championship games, then win the next one you reach.",
+      hint:"Lose two straight World Series, then win the next one you reach.",
       check: ()=> sequenceRule([
         ledgerStep({ eventId:"championship_lost" }), ledgerStep({ eventId:"championship_lost" }), ledgerStep({ eventId:"championship_won" }),
       ])(career) },
-    { key:"scandalthensuccess", name:"Rewriting the Headline", icon:"star",
+    { key:"rewritingheadline", name:"Rewriting the Headline", icon:"star",
       blurb:"The tabloids had their story. Then he went and won MVP before they could finish telling it.",
       hint:"Survive a scandal, then win MVP within 3 seasons.",
       check: ()=> sequenceRule(
@@ -1147,7 +1201,7 @@ import {
       )(career) },
     { key:"cleanslate", name:"Clean Slate", icon:"crown",
       blurb:"The scandal was real. So, eventually, was the ring.",
-      hint:"Survive a scandal, then win a championship in a later season.",
+      hint:"Survive a scandal, then win the World Series in a later season.",
       check: ()=> sequenceRule([ledgerStep({ eventId:"infraction_event" }), ledgerStep({ eventId:"championship_won" })])(career) },
     { key:"deniednotdefeated", name:"Denied, Not Defeated", icon:"gauge",
       blurb:"They said no to the trade request. He made them regret it fast.",
@@ -1157,10 +1211,9 @@ import {
         { withinSeasons:2 },
       )(career) },
 
-    // ----- Balance Wave 6: career-shape achievements reading the ledger's broader transaction
-    // history (trades, signings, requests) as a whole rather than one specific chain. -----
+    // ----- career-shape achievements reading the ledger's broader transaction history -----
     { key:"wanderlust", name:"Wanderlust", icon:"compass",
-      blurb:"Three different lockers, three different playbooks, one very well-traveled career.",
+      blurb:"Three different clubhouses, three different scouting binders, one well-traveled career.",
       hint:"Change teams (by trade or free-agent signing) three or more times in a career.",
       check: ()=> (career.eventLedger||[]).filter(e=> e.eventId==="traded" || (e.eventId==="contract_signed" && e.outcomeId==="signed")).length>=3 },
     { key:"frontofficefavorite", name:"Front Office Favorite", icon:"anchor",
@@ -1171,117 +1224,88 @@ import {
       blurb:"Asked for a way out three separate times. Never stopped asking.",
       hint:"Request a trade three or more times across a career.",
       check: ()=> eventCountRule({ eventId:"trade_requested" }, 3)(career) },
-
-    // ----- Balance Wave 7: opponent/revenge achievements -----
-    // Wave 6's own "not done" note claimed a playoff round's opponent was only known by display
-    // name, not a stable id -- that was wrong (season.playoffs.rounds[i].oppId already existed, see
-    // stepConferenceBracket); the real gap was that the championship_won/championship_lost/
-    // key_moment ledger events never threaded it through, fixed this wave (see recordLedgerEvent
-    // call sites in finalizePlayoffOutcome/triggerKeyMoment). sameFieldAs/groupCountRule (new this
-    // wave, src/sim/achievementRules.js) are what actually make an opponent-SPECIFIC condition
-    // expressible: "the SAME team" rather than "any team", which sequenceRule/eventCountRule alone
-    // couldn't say.
-    { key:"revenge", name:"Revenge Tour", icon:"flame",
-      blurb:"They beat him for a ring once. He made sure there wasn't a second time.",
-      hint:"Lose a championship to a specific team, then later beat that SAME team for a ring.",
-      check: ()=> sequenceRule([
-        ledgerStep({ eventId:"championship_lost" }),
-        sameFieldAs(0, { eventId:"championship_won" }),
-      ])(career) },
-    { key:"rivalgauntlet", name:"Personal Nemesis", icon:"chain",
-      blurb:"Whatever they tried, it never worked twice. He owns this matchup.",
-      hint:"Beat the same team for a championship two or more times across a career.",
-      check: ()=> groupCountRule({ eventId:"championship_won" }, "opponentId", 2)(career) },
-    { key:"hauntedbythesamedemon", name:"Haunted", icon:"gem",
-      blurb:"One franchise, twice, in the biggest game there is. Some ghosts don't leave.",
-      hint:"Lose a championship to the same team two or more times across a career.",
-      check: ()=> groupCountRule({ eventId:"championship_lost" }, "opponentId", 2)(career) },
-    { key:"signaturewin", name:"Signature Win", icon:"target",
-      blurb:"The team that beat him for a ring once. This time, in a Key Moment, he had the answer.",
-      hint:"Lose a championship to a team, then later deliver a good Key Moment decision against that same team.",
-      check: ()=> sequenceRule([
-        ledgerStep({ eventId:"championship_lost" }),
-        sameFieldAs(0, { eventId:"key_moment", severity:"good" }),
-      ])(career) },
-    { key:"familiarfoe", name:"Familiar Foe", icon:"compass",
-      blurb:"Every big possession of his career, it feels like, has come against this one team.",
-      hint:"Face the same opponent in 5 or more Key Moment decisions across a career.",
-      check: ()=> groupCountRule({ eventId:"key_moment" }, "opponentId", 5)(career) },
-
-    // ----- Balance Wave 7: development-plan and team-chemistry achievements -----
-    { key:"filmroommvp", name:"Student of the Game", icon:"star",
-      blurb:"Won it with anticipation and processing, not with the arm.",
-      hint:"Win MVP in a season spent on the Film Room development plan.",
-      check: ()=> seasonRule(s=> s.developmentPlanId==="film" && (s.awards||[]).includes("MVP"))(career) },
-    { key:"athleticfreak", name:"Athletic Freak", icon:"mountain",
-      blurb:"A brutal offseason in the weight room, cashed in every Sunday.",
-      hint:"Post a 1,000-yard rushing season while on the Athletic Camp development plan.",
-      check: ()=> seasonRule(s=> s.developmentPlanId==="athletic" && (s.rushYards||0)>=1000)(career) },
-    { key:"chemistryguru", name:"Chemistry Guru", icon:"heart",
-      blurb:"This locker room trusts him completely, and it shows on every snap.",
-      hint:"Reach 90+ team chemistry in a season.",
-      check: ()=> seasonRule(s=> (s.teamChemistry||0)>=90)(career) },
-    { key:"lonewolf", name:"Lone Wolf", icon:"wing",
-      blurb:"Nobody in that building liked him. They still won it all.",
-      hint:"Win a championship in a season with 20 or lower team chemistry.",
-      check: ()=> seasonRule(s=> (s.teamChemistry??50)<=20 && wonTitle(s))(career) },
-
-    // ----- Balance Wave 7: more team-specific declarative achievements -----
-    { key:"titletown", name:"Titletown", icon:"crown",
-      blurb:"Green Bay collects championships the way other towns collect parking tickets.",
-      hint:"Win three or more championships with the Packers.",
-      check: ()=> seasonRule(s=>s.teamId==="GB"&&wonTitle(s), 3)(career) },
-    { key:"americasteam", name:"America's Team", icon:"star",
-      blurb:"Four straight years, the Cowboys were appointment television, and it was because of him.",
-      hint:"Keep an 85+ team grade for 4 consecutive seasons with the Cowboys.",
-      check: ()=> consecutiveSeasonRule(s=>s.teamId==="DAL"&&s.teamOverall>=85, 4)(career) },
-    { key:"redsea", name:"Red Sea", icon:"bolt",
-      blurb:"Kansas City turned into the league's toughest building to play in, twice over.",
-      hint:"Win two or more championships with the Chiefs.",
-      check: ()=> seasonRule(s=>s.teamId==="KC"&&wonTitle(s), 2)(career) },
-    { key:"legionofboom", name:"Legion of Boom", icon:"shield",
-      blurb:"The defense won this one. He just had to not lose it.",
-      hint:"Win a championship with the Seahawks in a season with fewer than 25 passing touchdowns.",
-      check: ()=> seasonRule(s=>s.teamId==="SEA"&&wonTitle(s)&&s.td<25)(career) },
-    { key:"windycitychill", name:"Windy City Chill", icon:"snow",
-      blurb:"Chicago keeps getting there. Chicago keeps freezing at the door.",
-      hint:"Reach the championship game 3+ times with the Bears without ever winning one.",
-      check: ()=> allOf(
-        seasonRule(s=>s.teamId==="CHI"&&reachedTitleGameAndLost(s), 3),
-        ruleNot(seasonRule(s=>s.teamId==="CHI"&&wonTitle(s), 1)),
-      )(career) },
-    { key:"birdgang", name:"Bird Gang", icon:"wing",
-      blurb:"Philadelphia doesn't do quiet championships. It doesn't need to — it's won two of them.",
-      hint:"Win two or more championships with the Eagles.",
-      check: ()=> seasonRule(s=>s.teamId==="PHI"&&wonTitle(s), 2)(career) },
-
-    // ----- Balance Wave 7: more career-shape/ledger achievements -----
     { key:"dealmaker", name:"Dealmaker", icon:"gauge",
       blurb:"Five contracts, five negotiations, one very well-worn pen.",
       hint:"Sign 5 or more contracts (any structure) across a career.",
       check: ()=> eventCountRule({ eventId:"contract_signed" }, 5)(career) },
-    { key:"neverssettled", name:"Never Settled", icon:"compass",
+    { key:"neversettled", name:"Never Settled", icon:"compass",
       blurb:"Told no once. Asked again anyway. Got the yes the second time.",
       hint:"Get a trade request denied, then later get one granted.",
       check: ()=> sequenceRule([
         ledgerStep({ eventId:"trade_requested", outcomeId:"denied" }),
         ledgerStep({ eventId:"trade_requested", outcomeId:"granted" }),
       ])(career) },
+
+    // ----- opponent / revenge achievements -----
+    { key:"revenge", name:"Revenge Tour", icon:"flame",
+      blurb:"They beat him for a ring once. He made sure there wasn't a second time.",
+      hint:"Lose a World Series to a specific team, then later beat that SAME team for a ring.",
+      check: ()=> sequenceRule([
+        ledgerStep({ eventId:"championship_lost" }),
+        sameFieldAs(0, { eventId:"championship_won" }),
+      ])(career) },
+    { key:"personalnemesis", name:"Personal Nemesis", icon:"chain",
+      blurb:"Whatever they tried, it never worked twice. He owns this matchup.",
+      hint:"Beat the same team for the World Series two or more times across a career.",
+      check: ()=> groupCountRule({ eventId:"championship_won" }, "opponentId", 2)(career) },
+    { key:"haunted", name:"Haunted", icon:"gem",
+      blurb:"One franchise, twice, in the biggest series there is. Some ghosts don't leave.",
+      hint:"Lose the World Series to the same team two or more times across a career.",
+      check: ()=> groupCountRule({ eventId:"championship_lost" }, "opponentId", 2)(career) },
+    { key:"signaturewin", name:"Signature Win", icon:"target",
+      blurb:"The team that beat him for a ring once. This time, in the at-bat that mattered, he had the answer.",
+      hint:"Lose a World Series to a team, then later deliver a good clutch at-bat against that same team.",
+      check: ()=> sequenceRule([
+        ledgerStep({ eventId:"championship_lost" }),
+        sameFieldAs(0, { eventId:"key_moment", severity:"good" }),
+      ])(career) },
+    { key:"familiarfoe", name:"Familiar Foe", icon:"compass",
+      blurb:"Every big at-bat of his career, it feels like, has come against this one team.",
+      hint:"Face the same opponent in 5 or more clutch at-bat decisions across a career.",
+      check: ()=> groupCountRule({ eventId:"key_moment" }, "opponentId", 5)(career) },
+
+    // ----- development-plan and team-chemistry achievements -----
+    { key:"studentofthegame", name:"Student of the Game", icon:"star",
+      blurb:"Won it with pitch recognition and a plan, not raw bat speed.",
+      hint:"Win MVP in a season spent on the Film Room development plan.",
+      check: ()=> seasonRule(s=> s.developmentPlanId==="film" && (s.awards||[]).includes("MVP"))(career) },
+    { key:"athleticfreak", name:"Athletic Freak", icon:"mountain",
+      blurb:"A brutal offseason in the weight room, cashed in on the bases all year.",
+      hint:"Steal 40+ bases in a season while on the Athletic Camp development plan.",
+      check: ()=> seasonRule(s=> s.developmentPlanId==="athletic" && (s.sb||0)>=40)(career) },
+    { key:"chemistryguru", name:"Chemistry Guru", icon:"heart",
+      blurb:"This clubhouse trusts him completely, and it shows in every at-bat.",
+      hint:"Reach 90+ team chemistry in a season.",
+      check: ()=> seasonRule(s=> (s.teamChemistry||0)>=90)(career) },
+    { key:"lonewolf", name:"Lone Wolf", icon:"wing",
+      blurb:"Nobody in that clubhouse liked him. They still won it all.",
+      hint:"Win the World Series in a season with 20 or lower team chemistry.",
+      check: ()=> seasonRule(s=> (s.teamChemistry??50)<=20 && wonTitle(s))(career) },
+
+    // ----- late-career / cross-league achievements -----
     { key:"clutchunderpressure", name:"Clutch Under Pressure", icon:"trophy",
-      blurb:"Every big possession in the biggest game, he had the answer.",
-      hint:"Deliver 3 or more good Key Moment decisions specifically in Super Bowl rounds.",
+      blurb:"Every big at-bat in the biggest series, he had the answer.",
+      hint:"Deliver 3 or more good clutch at-bat decisions specifically in World Series games.",
       check: ()=> (career.eventLedger||[]).filter(e=> e.eventId==="key_moment" && e.severity==="good" && e.metadata && e.metadata.round==="Super Bowl").length>=3 },
-    { key:"coasttocoast", name:"Coast to Coast", icon:"infinity",
-      blurb:"A ring from each side of the league. There's no bracket he hasn't conquered.",
-      hint:"Win a championship with a team from both the AFC and the NFC.",
+    { key:"aringineachleague", name:"A Ring in Each League", icon:"infinity",
+      blurb:"American League, National League — there's no pennant race he hasn't won.",
+      hint:"Win the World Series with a team from both the American and National League.",
       check: ()=>{
         const confs = new Set(career.seasonLog.filter(wonTitle).map(s=>conferenceOf(s.teamId, s.year)));
         return confs.size>=2;
       } },
-    { key:"underthelights", name:"Under the Lights, Then Without Them", icon:"sunrise",
-      blurb:"Won it in the modern spotlight, and won it back when the game barely had cameras at all.",
-      hint:"Win a championship in the pre-Super Bowl era (before 1966) and another in the Super Bowl era.",
-      check: ()=> career.seasonLog.some(s=>wonTitle(s)&&s.year<1966) && career.seasonLog.some(s=>wonTitle(s)&&s.year>=1966) },
+    { key:"fivehundredclub", name:"The 500 Club", icon:"crown",
+      blurb:"A number that used to guarantee a plaque in Cooperstown.",
+      hint:"Hit 500 or more home runs in a career.",
+      check: ()=> (career.totals.td||0)>=500 },
+    { key:"threethousandhits", name:"3,000 Hits", icon:"book",
+      blurb:"Two decades of showing up and getting the barrel to it.",
+      hint:"Collect 3,000 or more hits in a career.",
+      check: ()=> (career.totals.comp||0)>=3000 },
+    { key:"walkoffwins", name:"Mr. Walk-Off", icon:"flame",
+      blurb:"When the game's on the line in the ninth, everybody in the park knows who's due up.",
+      hint:"Deliver a good clutch at-bat that walks off a League Championship Series or World Series game.",
+      check: ()=> (career.eventLedger||[]).some(e=> e.eventId==="key_moment" && e.severity==="good" && e.metadata && e.metadata.flippedResult && (e.metadata.round==="Super Bowl" || e.metadata.round==="Conference Championship")) },
   ];
 
   function achievementDefFor(key){ return ACHIEVEMENTS.find(a=>a.key===key); }
