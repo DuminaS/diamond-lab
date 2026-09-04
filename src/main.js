@@ -234,7 +234,7 @@ import {
           <div class="sb-title" id="sbTitle-${i}">${svgEscape(roundDisplayLabel(r.round, year)).toUpperCase()}</div>
           <div class="sb-final" id="sbFinal-${i}">vs. the ${svgEscape(r.opponent)}</div>
           ${r._defOverall!=null ? `<div class="sb-oppgrade">Their team overall: <b>${Math.round(r._defOverall)}</b> &nbsp;·&nbsp; Your team overall: <b>${Math.round(career.teamStrength)}</b></div>` : ""}
-          ${r._oppQbName ? `<div class="sb-oppgrade">Their QB: <button type="button" class="rival-link" data-rival-id="${r._oppQbId}">${svgEscape(r._oppQbName)}</button> (${r._oppQbOverall} overall)</div>` : ""}
+          ${r._oppQbName ? `<div class="sb-oppgrade">Their top bat: <button type="button" class="rival-link" data-rival-id="${r._oppQbId}">${svgEscape(r._oppQbName)}</button> (${r._oppQbOverall} overall)</div>` : ""}
           ${r.oppTendency ? `<div class="pr-tendency" style="color:var(--header-muted);text-align:center;">Scouting report: <b style="color:var(--header-accent);">${svgEscape(r.oppTendency.label)}</b> — ${svgEscape(r.oppTendency.blurb)}</div>` : ""}
           <div class="sb-quarters" id="pqQuarters-${i}"></div>
           <div class="pr-controls" id="pqControls-${i}"></div>
@@ -253,7 +253,7 @@ import {
         <div class="pr-box-title" id="prTitle-${i}">${svgEscape(roundDisplayLabel(r.round, year)).toUpperCase()}</div>
         <div class="pr-box-final" id="prFinal-${i}">vs. the ${svgEscape(r.opponent)}</div>
         ${r._defOverall!=null ? `<div class="pr-oppgrade">Their team overall: <b>${Math.round(r._defOverall)}</b> &nbsp;·&nbsp; Your team overall: <b>${Math.round(career.teamStrength)}</b></div>` : ""}
-        ${r._oppQbName ? `<div class="pr-oppgrade">Their QB: <button type="button" class="rival-link" data-rival-id="${r._oppQbId}">${svgEscape(r._oppQbName)}</button> (${r._oppQbOverall} overall)</div>` : ""}
+        ${r._oppQbName ? `<div class="pr-oppgrade">Their top bat: <button type="button" class="rival-link" data-rival-id="${r._oppQbId}">${svgEscape(r._oppQbName)}</button> (${r._oppQbOverall} overall)</div>` : ""}
         ${tendencyHtml}
         <div class="pr-quarters" id="pqQuarters-${i}"></div>
         <div class="pr-controls" id="pqControls-${i}"></div>
@@ -3577,6 +3577,8 @@ import {
         opponentQbName: oppRival ? oppRival.name : null,
         opponentQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
         won, tie: !!scoreSim.tie, myScore: scoreSim.myTotal, oppScore: scoreSim.oppTotal,
+        // real inning-by-inning runs for the box-score line score (compact form)
+        innings: { my: (scoreSim.quarters||[]).map(q=>q.myQ), opp: (scoreSim.quarters||[]).map(q=>q.oppQ) },
         comp: gComp, att: gAtt, yards: gYards, td: gTd, int: gInt, sacks: gSacks, bb: gBb,
         rushAtt: gRushAtt, rushYards: gRushYards, rushTd: gRushTd });
     });
@@ -6299,7 +6301,7 @@ import {
     player.entrenchedYears = rollEntrenchedYears(player.talent);
     assignQuarterbackToRoster(player.id, destTeam.id, destSlot==="qb2"?"QB2":"QB3");
     career.leagueNewsLog.push({ year, teamId: destTeam.id, title:"Trades for Depth", delta:0,
-      flavor:`${teamNameAt(destTeam.id, year)} trade for ${player.name}, adding a real arm to the QB room.` });
+      flavor:`${teamNameAt(destTeam.id, year)} trade for ${player.name}, adding a real bat to the bench.` });
   }
   // Once per season: ages every pool entry by one jobless season, applies the swept retirement
   // hazard (retireChance(n)=clamp(0.05*n^2,0,0.95) -- see pool_hazard_sweep.mjs; low at n=1,
@@ -6529,7 +6531,7 @@ import {
     if(bestChallenger && bestChallengerVal-rivalVal>=SUCCESSION_PROMOTION_GAP){
       const isQb3 = bestChallenger===qb3;
       promoteChallenger(bestChallenger, (oldName,newName)=> isQb3
-        ? `${teamName} skip right past the pecking order — ${newName}, the team's QB3, was simply too good to keep buried on the bench behind ${oldName}.`
+        ? `${teamName} skip right past the pecking order — ${newName}, buried on the bench, was simply too good to keep sitting behind ${oldName}.`
         : `${teamName} bench ${oldName} in favor of ${newName}, who'd been waiting for exactly this shot.`);
       return;
     }
@@ -9259,17 +9261,24 @@ import {
   // since a division rival can appear twice in one season).
   function scheduleMatchToBracketMatch(m, week, season){
     const winnerId = m.aWon ? m.aId : (m.bWon ? m.bId : null);
-    let realRound = null;
+    let realRound = null, aInnings = null, bInnings = null;
     if(m.aId===career.teamId || m.bId===career.teamId){
       const myWeekEntry = (season.gameLog||[]).find(g=>g.week===week);
       if(myWeekEntry){
-        realRound = { box: { comp: myWeekEntry.comp, att: myWeekEntry.att, yards: myWeekEntry.yards, td: myWeekEntry.td, int: myWeekEntry.int } };
+        realRound = { box: { comp: myWeekEntry.comp, att: myWeekEntry.att, yards: myWeekEntry.yards, td: myWeekEntry.td, int: myWeekEntry.int,
+          hr: myWeekEntry.td, bb: myWeekEntry.bb, k: myWeekEntry.int, sb: myWeekEntry.rushYards } };
         // Wave 2B: a week the named incumbent started (career.isBackup) carries his qbId/qbName --
         // the box-score modal's "mine" QB line must show HIM, not silently assume the player played.
         if(myWeekEntry.qbId){ realRound.qbId = myWeekEntry.qbId; realRound.qbName = myWeekEntry.qbName; }
+        // real inning-by-inning runs (innings.my is the player's team, innings.opp the opponent)
+        if(myWeekEntry.innings){
+          const meIsA = m.aId===career.teamId;
+          aInnings = meIsA ? myWeekEntry.innings.my : myWeekEntry.innings.opp;
+          bInnings = meIsA ? myWeekEntry.innings.opp : myWeekEntry.innings.my;
+        }
       }
     }
-    return { aId: m.aId, bId: m.bId, aScore: m.aScore, bScore: m.bScore, winnerId, realRound };
+    return { aId: m.aId, bId: m.bId, aScore: m.aScore, bScore: m.bScore, winnerId, realRound, aInnings, bInnings };
   }
   function weekMatchupTeamLineHTML(teamId, score, won, _qb, year){
     const mine = teamId===career.teamId;
@@ -9578,13 +9587,15 @@ import {
   // no-bat pitcher hits 9th. Consumed by the team page and every box score.
   function buildTeamLineup(teamId, year){
     const rand = createSeededRandom(hashSeed("lineup:" + teamId + ":" + year));
-    const usedLast = new Set();
+    const usedNames = new Set();
     const fabName = ()=>{
-      const first = FIRST_NAMES[Math.floor(rand()*FIRST_NAMES.length)];
-      let last = LAST_NAMES[Math.floor(rand()*LAST_NAMES.length)];
-      for(let i=0;i<6 && usedLast.has(last);i++) last = LAST_NAMES[Math.floor(rand()*LAST_NAMES.length)];
-      usedLast.add(last);
-      return `${first} ${last}`;
+      let name;
+      for(let i=0;i<12;i++){
+        name = `${FIRST_NAMES[Math.floor(rand()*FIRST_NAMES.length)]} ${LAST_NAMES[Math.floor(rand()*LAST_NAMES.length)]}`;
+        if(!usedNames.has(name)) break;
+      }
+      usedNames.add(name);
+      return name;
     };
     const teamGrade = Math.round(teamId===career.teamId ? career.teamStrength : (career.leagueStrength[teamId] ?? 60));
     const isMineActive = teamId===career.teamId && !career.isBackup;
@@ -9640,44 +9651,129 @@ import {
         <tbody>${rows}</tbody>
       </table></div>${lineup.pitcherBats?`<div class="calc-refnote" style="margin-top:0.4rem;">Pre-DH era — the pitcher bats ninth.</div>`:""}`;
   }
+  // One fabricated batter's line for a single game, biased by ovr and lineup slot, drawn from a
+  // caller-supplied seeded rand so the box renders identically every time it's opened.
+  function fabricateBatterGameLine(ovr, slot, rand){
+    let ab = 3 + (rand()<0.6?1:0);
+    if(slot<=2) ab += (rand()<0.45?1:0);
+    if(slot>=8) ab -= (rand()<0.3?1:0);
+    ab = clamp(ab, 2, 5);
+    const hitP = clamp(0.16 + (ovr-60)*0.0045, 0.07, 0.42);
+    let h = 0; for(let i=0;i<ab;i++) if(rand()<hitP) h++;
+    const bb = rand() < clamp(0.05 + (ovr-58)*0.003, 0.02, 0.18) ? 1 : 0;
+    const hr = h>0 && rand() < clamp((ovr-63)*0.011 + (slot>=3&&slot<=5?0.05:0), 0, 0.30) ? 1 : 0;
+    return { ab, h, bb, hr };
+  }
+  // A full 9-man batting box for one team in one game, reconciled so the R (and most of the RBI)
+  // columns add up to the team's real run total. The tracked hitter's row uses his real line when
+  // one is available (realBox), otherwise his season-rate estimate.
+  function buildGameBattingBox(teamId, year, teamRuns, opts){
+    opts = opts || {};
+    const rand = createSeededRandom(hashSeed("box:" + teamId + ":" + year + ":" + (opts.key||"")));
+    const lineup = buildTeamLineup(teamId, year);
+    const rows = lineup.order.map(h=>{
+      if(h.isPitcher) return { ...h, ab:2, h:0, bb:0, hr:0, r:0, rbi:0 };
+      return { ...h, r:0, rbi:0, ...fabricateBatterGameLine(h.ovr, h.slot, rand) };
+    });
+    const tracked = rows.find(r=>r.isTracked);
+    if(tracked){
+      if(opts.realBox){
+        const rb = opts.realBox;
+        tracked.ab = clamp(rb.ab ?? rb.att ?? tracked.ab, 0, 6);
+        tracked.h  = clamp(rb.h ?? rb.comp ?? tracked.h, 0, tracked.ab);
+        tracked.hr = clamp(rb.hr ?? rb.td ?? tracked.hr, 0, tracked.h);
+        tracked.bb = rb.bb ?? tracked.bb;
+      } else if(!opts.isMine){
+        const rv = rivalForTeam(teamId);
+        const est = rv ? estimateSingleGameStatLine(rv) : null;
+        if(est){ tracked.ab = est.ab; tracked.h = est.h; tracked.hr = est.hr; tracked.bb = est.bb; }
+      }
+    }
+    // Assign R (a run needs someone who reached base) and RBI (an HR always drives at least itself).
+    const reachers = ()=> rows.filter(r=>!r.isPitcher && (r.h>0 || r.bb>0));
+    let left = teamRuns;
+    for(let guard=0; left>0 && guard<60; guard++){
+      const pool = reachers().length ? reachers() : rows.filter(r=>!r.isPitcher);
+      pool[Math.floor(rand()*pool.length)].r++; left--;
+    }
+    rows.forEach(r=>{ if(r.hr>0) r.rbi = Math.max(r.rbi, r.hr); });
+    const rbiTarget = Math.max(0, teamRuns - Math.round(teamRuns*0.12*rand()));
+    let rbiHave = rows.reduce((s,r)=>s+r.rbi,0);
+    for(let guard=0; rbiHave<rbiTarget && guard<60; guard++){
+      const pool = rows.filter(r=>!r.isPitcher && r.h>0);
+      if(!pool.length) break;
+      pool[Math.floor(rand()*pool.length)].rbi++; rbiHave++;
+    }
+    return rows;
+  }
+  // The line score's per-inning runs -- real data where we have it, else a seeded fabrication that
+  // sums to the final. Always at least 9 columns; more if the real data ran to extras.
+  function lineScoreInnings(real, totalRuns, rand){
+    if(Array.isArray(real) && real.length) return real.map(v=>v||0);
+    const n = 9, arr = new Array(n).fill(0);
+    let left = totalRuns;
+    const order = Array.from({length:n}, (_,i)=>i).sort(()=> rand()-0.5);
+    for(const i of order){
+      if(left<=0) break;
+      if(rand()<0.32){ const r = Math.min(left, 1 + (rand()<0.3?1:0) + (rand()<0.08?1:0)); arr[i] = r; left -= r; }
+    }
+    if(left>0) arr[order[0]] += left;
+    return arr;
+  }
+  function battingBoxTableHTML(teamId, year, rows){
+    const body = rows.map(r=>{
+      const nameHtml = r.isUser ? `${svgEscape(r.name)}`
+        : r.rivalId ? `<button type="button" class="rival-link" data-rival-id="${r.rivalId}">${svgEscape(r.name)}</button>`
+        : svgEscape(r.name);
+      return `<tr${r.isTracked?' class="me"':""}><td>${svgEscape(positionLabel(r.pos))}</td><td>${nameHtml}</td>
+        <td class="tabular">${r.ab}</td><td class="tabular">${r.r}</td><td class="tabular">${r.h}</td><td class="tabular">${r.bb}</td><td class="tabular">${r.rbi}</td><td class="tabular">${r.hr}</td></tr>`;
+    }).join("");
+    const tot = k => rows.reduce((s,r)=>s+(r[k]||0),0);
+    return `<div class="section-label" style="margin-top:0.8rem;">${svgEscape(teamNameAt(teamId, year))}</div>
+      <div class="table-wrap"><table class="standings-table"><thead><tr><th>Pos</th><th>Batter</th><th class="tabular">AB</th><th class="tabular">R</th><th class="tabular">H</th><th class="tabular">BB</th><th class="tabular">RBI</th><th class="tabular">HR</th></tr></thead>
+        <tbody>${body}</tbody>
+        <tfoot><tr><td></td><td>Totals</td><td class="tabular">${tot("ab")}</td><td class="tabular">${tot("r")}</td><td class="tabular">${tot("h")}</td><td class="tabular">${tot("bb")}</td><td class="tabular">${tot("rbi")}</td><td class="tabular">${tot("hr")}</td></tr></tfoot>
+      </table></div>`;
+  }
   function buildBracketBoxScoreModalHTML(match, year, roundLabel){
     const aName = svgEscape(teamNameAt(match.aId, year)), bName = svgEscape(teamNameAt(match.bId, year));
-    const [q1a,q2a,q3a,q4a] = distributeAcrossGames(match.aScore, 4);
-    const [q1b,q2b,q3b,q4b] = distributeAcrossGames(match.bScore, 4);
-    function qbLineHTML(teamId, isMine){
-      if(isMine){
-        // A real playoff game already has a real box score generated for the player's own side
-        // (generateGameBoxScore, called when the round itself was created) -- use it directly
-        // rather than a placeholder; a flat-side "mine" is impossible (the player is never a
-        // participant in a flat-resolved matchup), so this branch only ever fires for real rounds.
-        // Wave 2B: a REGULAR-SEASON week the named incumbent started (career.isBackup) instead
-        // carries realRound.qbId/qbName (see scheduleMatchToBracketMatch) -- playoffs never route
-        // through the backup mechanic at all, so this can only ever be non-null for a schedule-tab
-        // match, never a real playoff round.
-        const box = match.realRound && match.realRound.box;
-        const bl = b => `${b.h!=null?b.h:b.comp}-for-${b.ab!=null?b.ab:b.att}${(b.hr!=null?b.hr:b.td)?`, ${b.hr!=null?b.hr:b.td} HR`:""}${(b.rbi||0)?`, ${b.rbi} RBI`:""}${(b.bb||0)?`, ${b.bb} BB`:""}`;
-        const line = box ? bl(box) : "";
-        const startedByOther = match.realRound && match.realRound.qbId;
-        const label = startedByOther ? svgEscape(match.realRound.qbName || "a fill-in") : svgEscape(career.name);
-        return `<div class="bracket-qb-line"><b>${label}</b>${line ? ` — ${line}` : ""}</div>`;
-      }
-      const qb = rivalForTeam(teamId);
-      const line = qb ? estimateSingleGameStatLine(qb) : null;
-      const bl = b => `${b.h}-for-${b.ab}${b.hr?`, ${b.hr} HR`:""}${b.rbi?`, ${b.rbi} RBI`:""}${b.bb?`, ${b.bb} BB`:""}`;
-      return `<div class="bracket-qb-line">${qb ? `<button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button>` : "—"}${line ? ` — ${bl(line)}` : ""}</div>`;
+    const lsRand = createSeededRandom(hashSeed("ls:" + match.aId + ":" + match.bId + ":" + year + ":" + roundLabel));
+    // Innings: schedule path sets aInnings/bInnings; a player's own playoff round carries quarters.
+    let aInn = match.aInnings, bInn = match.bInnings;
+    if((!aInn || !bInn) && match.realRound && Array.isArray(match.realRound.quarters)){
+      const meIsA = match.aId===career.teamId;
+      const myQ = match.realRound.quarters.map(q=>q.myQ), oppQ = match.realRound.quarters.map(q=>q.oppQ);
+      aInn = meIsA ? myQ : oppQ; bInn = meIsA ? oppQ : myQ;
     }
+    aInn = lineScoreInnings(aInn, match.aScore, lsRand);
+    bInn = lineScoreInnings(bInn, match.bScore, lsRand);
+    const innN = Math.max(9, aInn.length, bInn.length);
+    while(aInn.length<innN) aInn.push(0);
+    while(bInn.length<innN) bInn.push(0);
+    const innHead = Array.from({length:innN}, (_,i)=>`<th class="tabular">${i+1}</th>`).join("");
+    const innRow = arr => arr.map(v=>`<td class="tabular">${v}</td>`).join("");
+
+    // Batting boxes -- the tracked hitter's real line goes onto his row where we have one.
+    const meIsA = match.aId===career.teamId, meIsB = match.bId===career.teamId;
+    const myBox = match.realRound && match.realRound.box;
+    const aRows = buildGameBattingBox(match.aId, year, match.aScore, { key: roundLabel+"a", isMine: meIsA, realBox: meIsA ? myBox : null });
+    const bRows = buildGameBattingBox(match.bId, year, match.bScore, { key: roundLabel+"b", isMine: meIsB, realBox: meIsB ? myBox : null });
+
     const margin = Math.abs(match.aScore-match.bScore);
     const recap = match.winnerId==null ? "Nobody blinked — this one went to extras and stayed level."
       : margin<=1 ? "A one-run game, decided in the final at-bat." : margin>=7 ? "Never really in doubt after the middle innings." : "A hard-fought, back-and-forth game.";
+    const startedByOther = match.realRound && match.realRound.qbId;
+    const fillInNote = startedByOther ? `<div class="calc-refnote" style="margin-top:0.4rem;">${svgEscape(match.realRound.qbName || "A fill-in")} covered this game.</div>` : "";
     return `<div class="modal-box">
         <div class="modal-head"><h3 id="bracketBoxScoreHeading">${svgEscape(roundDisplayLabel(roundLabel, year))}</h3><button type="button" class="modal-close">Close</button></div>
-        <div class="table-wrap"><table class="standings-table"><thead><tr><th></th><th class="tabular">1-3</th><th class="tabular">4-6</th><th class="tabular">7-9</th><th class="tabular">X</th><th class="tabular">R</th></tr></thead>
+        <div class="table-wrap"><table class="standings-table"><thead><tr><th></th>${innHead}<th class="tabular">R</th></tr></thead>
           <tbody>
-            <tr class="${match.winnerId===match.aId?"me":""}"><td>${aName}</td><td class="tabular">${q1a}</td><td class="tabular">${q2a}</td><td class="tabular">${q3a}</td><td class="tabular">${q4a}</td><td class="tabular"><b>${match.aScore}</b></td></tr>
-            <tr class="${match.winnerId===match.bId?"me":""}"><td>${bName}</td><td class="tabular">${q1b}</td><td class="tabular">${q2b}</td><td class="tabular">${q3b}</td><td class="tabular">${q4b}</td><td class="tabular"><b>${match.bScore}</b></td></tr>
+            <tr class="${match.winnerId===match.aId?"me":""}"><td>${aName}</td>${innRow(aInn)}<td class="tabular"><b>${match.aScore}</b></td></tr>
+            <tr class="${match.winnerId===match.bId?"me":""}"><td>${bName}</td>${innRow(bInn)}<td class="tabular"><b>${match.bScore}</b></td></tr>
           </tbody></table></div>
-        ${qbLineHTML(match.aId, match.aId===career.teamId)}
-        ${qbLineHTML(match.bId, match.bId===career.teamId)}
+        ${fillInNote}
+        ${battingBoxTableHTML(match.aId, year, aRows)}
+        ${battingBoxTableHTML(match.bId, year, bRows)}
         <div class="calc-refnote" style="margin-top:0.6rem;">${recap}</div>
       </div>`;
   }
@@ -10498,7 +10594,7 @@ import {
           ${subLine}
         </div>`;
     }).join("");
-    return `<div class="calc-refnote">${unlockedCount} of ${ACHIEVEMENTS.length} achievements unlocked across every QB you've ever built on this browser.</div>
+    return `<div class="calc-refnote">${unlockedCount} of ${ACHIEVEMENTS.length} achievements unlocked across every hitter you've ever built on this browser.</div>
       <div class="pb-grid" style="margin-top:1rem;">${cards}</div>`;
   }
 
