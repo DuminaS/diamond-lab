@@ -236,6 +236,7 @@ import {
           ${r._defOverall!=null ? `<div class="sb-oppgrade">Their team overall: <b>${Math.round(r._defOverall)}</b> &nbsp;·&nbsp; Your team overall: <b>${Math.round(career.teamStrength)}</b></div>` : ""}
           ${r._oppQbName ? `<div class="sb-oppgrade">Their top bat: <button type="button" class="rival-link" data-rival-id="${r._oppQbId}">${svgEscape(r._oppQbName)}</button> (${r._oppQbOverall} overall)</div>` : ""}
           ${r.oppTendency ? `<div class="pr-tendency" style="color:var(--header-muted);text-align:center;">Scouting report: <b style="color:var(--header-accent);">${svgEscape(r.oppTendency.label)}</b> — ${svgEscape(r.oppTendency.blurb)}</div>` : ""}
+          <div class="pr-series-strip" id="prStrip-${i}"></div>
           <div class="sb-quarters" id="pqQuarters-${i}"></div>
           <div class="pr-controls" id="pqControls-${i}"></div>
           <div class="sb-box" id="sbBox-${i}" style="display:none;">
@@ -255,6 +256,7 @@ import {
         ${r._defOverall!=null ? `<div class="pr-oppgrade">Their team overall: <b>${Math.round(r._defOverall)}</b> &nbsp;·&nbsp; Your team overall: <b>${Math.round(career.teamStrength)}</b></div>` : ""}
         ${r._oppQbName ? `<div class="pr-oppgrade">Their top bat: <button type="button" class="rival-link" data-rival-id="${r._oppQbId}">${svgEscape(r._oppQbName)}</button> (${r._oppQbOverall} overall)</div>` : ""}
         ${tendencyHtml}
+        <div class="pr-series-strip" id="prStrip-${i}"></div>
         <div class="pr-quarters" id="pqQuarters-${i}"></div>
         <div class="pr-controls" id="pqControls-${i}"></div>
       </div>`;
@@ -3670,6 +3672,19 @@ import {
     const loserScore = clamp(winnerScore - margin, 0, winnerScore-1);
     return { winnerScore, loserScore };
   }
+  // Play a best-of-(2N-1) series between two teams by team strength alone (no player involved).
+  // Returns the series record and each game's [aScore, bScore]. Used for every flat-resolved
+  // playoff matchup and the flat Super Bowl.
+  function flatSeriesResult(idA, sA, idB, sB, needWins){
+    let aw = 0, bw = 0; const gameScores = [];
+    while(aw < needWins && bw < needWins){
+      const aWon = simpleGameWinner(idA, sA, idB, sB)===idA;
+      const scored = approxGameScore(aWon ? sA : sB, aWon ? sB : sA);
+      gameScores.push(aWon ? [scored.winnerScore, scored.loserScore] : [scored.loserScore, scored.winnerScore]);
+      if(aWon) aw++; else bw++;
+    }
+    return { winnerId: aw > bw ? idA : idB, aWins: aw, bWins: bw, gameScores };
+  }
   // Splits an integer total across n games with natural game-to-game variance while the shares
   // still sum EXACTLY back to total -- used to turn a QB's already-calculated season aggregate into
   // a plausible per-game log without inventing a second, separately-calibrated per-game engine.
@@ -4771,6 +4786,18 @@ import {
   // The canonical round-LABEL sequence for a conference of this size/format, independent of how far
   // resolution has actually progressed -- used only to size the Playoff Tree's placeholder columns
   // for rounds nobody has stepped into yet.
+  // Best-of-N: how many games one side must win to take the series, era-accurate.
+  //   Wild Card:  1 (single game) pre-2022, best-of-3 from 2022.
+  //   Division Series: best-of-5.
+  //   LCS ("Conference Championship"): best-of-5 through 1984, best-of-7 from 1985.
+  //   World Series ("Super Bowl"): best-of-7, every era.
+  function seriesWinsNeeded(internalRound, year){
+    if(internalRound==="Super Bowl") return 4;
+    if(internalRound==="Conference Championship") return year>=1985 ? 4 : 3;
+    if(internalRound==="Divisional") return 3;
+    if(internalRound==="Wild Card") return year>=2022 ? 2 : 1;
+    return 1;
+  }
   function canonicalRoundLabels(N, wcGames, byes){
     if(N<2) return [];
     if(wcGames<=0) return ["Conference Championship"];
@@ -4903,10 +4930,12 @@ import {
       superBowlScore = sb.won ? `${sb.myScore}-${sb.oppScore}` : `${sb.oppScore}-${sb.myScore}`;
     } else {
       const sA = career.leagueStrength[bd.myChampionId] ?? 60, sB = career.leagueStrength[bd.otherChampionId] ?? 60;
-      const winnerId = simpleGameWinner(bd.myChampionId, sA, bd.otherChampionId, sB);
-      const loserId = winnerId===bd.myChampionId ? bd.otherChampionId : bd.myChampionId;
-      const scored = approxGameScore(career.leagueStrength[winnerId] ?? 60, career.leagueStrength[loserId] ?? 60);
-      superBowlWinnerId = winnerId; superBowlLoserId = loserId; superBowlScore = `${scored.winnerScore}-${scored.loserScore}`;
+      const sr = flatSeriesResult(bd.myChampionId, sA, bd.otherChampionId, sB, seriesWinsNeeded("Super Bowl", season.year));
+      const winnerWins = Math.max(sr.aWins, sr.bWins), loserWins = Math.min(sr.aWins, sr.bWins);
+      superBowlWinnerId = sr.winnerId;
+      superBowlLoserId = sr.winnerId===bd.myChampionId ? bd.otherChampionId : bd.myChampionId;
+      superBowlScore = `${winnerWins}-${loserWins}`;
+      ls._sbGameScores = sr.gameScores;
     }
     ls.playoffBracket = {
       [bd.myConf]: { championId: bd.myChampionId, rounds: bd.myRounds, playerMade: !!season.playoffs.made },
@@ -5113,6 +5142,7 @@ import {
   }
 
   function stepConferenceBracket(state, myTeamId, myOffFn, season){
+    const seriesYear = season ? season.year : career.year;
     function simulateMatch(teamA, teamB, roundLabel){
       if(teamA.id===myTeamId || teamB.id===myTeamId){
         const player = teamA.id===myTeamId ? teamA : teamB;
@@ -5120,25 +5150,24 @@ import {
         const oppStrength = career.leagueStrength[opp.id] ?? 60;
         const oppRival = rivalForTeam(opp.id);
         const oppOffense = opponentOffenseGrade(opp.id, QB_INFLUENCE_PLAYOFF);
-        const myOff = playoffOffenseGrade(myOffFn(), season);
-        const game = simulateGameScore(myOff, oppOffense, career.defense, null, season ? season.year : career.year, true, opponentDefenseGrade(opp.id));
+        // A best-of-N SERIES shell -- individual games are simulated lazily by ensurePlayoffGame
+        // during the reveal, so a Key Moment flipping game N genuinely changes whether game N+1
+        // is even needed. round.myScore/oppScore carry the SERIES record; round.won is set only
+        // when a side clinches.
         const round = {
           round: roundLabel, opponent: teamNameAt(opp.id, career.year), oppId: opp.id, mySeed: player.seed, oppSeed: opp.seed,
-          myScore: game.myTotal, oppScore: game.oppTotal, won: game.won, quarters: game.quarters,
-          box: season ? generateGameBoxScore(season, game.myTotal, game.myTds) : null,
-          oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength, _defOffense: oppOffense,
+          seriesTarget: seriesWinsNeeded(roundLabel, seriesYear), seriesWins: [0,0], games: [], _gameIdx: 0,
+          myScore: 0, oppScore: 0, won: undefined, quarters: [], box: null,
+          oppTendency: pickOpponentTendency(), _rawEffOverall: myOffFn(), _defOverall: oppStrength, _defOffense: oppOffense,
           _oppQbId: oppRival ? oppRival.id : null, _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
         };
         return { isMine:true, player, opp, round };
       }
+      // Flat side: play the whole series through internally.
       const sA = career.leagueStrength[teamA.id] ?? 60, sB = career.leagueStrength[teamB.id] ?? 60;
-      const winnerId = simpleGameWinner(teamA.id, sA, teamB.id, sB);
-      const loserId = winnerId===teamA.id ? teamB.id : teamA.id;
-      const scored = approxGameScore(career.leagueStrength[winnerId] ?? 60, career.leagueStrength[loserId] ?? 60);
-      const aScore = winnerId===teamA.id ? scored.winnerScore : scored.loserScore;
-      const bScore = winnerId===teamB.id ? scored.winnerScore : scored.loserScore;
-      return { isMine:false, winner: winnerId===teamA.id ? teamA : teamB, label: roundLabel,
-        aSeed:teamA.seed, aId:teamA.id, aScore, bSeed:teamB.seed, bId:teamB.id, bScore, winnerId };
+      const sr = flatSeriesResult(teamA.id, sA, teamB.id, sB, seriesWinsNeeded(roundLabel, seriesYear));
+      return { isMine:false, winner: sr.winnerId===teamA.id ? teamA : teamB, label: roundLabel,
+        aSeed:teamA.seed, aId:teamA.id, aScore: sr.aWins, bSeed:teamB.seed, bId:teamB.id, bScore: sr.bWins, winnerId: sr.winnerId, gameScores: sr.gameScores };
     }
 
     const { s, N, wcGames, byes } = state;
@@ -5194,17 +5223,34 @@ import {
     const oppStrength = career.leagueStrength[otherChampId] ?? 60;
     const oppRival = rivalForTeam(otherChampId);
     const oppOffense = opponentOffenseGrade(otherChampId, QB_INFLUENCE_PLAYOFF);
-    const myOff = playoffOffenseGrade(playoffs._effOverall, season);
-    const game = simulateGameScore(myOff, oppOffense, career.defense, null, season.year, true, opponentDefenseGrade(otherChampId));
+    // A World Series SERIES shell -- games simulated lazily during the reveal (see ensurePlayoffGame).
     const sbRound = {
       round:"Super Bowl", opponent: teamNameAt(otherChampId, career.year), oppId: otherChampId,
-      myScore: game.myTotal, oppScore: game.oppTotal, won: game.won,
-      quarters: game.quarters, box: generateGameBoxScore(season, game.myTotal, game.myTds),
-      oppTendency: pickOpponentTendency(), _offOverall: myOff, _defOverall: oppStrength, _defOffense: oppOffense,
+      seriesTarget: seriesWinsNeeded("Super Bowl", season.year), seriesWins: [0,0], games: [], _gameIdx: 0,
+      myScore: 0, oppScore: 0, won: undefined, quarters: [], box: null,
+      oppTendency: pickOpponentTendency(), _rawEffOverall: playoffs._effOverall, _defOverall: oppStrength, _defOffense: oppOffense,
       _oppQbId: oppRival ? oppRival.id : null, _oppQbName: oppRival ? oppRival.name : null, _oppQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
     };
-    sbRound._revealedCount = 0; sbRound._keyMomentChecked = false;
     playoffs.rounds.push(sbRound);
+  }
+  // Simulate one game of a playoff series on demand, based on the series' CURRENT state (so a Key
+  // Moment that flips an earlier game genuinely changes whether later games are needed). The game
+  // object carries the fields the Key Moment machinery reads off a "round", so triggerKeyMoment /
+  // applyKeyMomentSwing operate on it unchanged.
+  function ensurePlayoffGame(round, gameIdx, season){
+    if(round.games[gameIdx]) return round.games[gameIdx];
+    const oppOffense = opponentOffenseGrade(round.oppId, QB_INFLUENCE_PLAYOFF);
+    const myOff = playoffOffenseGrade(round._rawEffOverall, season);
+    const g = simulateGameScore(myOff, oppOffense, career.defense, null, season.year, true, opponentDefenseGrade(round.oppId));
+    const game = {
+      myScore: g.myTotal, oppScore: g.oppTotal, won: g.won, quarters: g.quarters,
+      box: generateGameBoxScore(season, g.myTotal, g.myTds),
+      _revealedCount: 0, _keyMomentChecked: false,
+      round: round.round, opponent: round.opponent, oppId: round.oppId, oppTendency: round.oppTendency,
+      _offOverall: myOff, _defOverall: round._defOverall, _defOffense: round._defOffense, _oppQbId: round._oppQbId,
+    };
+    round.games[gameIdx] = game;
+    return game;
   }
 
   // Advances through the bracket looking for the player's NEXT game. A round the player has a
@@ -5216,7 +5262,6 @@ import {
     while(!playoffs.done){
       const step = stepConferenceBracket(playoffs._bracketState, career.teamId, ()=>playoffs._effOverall, season);
       if(step.myRound){
-        step.myRound._revealedCount = 0; step.myRound._keyMomentChecked = false;
         playoffs.rounds.push(step.myRound);
         return;
       }
@@ -9735,7 +9780,59 @@ import {
         <tfoot><tr><td></td><td>Totals</td><td class="tabular">${tot("ab")}</td><td class="tabular">${tot("r")}</td><td class="tabular">${tot("h")}</td><td class="tabular">${tot("bb")}</td><td class="tabular">${tot("rbi")}</td><td class="tabular">${tot("hr")}</td></tr></tfoot>
       </table></div>`;
   }
+  // A best-of-N playoff series: a series header, a game-by-game line score, then the full batting
+  // boxes for the clinching game. Player's own series carries realRound.games[]; a flat series
+  // carries gameScores [[a,b],...].
+  function buildSeriesBoxScoreModalHTML(match, year, roundLabel){
+    const aName = svgEscape(teamNameAt(match.aId, year)), bName = svgEscape(teamNameAt(match.bId, year));
+    const meIsA = match.aId===career.teamId, meIsB = match.bId===career.teamId;
+    const rr = match.realRound;
+    // Per-game [aScore, bScore] list.
+    let games;
+    if(rr && Array.isArray(rr.games) && rr.games.length){
+      games = rr.games.map(g=> meIsA ? [g.myScore, g.oppScore] : [g.oppScore, g.myScore]);
+    } else if(Array.isArray(match.gameScores)){
+      games = match.gameScores.map(g=>[g[0], g[1]]);
+    } else {
+      games = [[match.aScore, match.bScore]]; // shouldn't happen
+    }
+    const winnerName = match.winnerId===match.aId ? aName : bName;
+    const wHi = Math.max(match.aScore, match.bScore), wLo = Math.min(match.aScore, match.bScore);
+    const gameRows = games.map((g,i)=>{
+      const aw = g[0]>g[1], bw = g[1]>g[0];
+      return `<tr><td>Game ${i+1}</td><td class="tabular${aw?" won":""}">${g[0]}</td><td class="tabular${bw?" won":""}">${g[1]}</td></tr>`;
+    }).join("");
+    // Clinching game's full box.
+    const lastIdx = games.length-1;
+    const clinchInn = rr && rr.games && rr.games[lastIdx] && Array.isArray(rr.games[lastIdx].quarters)
+      ? { my: rr.games[lastIdx].quarters.map(q=>q.myQ), opp: rr.games[lastIdx].quarters.map(q=>q.oppQ) } : null;
+    const clinchBox = rr && rr.games && rr.games[lastIdx] ? rr.games[lastIdx].box : null;
+    const clinchMatch = {
+      aId: match.aId, bId: match.bId, aScore: games[lastIdx][0], bScore: games[lastIdx][1],
+      winnerId: games[lastIdx][0]>games[lastIdx][1] ? match.aId : match.bId,
+      aInnings: clinchInn ? (meIsA ? clinchInn.my : clinchInn.opp) : null,
+      bInnings: clinchInn ? (meIsA ? clinchInn.opp : clinchInn.my) : null,
+      realRound: clinchBox ? { box: clinchBox } : null,
+    };
+    return `<div class="modal-box">
+        <div class="modal-head"><h3 id="bracketBoxScoreHeading">${svgEscape(roundDisplayLabel(roundLabel, year))}</h3><button type="button" class="modal-close">Close</button></div>
+        <div class="calc-refnote" style="margin-top:0.2rem;"><b>${winnerName} win the series ${wHi}–${wLo}.</b></div>
+        <div class="table-wrap"><table class="standings-table"><thead><tr><th></th><th class="tabular">${aName}</th><th class="tabular">${bName}</th></tr></thead>
+          <tbody>${gameRows}</tbody></table></div>
+        <div class="section-label" style="margin-top:1rem;">Clinching Game (Game ${games.length})</div>
+        ${bracketGameBoxInnerHTML(clinchMatch, year, roundLabel)}
+      </div>`;
+  }
   function buildBracketBoxScoreModalHTML(match, year, roundLabel){
+    // Playoff series -> the series modal.
+    if(match.realRound && Array.isArray(match.realRound.games) && match.realRound.games.length) return buildSeriesBoxScoreModalHTML(match, year, roundLabel);
+    if(Array.isArray(match.gameScores) && match.gameScores.length>1) return buildSeriesBoxScoreModalHTML(match, year, roundLabel);
+    return `<div class="modal-box">
+        <div class="modal-head"><h3 id="bracketBoxScoreHeading">${svgEscape(roundDisplayLabel(roundLabel, year))}</h3><button type="button" class="modal-close">Close</button></div>
+        ${bracketGameBoxInnerHTML(match, year, roundLabel)}
+      </div>`;
+  }
+  function bracketGameBoxInnerHTML(match, year, roundLabel){
     const aName = svgEscape(teamNameAt(match.aId, year)), bName = svgEscape(teamNameAt(match.bId, year));
     const lsRand = createSeededRandom(hashSeed("ls:" + match.aId + ":" + match.bId + ":" + year + ":" + roundLabel));
     // Innings: schedule path sets aInnings/bInnings; a player's own playoff round carries quarters.
@@ -9764,8 +9861,7 @@ import {
       : margin<=1 ? "A one-run game, decided in the final at-bat." : margin>=7 ? "Never really in doubt after the middle innings." : "A hard-fought, back-and-forth game.";
     const startedByOther = match.realRound && match.realRound.qbId;
     const fillInNote = startedByOther ? `<div class="calc-refnote" style="margin-top:0.4rem;">${svgEscape(match.realRound.qbName || "A fill-in")} covered this game.</div>` : "";
-    return `<div class="modal-box">
-        <div class="modal-head"><h3 id="bracketBoxScoreHeading">${svgEscape(roundDisplayLabel(roundLabel, year))}</h3><button type="button" class="modal-close">Close</button></div>
+    return `
         <div class="table-wrap"><table class="standings-table"><thead><tr><th></th>${innHead}<th class="tabular">R</th></tr></thead>
           <tbody>
             <tr class="${match.winnerId===match.aId?"me":""}"><td>${aName}</td>${innRow(aInn)}<td class="tabular"><b>${match.aScore}</b></td></tr>
@@ -9774,8 +9870,7 @@ import {
         ${fillInNote}
         ${battingBoxTableHTML(match.aId, year, aRows)}
         ${battingBoxTableHTML(match.bId, year, bRows)}
-        <div class="calc-refnote" style="margin-top:0.6rem;">${recap}</div>
-      </div>`;
+        <div class="calc-refnote" style="margin-top:0.6rem;">${recap}</div>`;
   }
   function openBracketBoxScore(match, year, roundLabel){
     const overlay = document.getElementById("bracketBoxScoreOverlay");
@@ -11236,9 +11331,21 @@ import {
     if(!season.playoffs.made || !season.playoffs.rounds.length) return;
     const actions = document.getElementById("seasonActions");
     const rounds = season.playoffs.rounds;
-    // A malformed/legacy round with no inning-by-inning data reveals as an empty box that finalizes
-    // immediately, rather than throwing on r.quarters.length mid-reveal.
-    rounds.forEach(r=>{ if(!Array.isArray(r.quarters)) r.quarters = []; r._revealedCount = 0; r._keyMomentChecked = false; });
+    // Each round is a best-of-N series (seriesTarget wins). Completed games in r.games[] are kept
+    // across a resume; only the game currently mid-reveal is rewound to its first inning.
+    rounds.forEach(r=>{
+      if(!Array.isArray(r.games)) r.games = [];
+      if(typeof r._gameIdx!=="number") r._gameIdx = Math.max(0, r.games.length-1);
+      if(typeof r.seriesTarget!=="number") r.seriesTarget = seriesWinsNeeded(r.round, season.year);
+      if(!Array.isArray(r.seriesWins)) r.seriesWins = [0,0];
+      if(r.won!==undefined) return; // a decided series -- trust its stored seriesWins, don't touch it
+      // Live series: completed games are everything BEFORE the current index; rewind only the
+      // current game so a resume re-reveals it from the first inning without double-counting.
+      const done = r.games.slice(0, r._gameIdx).filter(Boolean);
+      r.seriesWins = [done.filter(g=>g.won).length, done.filter(g=>!g.won).length];
+      const cur = r.games[r._gameIdx];
+      if(cur){ if(!Array.isArray(cur.quarters)) cur.quarters = []; cur._revealedCount = 0; cur._keyMomentChecked = false; }
+    });
     const baseChance = KEY_MOMENT_BASE_TRIGGER_CHANCE;
     function stillCurrent(){ return myToken === _playoffRevealToken; }
 
@@ -11248,6 +11355,23 @@ import {
       const suf = t===1 ? "th" : s===1 ? "st" : s===2 ? "nd" : s===3 ? "rd" : "th";
       return n + suf;
     }
+    // A game is "pivotal" -- Key Moment eligible -- when either side can clinch the series with it
+    // (an elimination game or a winner-take-all finale). A single-game Wild Card is always pivotal.
+    function isPivotalGame(r){ return r.seriesWins[0]===r.seriesTarget-1 || r.seriesWins[1]===r.seriesTarget-1; }
+    function seriesStripHTML(r){
+      const parts = r.games.map((g,i)=>{
+        if(!g) return "";
+        const revealed = g._revealedCount>=(g.quarters||[]).length && (g.quarters||[]).length;
+        if(i===r._gameIdx && !revealed) return `<span class="pr-strip-g live">G${i+1} · live</span>`;
+        return `<span class="pr-strip-g ${g.won?"w":"l"}">G${i+1} ${g.won?"W":"L"} ${g.myScore}-${g.oppScore}</span>`;
+      }).filter(Boolean).join(" · ");
+      const rec = r.seriesTarget>1 ? `<b>Series ${r.seriesWins[0]}-${r.seriesWins[1]}</b>` : "";
+      return `${rec}${rec&&parts?" &nbsp;·&nbsp; ":""}${parts}`;
+    }
+    function updateStrip(roundIdx){
+      const el = document.getElementById("prStrip-"+roundIdx);
+      if(el) el.innerHTML = seriesStripHTML(rounds[roundIdx]);
+    }
 
     function finalizeRound(roundIdx){
       if(!stillCurrent()) return;
@@ -11256,9 +11380,10 @@ import {
       const wrap = document.querySelector(`[data-round-idx="${roundIdx}"]`);
       if(wrap){ wrap.dataset.roundState = "done"; if(!isSB) wrap.classList.add(r.won?"win":"loss"); }
       const titleEl = document.getElementById((isSB?"sbTitle-":"prTitle-")+roundIdx);
-      if(titleEl) titleEl.textContent = isSB ? (`${roundDisplayLabel(r.round, season.year).toUpperCase()}${r.won?" — CHAMPIONS":""}`) : (`${svgEscape(roundDisplayLabel(r.round, season.year)).toUpperCase()}${r.won?" — WIN":" — SEASON OVER"}`);
+      if(titleEl) titleEl.textContent = isSB ? (`${roundDisplayLabel(r.round, season.year).toUpperCase()}${r.won?" — CHAMPIONS":""}`) : (`${svgEscape(roundDisplayLabel(r.round, season.year)).toUpperCase()}${r.won?" — WON THE SERIES":" — SERIES LOST"}`);
       const finalEl = document.getElementById((isSB?"sbFinal-":"prFinal-")+roundIdx);
-      if(finalEl) finalEl.innerHTML = `vs. the ${svgEscape(r.opponent)} — <b>${r.myScore}-${r.oppScore}</b>`;
+      if(finalEl) finalEl.innerHTML = `vs. the ${svgEscape(r.opponent)} — <b>${r.seriesWins[0]}-${r.seriesWins[1]}</b>`;
+      updateStrip(roundIdx);
       if(isSB){
         const boxEl = document.getElementById("sbBox-"+roundIdx);
         if(boxEl) boxEl.style.display = "";
@@ -11310,11 +11435,15 @@ import {
       }
     }
 
-    function revealOneQuarter(roundIdx, onDone){
-      if(!stillCurrent()) return;
+    function curGame(roundIdx){
       const r = rounds[roundIdx];
-      if(r._revealedCount>=r.quarters.length){ onDone(); return; }
-      const q = r.quarters[r._revealedCount];
+      return ensurePlayoffGame(r, r._gameIdx, season);
+    }
+    function revealOneInning(roundIdx, onDone){
+      if(!stillCurrent()) return;
+      const r = rounds[roundIdx], g = curGame(roundIdx);
+      if(g._revealedCount>=g.quarters.length){ onDone(); return; }
+      const q = g.quarters[g._revealedCount];
       const isSB = r.round==="Super Bowl";
       const holder = document.getElementById("pqQuarters-"+roundIdx);
       if(holder){
@@ -11325,71 +11454,147 @@ import {
           : `<div class="pr-q-label">${quarterLabel(q)}</div><div class="pr-q-score tabular">${q.myTotal}-${q.oppTotal}</div>`;
         holder.appendChild(el);
       }
-      r._revealedCount++;
-      if(r._revealedCount===6 && !r._keyMomentChecked && r.oppTendency && KeyMomentSettings.isEnabled()){
-        r._keyMomentChecked = true;
-        const elig = keyMomentScoreEligibility(r);
+      g._revealedCount++;
+      if(g._revealedCount===6 && !g._keyMomentChecked && isPivotalGame(r) && g.oppTendency && KeyMomentSettings.isEnabled()){
+        g._keyMomentChecked = true;
+        const elig = keyMomentScoreEligibility(g);
         if(elig>0 && Math.random() < baseChance*elig){
-          triggerKeyMoment(season, r, roundIdx, ()=>{ if(stillCurrent()) onDone(); }, stillCurrent);
+          triggerKeyMoment(season, g, roundIdx, ()=>{ if(stillCurrent()) onDone(); }, stillCurrent);
           return;
         }
       }
       onDone();
     }
-    function simQuarter(roundIdx){
-      revealOneQuarter(roundIdx, ()=>{
+    // A game's innings are all revealed -- record it, update the series, and either move to the
+    // next game or finalize the round. `andThen` continues a "sim to end of series" run.
+    function finishGame(roundIdx, andThen){
+      if(!stillCurrent()) return;
+      const r = rounds[roundIdx], g = curGame(roundIdx);
+      if(r.won!==undefined) return; // series already decided -- never re-count a game
+
+      r.seriesWins[g.won ? 0 : 1]++;
+      r.myScore = r.seriesWins[0]; r.oppScore = r.seriesWins[1];
+      r.quarters = g.quarters; r.box = g.box;
+      updateStrip(roundIdx);
+      const clinched = r.seriesWins[0]>=r.seriesTarget || r.seriesWins[1]>=r.seriesTarget;
+      saveActiveCareer({ phase:"playoffs", playoffRoundIndex: roundIdx, playoffGameIndex: r._gameIdx });
+      if(clinched){
+        r.won = r.seriesWins[0] > r.seriesWins[1];
+        finalizeRound(roundIdx);
+        return;
+      }
+      r._gameIdx++;
+      ensurePlayoffGame(r, r._gameIdx, season);
+      const holder = document.getElementById("pqQuarters-"+roundIdx);
+      if(holder) holder.innerHTML = "";
+      updateStrip(roundIdx);
+      if(andThen) andThen(roundIdx); else renderControlsFor(roundIdx);
+    }
+    function simInning(roundIdx){
+      revealOneInning(roundIdx, ()=>{
         if(!stillCurrent()) return;
-        const r = rounds[roundIdx];
-        if(r._revealedCount>=r.quarters.length) finalizeRound(roundIdx);
+        const g = curGame(roundIdx);
+        if(g._revealedCount>=g.quarters.length) finishGame(roundIdx);
         else renderControlsFor(roundIdx);
       });
     }
-    function simToHalf(roundIdx){
-      const r = rounds[roundIdx];
-      const target = Math.min(5, r.quarters.length);
+    function simGameToEnd(roundIdx, andThen){
       function step(){
         if(!stillCurrent()) return;
-        if(r._revealedCount>=r.quarters.length){ finalizeRound(roundIdx); return; }
-        if(r._revealedCount>=target){ renderControlsFor(roundIdx); return; }
-        revealOneQuarter(roundIdx, step);
+        const g = curGame(roundIdx);
+        if(g._revealedCount>=g.quarters.length){ finishGame(roundIdx, andThen); return; }
+        revealOneInning(roundIdx, step);
       }
       step();
     }
-    function simToEnd(roundIdx){
-      const r = rounds[roundIdx];
-      function step(){
-        if(!stillCurrent()) return;
-        if(r._revealedCount>=r.quarters.length){ finalizeRound(roundIdx); return; }
-        revealOneQuarter(roundIdx, step);
-      }
-      step();
+    function simSeriesToEnd(roundIdx){
+      // finishGame(roundIdx, cont) either finalizes the round (series clinched) or sets up the
+      // next game and calls cont -- which re-enters simGameToEnd for that next game.
+      const cont = (ri)=> simGameToEnd(ri, cont);
+      simGameToEnd(roundIdx, cont);
     }
     function renderControlsFor(roundIdx){
       if(!stillCurrent()) return;
-      const r = rounds[roundIdx];
+      const r = rounds[roundIdx], g = curGame(roundIdx);
       const wrap = document.querySelector(`[data-round-idx="${roundIdx}"]`);
       if(wrap) wrap.dataset.roundState = "active";
+      updateStrip(roundIdx);
       const controls = document.getElementById("pqControls-"+roundIdx);
       if(!controls) return;
-      const nextQ = r.quarters[r._revealedCount];
+      const nextQ = g.quarters[g._revealedCount];
       const qBtnLabel = nextQ ? `Sim ${quarterLabel(nextQ)}` : "Sim Inning";
+      const gameLabel = r.seriesTarget>1 ? ` <span style="opacity:0.6;">(Game ${r._gameIdx+1})</span>` : "";
+      const isMultiGame = r.seriesTarget>1;
       controls.innerHTML = `
-        <button type="button" class="btn btn-ghost pq-btn" id="pqSimQ-${roundIdx}">${qBtnLabel}</button>
-        ${r._revealedCount<5 ? `<button type="button" class="btn btn-ghost pq-btn" id="pqSimHalf-${roundIdx}">Sim to 5th</button>` : ``}
-        <button type="button" class="btn btn-primary pq-btn" id="pqSimEnd-${roundIdx}">Sim to Final Out</button>`;
-      document.getElementById("pqSimQ-"+roundIdx).addEventListener("click", ()=> simQuarter(roundIdx));
-      const halfBtn = document.getElementById("pqSimHalf-"+roundIdx);
-      if(halfBtn) halfBtn.addEventListener("click", ()=> simToHalf(roundIdx));
-      document.getElementById("pqSimEnd-"+roundIdx).addEventListener("click", ()=> simToEnd(roundIdx));
+        <button type="button" class="btn btn-ghost pq-btn" id="pqSimQ-${roundIdx}">${qBtnLabel}${gameLabel}</button>
+        <button type="button" class="btn ${isMultiGame?"btn-ghost":"btn-primary"} pq-btn" id="pqSimEnd-${roundIdx}">Sim to Final Out</button>
+        ${isMultiGame ? `<button type="button" class="btn btn-primary pq-btn" id="pqSimSeries-${roundIdx}">Sim to End of Series</button>` : ``}`;
+      document.getElementById("pqSimQ-"+roundIdx).addEventListener("click", ()=> simInning(roundIdx));
+      document.getElementById("pqSimEnd-"+roundIdx).addEventListener("click", ()=> simGameToEnd(roundIdx));
+      const seriesBtn = document.getElementById("pqSimSeries-"+roundIdx);
+      if(seriesBtn) seriesBtn.addEventListener("click", ()=> simSeriesToEnd(roundIdx));
     }
 
     function appendRoundBox(roundIdx){
       const holder = document.getElementById("playoffRoundsHolder");
       if(holder) holder.insertAdjacentHTML("beforeend", playoffRoundBoxHtml(rounds[roundIdx], roundIdx, season.year));
     }
+    // Paint an already-decided round (a resume, or an earlier round of the same run) as static and
+    // done -- NO confirmPlayoffRound, NO checkpoint, NO series-score mutation. Shows the clinching
+    // game's innings and the series strip.
+    function finalizeStaticRound(roundIdx){
+      const r = rounds[roundIdx];
+      const isSB = r.round==="Super Bowl";
+      const wrap = document.querySelector(`[data-round-idx="${roundIdx}"]`);
+      if(wrap){ wrap.dataset.roundState = "done"; if(!isSB) wrap.classList.add(r.won?"win":"loss"); }
+      const titleEl = document.getElementById((isSB?"sbTitle-":"prTitle-")+roundIdx);
+      if(titleEl) titleEl.textContent = isSB ? (`${roundDisplayLabel(r.round, season.year).toUpperCase()}${r.won?" — CHAMPIONS":""}`) : (`${svgEscape(roundDisplayLabel(r.round, season.year)).toUpperCase()}${r.won?" — WON THE SERIES":" — SERIES LOST"}`);
+      const finalEl = document.getElementById((isSB?"sbFinal-":"prFinal-")+roundIdx);
+      if(finalEl) finalEl.innerHTML = `vs. the ${svgEscape(r.opponent)} — <b>${r.seriesWins[0]}-${r.seriesWins[1]}</b>`;
+      if(isSB){ const boxEl = document.getElementById("sbBox-"+roundIdx); if(boxEl) boxEl.style.display = ""; }
+      updateStrip(roundIdx);
+      const last = r.games[r.games.length-1];
+      const holder = document.getElementById("pqQuarters-"+roundIdx);
+      if(holder && last && Array.isArray(last.quarters)){
+        holder.innerHTML = last.quarters.map(q=>`<div class="${isSB?"sb-q":"pr-q"}"><div class="${isSB?"sb-q-label":"pr-q-label"}">${quarterLabel(q)}</div><div class="${isSB?"sb-q-score":"pr-q-score"} tabular">${q.myTotal}-${q.oppTotal}</div></div>`).join("");
+      }
+      const controls = document.getElementById("pqControls-"+roundIdx);
+      if(controls) controls.innerHTML = "";
+    }
 
-    appendRoundBox(0);
-    renderControlsFor(0);
+    // Render every round: already-clinched ones static, and start the live reveal at the first
+    // round that hasn't clinched yet (there is at most one). Guards against a mid-run resume
+    // re-revealing and double-finalizing a completed series.
+    let liveIdx = -1;
+    for(let i=0;i<rounds.length;i++){
+      appendRoundBox(i);
+      if(rounds[i].won===undefined && liveIdx<0){ liveIdx = i; }
+      else { finalizeStaticRound(i); }
+    }
+    if(liveIdx>=0) renderControlsFor(liveIdx);
+    else {
+      // Every round already decided -- a resume after the run finished, or an injected test run.
+      // Settle the league bracket if it isn't already, reconfirm the outcome (idempotent), refresh
+      // the tree/standings panels, and unlock the season card.
+      const ls = season.leagueStandings;
+      if(ls && !ls.playoffBracket){
+        const bd = ls.bracket;
+        if(season.playoffs && !season.playoffs.done){ let g=0; while(!season.playoffs.done && g++<40) confirmPlayoffRound(season.playoffs, season); }
+        if(bd){
+          let g=0; while(bd.myChampionId==null && g++<40) stepBracketConferenceOnce(bd, season, "my");
+          g=0; while(bd.otherChampionId==null && g++<40) stepBracketConferenceOnce(bd, season, "other");
+        }
+        tryFinalizeLeaguePlayoffBracket(season);
+      }
+      finalizePlayoffOutcome(season);
+      const ptp = document.getElementById("tabpanel-playofftree"); if(ptp) ptp.innerHTML = buildPlayoffTreeTabHTML(season);
+      const stp = document.getElementById("tabpanel-standings"); if(stp) stp.innerHTML = buildStandingsTabHTML(season);
+      if(actions && ls && ls.playoffBracket && actions.classList.contains("pending-reveal")){
+        actions.classList.remove("pending-reveal");
+        actions.querySelectorAll("button").forEach(b=> b.disabled=false);
+      }
+      saveActiveCareer({ phase: (ls && ls.playoffBracket) ? "decision" : "playoffs" });
+    }
   }
 
   // Only called once the player's entire postseason run has actually finished playing out --
@@ -12708,10 +12913,11 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
         // A real playoff game the player personally played (they reached the Super Bowl) already
         // has a real box score attached to that round -- reuse it via qbLineHTML's isMine branch
         // instead of estimating, exactly like any other node's box-score modal.
-        const myRealSB = (season.playoffs && season.playoffs.rounds || []).find(r=>r.round==="Super Bowl");
+        const myRealSB = (season.playoffs && season.playoffs.rounds || []).find(r=>r.round==="Super Bowl" && Array.isArray(r.games) && r.games.length);
         const match = { aId: myDisplay.championId, bId: otherDisplay.championId,
           aScore: myWon?wScore:lScore, bScore: myWon?lScore:wScore, winnerId: pb.superBowlWinnerId,
-          realRound: myRealSB || null };
+          realRound: myRealSB || null,
+          gameScores: myRealSB ? null : (season.leagueStandings._sbGameScores || null) };
         if(match.aId!=null && match.bId!=null) openBracketBoxScore(match, season.year, "Super Bowl");
       }
     }

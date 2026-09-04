@@ -1,59 +1,65 @@
-// Wave 4 (MASTER_REMEDIATION_SPEC.md), Section 8 scenario #19 / exit criterion: "Postseason games
-// never end tied." simulateGameScore/resolveOvertime's postseason branch (overtimeRulesForYear's
-// canEndInTie:false) must always resolve a winner, in EVERY era -- including the pre-1974 era where
-// the regular season now genuinely can end level. Sweeps a 1960s-era career (the one era where ties
-// are common enough that this would be most likely to accidentally leak into the postseason if the
-// wiring were wrong) and checks EVERY confirmed playoff round in BOTH conferences' lockstep bracket
-// (season.leagueStandings.bracket.myRounds/otherRounds -- populated every season regardless of
-// whether the player personally made the playoffs, since the whole bracket must resolve before
-// Continue unlocks) plus the player's own rounds and the league championship game specifically.
+// Wave 4 exit criterion: "Postseason games never end tied." Phase 13b: the postseason is now
+// best-of-N series -- a series can't tie (one side always reaches the target), and no individual
+// game of a postseason series may end tied either (canEndInTie:false for postseason, every era).
+// Sweeps a modern-era career (full bracket every season, so the flat other-conference rounds are
+// always produced) and checks: every recorded flat round, every game of the player's own series,
+// and the World Series record + its games.
 import { test, expect } from "@playwright/test";
 import { startCareer, advanceOneSeason, readActiveCareer } from "../helpers/careerFlow.mjs";
 import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("postseason-never-produces-tie", async ({ page }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   await installSeededRandom(page, 55221);
-  await startCareer(page, { decadeIndex: 1 }); // 1960s -- the era most likely to leak a regular-season-style tie into the postseason if the wiring were wrong
+  await startCareer(page, { decadeIndex: 5 });
 
-  let checkedAnyPlayoffRound = false;
-  for (let season = 0; season < 10; season++) {
+  let checkedFlatRound = false, checkedPlayerSeries = false;
+  for (let season = 0; season < 12; season++) {
     const stillActive = await page.evaluate(() => !!localStorage.getItem("diamondlab.activeCareer"));
     if (!stillActive) break;
     const ok = await advanceOneSeason(page);
     const saved = await readActiveCareer(page);
-    const lastSeason = saved.career.seasonLog[saved.career.seasonLog.length - 1];
-    const bd = lastSeason && lastSeason.leagueStandings && lastSeason.leagueStandings.bracket;
+    if (!saved) break;
+    // the season that just finished is the second-to-last entry (last is the freshly-generated one)
+    const done = saved.career.seasonLog[saved.career.seasonLog.length - 2];
+    if (!done) { if (!ok) break; continue; }
+
+    const bd = done.leagueStandings && done.leagueStandings.bracket;
     if (bd) {
-      // Each confirmed round is {label, matchups: [...]} -- every matchup is either the REAL shape
-      // (isMine:true, myScore/oppScore/won, from the player's own reveal) or the FLAT shape
-      // (isMine:false, aScore/bScore/winnerId, from a "Simulate Next Round" flat resolution).
       [...(bd.myRounds || []), ...(bd.otherRounds || [])].forEach(round => {
         (round.matchups || []).forEach(m => {
-          checkedAnyPlayoffRound = true;
-          if(m.isMine){
-            expect(m.round.myScore, `a real ${lastSeason.year} ${round.label} must not end tied`).not.toBe(m.round.oppScore);
-            expect(typeof m.round.won, `a real ${lastSeason.year} ${round.label} must have a real won boolean`).toBe("boolean");
+          if (m.isMine) {
+            expect(typeof m.round.won, `player round ${done.year} ${round.label} needs a won boolean`).toBe("boolean");
+            (m.round.games || []).forEach((g, gi) => {
+              expect(g.myScore, `player ${done.year} ${round.label} game ${gi + 1} must not tie`).not.toBe(g.oppScore);
+            });
           } else {
-            expect(m.aScore, `a flat-resolved ${lastSeason.year} ${round.label} must not end tied`).not.toBe(m.bScore);
-            expect(m.winnerId, `a flat-resolved ${lastSeason.year} ${round.label} must have a real winnerId`).toBeTruthy();
+            checkedFlatRound = true;
+            expect(m.aScore, `flat ${done.year} ${round.label} series must not be even`).not.toBe(m.bScore);
+            expect(m.winnerId, `flat ${done.year} ${round.label} needs a winnerId`).toBeTruthy();
+            (m.gameScores || []).forEach((g, gi) => {
+              expect(g[0], `flat ${done.year} ${round.label} game ${gi + 1} must not tie`).not.toBe(g[1]);
+            });
           }
         });
       });
-      const playoffBracket = lastSeason.leagueStandings.playoffBracket;
-      if (playoffBracket && playoffBracket.superBowlScore) {
-        const [a, b] = String(playoffBracket.superBowlScore).split("-").map(Number);
-        expect(a, `the league championship game in ${lastSeason.year} must not end tied`).not.toBe(b);
+      const pb = done.leagueStandings.playoffBracket;
+      if (pb && pb.superBowlScore) {
+        const [a, b] = String(pb.superBowlScore).split("-").map(Number);
+        expect(a, `the World Series in ${done.year} must have a winner`).not.toBe(b);
       }
     }
-    if (lastSeason && lastSeason.playoffs && lastSeason.playoffs.made) {
-      (lastSeason.playoffs.rounds || []).forEach(r => {
-        checkedAnyPlayoffRound = true;
-        expect(r.myScore, `the player's own ${r.round} in ${lastSeason.year} must not end tied`).not.toBe(r.oppScore);
+    if (done.playoffs && done.playoffs.made) {
+      (done.playoffs.rounds || []).forEach(r => {
+        checkedPlayerSeries = true;
+        expect(r.myScore, `player ${r.round} ${done.year}: a decided series can't be even`).not.toBe(r.oppScore);
+        (r.games || []).forEach((g, gi) => {
+          expect(g.myScore, `player ${r.round} ${done.year} game ${gi + 1} must not tie`).not.toBe(g.oppScore);
+        });
       });
     }
     if (!ok) break;
   }
 
-  expect(checkedAnyPlayoffRound, "expected at least one confirmed playoff round across 10 seasons").toBe(true);
+  expect(checkedFlatRound || checkedPlayerSeries, "expected at least one postseason series across 12 seasons").toBe(true);
 });

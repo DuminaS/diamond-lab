@@ -50,7 +50,7 @@ export async function clickThroughToSeasonCard(page, maxTries = 60) {
     const clicked = await page.evaluate(() => {
       const content = document.getElementById("careerContent");
       const btn = content && content.querySelector(
-        "#injPlay, #playOnBtn, #continueBtn, button[id$='Ack'], button[id$='Continue'], .choice-btn, .fa-accept, [id^='pqSimEnd-'], #playoffTreeSimulateBtn:not([disabled])"
+        "#injPlay, #playOnBtn, #continueBtn, button[id$='Ack'], button[id$='Continue'], .choice-btn, .fa-accept, [id^='pqSimSeries-'], [id^='pqSimEnd-'], #playoffTreeSimulateBtn:not([disabled])"
       );
       if (btn) { btn.click(); return true; }
       // Key Moment mini-game, if the beta toggle happens to be on -- take the first option so a
@@ -80,16 +80,19 @@ export async function clickThroughToSeasonCard(page, maxTries = 60) {
 // advancing the player's own pending round the same way advanceOneSeason's walkToDecisionPoint
 // already does, so this helper can reach the point where playoffTreeSimulateBtn (or Continue
 // itself) becomes available regardless of whether the player made the playoffs this season.
-export async function ensureBracketFinalized(page, maxTries = 30) {
+export async function ensureBracketFinalized(page, maxTries = 80) {
   for (let i = 0; i < maxTries; i++) {
     const state = await page.evaluate(() => {
       const btn = document.getElementById("continueBtn") || document.getElementById("playOnBtn") || document.getElementById("retireBtn");
+      // Phase 13b: playoff rounds are best-of-N series -- prefer "Sim to End of Series" (one click
+      // clears a whole series), fall back to "Sim to Final Out" (one game).
+      const simSeries = document.querySelector("#playoffRoundsHolder [id^='pqSimSeries-']:not([disabled])");
       const simEnd = document.querySelector("#playoffRoundsHolder [id^='pqSimEnd-']:not([disabled])");
-      return { ready: !!btn && !btn.disabled, hasSimBtn: !!document.getElementById("playoffTreeSimulateBtn"), hasSimEnd: !!simEnd };
+      return { ready: !!btn && !btn.disabled, hasSimBtn: !!document.getElementById("playoffTreeSimulateBtn"), hasSimEnd: !!(simSeries || simEnd) };
     });
     if (state.ready) return true;
     if (state.hasSimEnd) {
-      await page.evaluate(() => document.querySelector("#playoffRoundsHolder [id^='pqSimEnd-']:not([disabled])")?.click());
+      await page.evaluate(() => (document.querySelector("#playoffRoundsHolder [id^='pqSimSeries-']:not([disabled])") || document.querySelector("#playoffRoundsHolder [id^='pqSimEnd-']:not([disabled])"))?.click());
       await page.waitForTimeout(100);
     } else if (state.hasSimBtn) {
       await page.evaluate(() => document.getElementById("playoffTreeSimulateBtn")?.click());
@@ -127,7 +130,9 @@ export async function advanceOneSeason(page) {
       if (reachedNext && !blocked) return true;
       const clicked = await page.evaluate(() => {
         const content = document.getElementById("careerContent");
-        const simEnd = document.querySelector("#playoffRoundsHolder [id^='pqSimEnd-']:not([disabled])");
+        // Phase 13b: prefer "Sim to End of Series" over the per-game "Sim to Final Out".
+        const simEnd = document.querySelector("#playoffRoundsHolder [id^='pqSimSeries-']:not([disabled])")
+          || document.querySelector("#playoffRoundsHolder [id^='pqSimEnd-']:not([disabled])");
         if (simEnd) { simEnd.click(); return true; }
         const btn = content && content.querySelector(".choice-btn, [id^='pqAck-'], button[id$='Ack'], .fa-accept");
         if (btn) { btn.click(); return true; }

@@ -93,17 +93,17 @@
   ];
 
   /* Postseason format by year -- `wildcards` slots added on top of the division winners, and
-     `wcGames` wild-card-round games played (seedsPerConf - 2*wcGames teams bye to the Division
-     Series). Tracks real MLB expansion of the bracket.
+     `wcGames` first-round series per conference (the rest of the seeds bye straight to the next
+     round). Tracks real MLB expansion of the bracket.
      - pre-1969: pennant winners only, straight to the World Series.
-     - 1969-1993: LCS then WS (2 division winners per league).
-     - 1994-2011: added the Division Series + 1 wild card (4 teams, no bye, 1v4/2v3).
-     - 2012-2021: 2nd wild card, the two WCs play a one-game playoff.
-     - 2022-present: 3rd wild card; 12-team field, top 2 seeds per league bye. */
+     - 1969-1993: LCS then WS (2 division winners per league, N=2 -> one round).
+     - 1994-2011: Division Series + 1 wild card -- 4 teams, no bye, 1v4 / 2v3, then the LCS.
+     - 2012-2021: 2nd wild card, the two WCs play a one-game play-in, then DS, then LCS.
+     - 2022-present: 3rd wild card; 6 teams per league, top 2 seeds bye, seeds 3-6 in best-of-3. */
   export const PLAYOFF_ERAS = [
     { from:1900, to:1968, wildcards:0, wcGames:0 },
     { from:1969, to:1993, wildcards:0, wcGames:0 },
-    { from:1994, to:2011, wildcards:1, wcGames:0 },
+    { from:1994, to:2011, wildcards:1, wcGames:2 },
     { from:2012, to:2021, wildcards:2, wcGames:1 },
     { from:2022, to:9999, wildcards:3, wcGames:2 },
   ];
