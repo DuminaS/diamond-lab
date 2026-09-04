@@ -18,7 +18,7 @@ import {
   maxConsecutive as ruleMaxConsecutive, seasonRule, consecutiveSeasonRule, everySeasonRule,
   eventCountRule, sequenceRule, ledgerStep, sameFieldAs, groupCountRule, allOf, anyOf, not as ruleNot,
 } from "./sim/achievementRules.js";
-import { installSeededRandom, restoreRandom } from "./sim/prng.js";
+import { installSeededRandom, restoreRandom, createSeededRandom } from "./sim/prng.js";
 import { encodeMatchCode, decodeMatchCode, encodeResultCode, decodeResultCode, DECADE_COUNT as MP_DECADE_COUNT } from "./sim/matchCode.js";
 import { computeMatchScore } from "./sim/multiplayerScore.js";
 import {
@@ -2962,13 +2962,13 @@ import {
   // One-sentence "why" behind each decade's lean, surfaced as a hover tooltip on the decade card
   // so the hint reads as researched reasoning, not an arbitrary dial.
   const ERA_LEAN_WHY = {
-    "1960s": "Minimal pass protection and defenses that teed off on the passer made scrambling a survival skill; timing/anticipation passing as a coached system didn't exist yet.",
-    "1970s": "The most brutal, hit-everything era for QBs (pre-facemask-contact and roughing rules); offenses were still run-first and ad-libbed, not built around rhythm passing.",
-    "1980s": "Bill Walsh's West Coast offense (post-1978 rule changes) spreads across the league, rewarding timing and anticipation for the first time; the game starts getting safer.",
-    "1990s": "Timing passing is now mainstream and decision-making is coached hard; the position is safer than the 70s-80s but still well short of modern protections.",
-    "2000s": "The prototypical pocket-passer golden age (Manning/Brady/Brees) — offenses are built entirely around staying in the pocket, so mobility and scrambling instinct are actively undervalued.",
-    "2010s": "Kaepernick/RG3/Wilson-era zone-read and RPO schemes bring coached mobility back into style, while player-safety rules keep compounding.",
-    "2020s": "The Mahomes/Allen/Jackson/Hurts dual-threat renaissance makes mobility and improvisation MVP-caliber traits, not a fallback — while targeting/roughing rules make this the safest era to play in.",
+    "1960s": "The high mound and a huge strike zone made this a pitcher's decade — 1968 was the Year of the Pitcher. Runs came from contact, bunts and speed, not the long ball; conditioning was an afterthought, so seasons were a grind.",
+    "1970s": "Artificial turf and cavernous multipurpose parks put a premium on line-drive contact and blazing speed (the stolen base peaks). Power still lags; the schedule and the turf are hard on bodies.",
+    "1980s": "A transitional decade — still turf, still speed-and-contact, but the parks and the ball start creeping back toward the hitter. Injuries ease off the 70s highs.",
+    "1990s": "Smaller retro ballparks, expansion-thinned pitching and a livelier ball tilt the game toward power and patience; the offensive explosion is under way.",
+    "2000s": "Peak slugging: everyone is swinging for the fences, working deep counts, and station-to-station baserunning makes speed almost irrelevant. Grinding at-bats take a physical toll.",
+    "2010s": "The three-true-outcomes era — walks, strikeouts and homers dominate while batting average craters. Defensive shifts and velocity punish pure contact hitters.",
+    "2020s": "Max exit velocity, max strikeouts: raw power and plate discipline are everything and bat-to-ball skill is devalued — but bigger bases, the shift ban and a pitch clock bring speed and athleticism partway back.",
   };
 
   /* ----- coaching schemes: every team plays a real, named offensive system, and that system
@@ -3143,7 +3143,7 @@ import {
     if(incumbent.talent>=entrenchThreshold && incumbent.age<=32){
       assignQuarterbackToRoster(incumbent.id, team.id, "QB1");
       career.isBackup = true;
-      career.transactions.push(`${draftYear}: Enters camp behind ${incumbent.name}, QB1.`);
+      career.transactions.push(`${draftYear}: Breaks camp as a bench bat behind ${incumbent.name}.`);
     }
 
     showScreen("draftnight");
@@ -4538,6 +4538,8 @@ import {
     if(rival.totals.proBowls>0) facts.push(`${rival.totals.proBowls}-time All-Star.`);
     else if(seasonsPlayed>=4) facts.push(`Still hasn't made an All-Star team despite ${seasonsPlayed} seasons as a regular.`);
     if(rival.succeededId) facts.push(`Took over the everyday job after his predecessor retired.`);
+    const franchises = new Set((rival.seasons||[]).map(s=>s.teamId ?? rival.teamId).filter(Boolean));
+    if(franchises.size>=2) facts.push(`Has suited up for ${franchises.size} franchises.`);
     if(rival.retired){
       const lastYear = seasonsPlayed ? rival.seasons[seasonsPlayed-1].year : rival.draftYear;
       facts.push(`Retired after the ${lastYear} season.`);
@@ -4580,13 +4582,14 @@ import {
     // buildTeamPageHTML/openTeamProfile, reachable from teamNameAt links) -- a QB's own profile now
     // shows what a player profile should: his own season-by-season stat line and awards.
     const seasonsRows = (rival.seasons||[]).slice().reverse().map(s=>`
-        <tr><td>${s.year}</td><td>${s.age}</td><td class="tabular">${(s.avg!=null?s.avg:0).toFixed(3).replace(/^0/,"")}</td>
+        <tr><td>${s.year}</td><td>${s.age}</td><td class="team-cell">${svgEscape(teamNameAt(s.teamId ?? rival.teamId, s.year))}</td>
+        <td class="tabular">${(s.avg!=null?s.avg:0).toFixed(3).replace(/^0/,"")}</td>
         <td class="tabular">${s.hr!=null?s.hr:s.td}</td><td class="tabular">${s.rbi||0}</td><td class="tabular">${s.sb||0}</td>
         <td class="tabular">${s.opsPlus!=null?s.opsPlus:Math.round(s.rating||0)}</td><td class="tabular">${recordLine(s.wins, s.losses, s.ties||0)}</td>
         <td>${(s.awards||[]).join(", ")||"—"}</td></tr>`).join("");
     const seasonsTableHtml = seasonsRows ? `<div class="table-wrap" style="margin-top:0.8rem;">
         <table class="career-table">
-          <thead><tr><th>Year</th><th>Age</th><th>AVG</th><th>HR</th><th>RBI</th><th>SB</th><th>OPS+</th><th>Record</th><th>Awards</th></tr></thead>
+          <thead><tr><th>Year</th><th>Age</th><th>Team</th><th>AVG</th><th>HR</th><th>RBI</th><th>SB</th><th>OPS+</th><th>Record</th><th>Awards</th></tr></thead>
           <tbody>${seasonsRows}</tbody>
         </table>
       </div>` : "";
@@ -4643,19 +4646,6 @@ import {
   // canonical registry lookup the rest of the app uses), never the older, less-current
   // leagueDepthCharts snapshot, so this can never show a QB who's already been traded/released/
   // retired since that snapshot was taken.
-  function teamPageQbRowHTML(qbEntry, slotLabel){
-    if(!qbEntry) return `<div><div class="rv-label">${svgEscape(slotLabel)}</div><div class="rv-value">—</div></div>`;
-    const isUserEntry = !!qbEntry.isUser;
-    const overall = isUserEntry ? Math.round(computeEffOverall(career.age, decadeForYear(career.year))) : rivalEffTalent(qbEntry);
-    const bits = [`${overall} ovr`];
-    if(qbEntry.age!=null) bits.push(`age ${qbEntry.age}`);
-    if(qbEntry.contract) bits.push(`${svgEscape(qbEntry.contract.tier||"")}, ${qbEntry.contract.years||0} yr${qbEntry.contract.years===1?"":"s"}`);
-    const availBit = qbEntry.availability ? ` (<b>${svgEscape(qbEntry.availability.label || qbEntry.availability.reason || "Unavailable")}</b>)` : "";
-    const nameHtml = isUserEntry
-      ? `${svgEscape(qbEntry.name)} (you)`
-      : `<button type="button" class="rival-link" data-rival-id="${qbEntry.id}">${svgEscape(qbEntry.name)}</button>`;
-    return `<div><div class="rv-label">${svgEscape(slotLabel)}</div><div class="rv-value">${nameHtml} (${bits.join(", ")})${availBit}</div></div>`;
-  }
   function buildTeamPageHTML(teamId, faRoleLabel){
     const year = career.year;
     const div = divisionOf(teamId, year);
@@ -4671,7 +4661,6 @@ import {
     // the five components below it.
     const ranks = computeTeamGradeRanks(year);
     const overallRankHtml = ranks.overall[teamId] ? ` — #${ranks.overall[teamId]} of ${ranks.total}` : "";
-    const qbs = getTeamQuarterbacks(teamId);
     const schemeId = career.teamScheme ? career.teamScheme[teamId] : null;
     const scheme = SCHEMES.find(s=>s.id===schemeId);
     // Wave 5 (task #6): the scheme's ACTUAL mechanical effects, not just its name -- schemeAttrRows
@@ -4705,7 +4694,7 @@ import {
     }).join("");
     const histHtml = histRows ? `<div class="section-label" style="margin-top:1rem;">Past Seasons</div>
         <div class="table-wrap"><table class="career-table">
-          <thead><tr><th>Year</th><th>QB</th><th class="tabular">QB Rings</th><th class="tabular">Record</th><th>Titles</th><th>Scheme</th></tr></thead>
+          <thead><tr><th>Year</th><th>Notable Hitter</th><th class="tabular">Rings</th><th class="tabular">Record</th><th>Titles</th><th>Approach</th></tr></thead>
           <tbody>${histRows}</tbody>
         </table></div>` : "";
     const viewFullTeamTabHtml = isMine
@@ -4716,11 +4705,8 @@ import {
         <h3 id="teamProfileHeading">${svgEscape(name)}${isMine?" (your team)":""}</h3>
         <div class="rival-meta">Team Grade <b>${overall}</b> (${svgEscape(g.flavor)})${overallRankHtml}</div>
         ${schemeHtml}
-        <div class="rival-stats-grid">
-          ${teamPageQbRowHTML(qbs.QB1, "QB1 (Starter)")}
-          ${teamPageQbRowHTML(qbs.QB2, "QB2")}
-          ${teamPageQbRowHTML(qbs.QB3, "QB3")}
-        </div>
+        <div class="section-label" style="margin-top:0.8rem;">Projected Lineup</div>
+        ${buildLineupTableHTML(teamId, year)}
         ${faRoleHtml}
         ${gradeCardsHtml}
         ${histHtml}
@@ -9209,14 +9195,15 @@ import {
     }
     return { aId: m.aId, bId: m.bId, aScore: m.aScore, bScore: m.bScore, winnerId, realRound };
   }
-  function weekMatchupTeamLineHTML(teamId, score, won, qb, year){
+  function weekMatchupTeamLineHTML(teamId, score, won, _qb, year){
     const mine = teamId===career.teamId;
     const name = svgEscape(teamNameAt(teamId, year)) + (mine ? " (you)" : "");
-    const qbHtml = qb ? `<div class="week-matchup-qb">QB <button type="button" class="rival-link" data-rival-id="${qb.id}">${svgEscape(qb.name)}</button></div>` : "";
+    // The team's notable hitter / full box is one click away (the card opens the box-score modal) --
+    // a per-team name line here is a football-schedule habit, not something a baseball scoreboard shows.
     return `<div class="week-matchup-team${won?" good":""}${mine?" me":""}">
         <span class="week-matchup-name">${won?"<b>":""}${name}${won?"</b>":""}</span>
         <span class="tabular week-matchup-score">${score}</span>
-      </div>${qbHtml}`;
+      </div>`;
   }
   // Schedule tab week picker -- mirrors the Trends-tab stat-picker pattern (trendsStatKey/
   // renderTrendsSparkline): a module-level selection var, a <select> rebuilt on every render with
@@ -9489,6 +9476,93 @@ import {
     return { ab, r, h, hr, rbi, bb, k: Math.max(0,k),
       // legacy aliases used by the box-score line
       comp: h, att: ab, yards: h + hr*3, td: hr, int: Math.max(0,k), rating: 0 };
+  }
+  // FNV-1a -> uint32, for deterministically seeding a local PRNG off a string key.
+  function hashSeed(str){
+    let h = 2166136261 >>> 0;
+    for(let i=0;i<str.length;i++){ h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+  // A deterministic fielding position for a tracked hitter. The player carries a real career.position;
+  // rivals carry only a talent number, so theirs is derived from their id (weighted like randomPosition,
+  // stable forever).
+  function rivalPosition(rival){
+    if(rival && rival.position) return rival.position;
+    const rand = createSeededRandom(hashSeed("pos:" + ((rival && rival.id) || "?")));
+    const total = POSITIONS.reduce((s,p)=>s+p.w,0);
+    let r = rand()*total;
+    for(const p of POSITIONS){ if((r-=p.w)<=0) return p.key; }
+    return "1B";
+  }
+  // A team's projected everyday lineup for a season -- DETERMINISTIC and display-only (the season
+  // sim stays team-grade level; the one tracked hitter still drives awards/rivalries). The tracked
+  // hitter (rivalForTeam, or the player on his own active roster) takes his real position; the other
+  // eight are fabricated around the team grade with glove-first spots leaning lower on the bat.
+  // Batting order roughly follows ovr (stars in the 2-3-4-5 heart of the order). Pre-1973: a
+  // no-bat pitcher hits 9th. Consumed by the team page and every box score.
+  function buildTeamLineup(teamId, year){
+    const rand = createSeededRandom(hashSeed("lineup:" + teamId + ":" + year));
+    const usedLast = new Set();
+    const fabName = ()=>{
+      const first = FIRST_NAMES[Math.floor(rand()*FIRST_NAMES.length)];
+      let last = LAST_NAMES[Math.floor(rand()*LAST_NAMES.length)];
+      for(let i=0;i<6 && usedLast.has(last);i++) last = LAST_NAMES[Math.floor(rand()*LAST_NAMES.length)];
+      usedLast.add(last);
+      return `${first} ${last}`;
+    };
+    const teamGrade = Math.round(teamId===career.teamId ? career.teamStrength : (career.leagueStrength[teamId] ?? 60));
+    const isMineActive = teamId===career.teamId && !career.isBackup;
+    const rv = isMineActive ? null : rivalForTeam(teamId);
+    const trackedPos = isMineActive ? career.position : (rv ? rivalPosition(rv) : null);
+    const trackedOvr = isMineActive ? Math.round(computeEffOverall(career.age, decadeForYear(year)))
+      : (rv ? rivalEffTalent(rv) : null);
+    // DH: American League from 1973, National League from 2022 (AFC = AL, NFC = NL).
+    const conf = conferenceOf(teamId, year);
+    const useDH = year >= 2022 || (conf === "AFC" && year >= 1973);
+    const posList = ["C","1B","2B","3B","SS","LF","CF","RF"].concat(useDH ? ["DH"] : []);
+    const filled = posList.map(pos=>{
+      if(trackedPos && pos===trackedPos && trackedOvr!=null){
+        return { pos, name: isMineActive ? career.name + " (you)" : rv.name, ovr: trackedOvr,
+          isTracked:true, isUser: isMineActive, rivalId: isMineActive ? null : rv.id };
+      }
+      const glove = ["C","SS","2B","CF"].includes(pos);
+      const ovr = clamp(Math.round(teamGrade + (rand()*22 - 11) + (glove ? -4 : 0)), 30, 96);
+      return { pos, name: fabName(), ovr, isTracked:false, isUser:false, rivalId:null };
+    });
+    // Tracked hitter's position not among the 9 (e.g. a DH-position player in a pre-1973 season):
+    // slot him at first base instead.
+    if(trackedPos && trackedOvr!=null && !filled.some(f=>f.isTracked)){
+      const fb = filled.find(f=>f.pos==="1B") || filled[1];
+      fb.name = isMineActive ? career.name + " (you)" : rv.name; fb.ovr = trackedOvr;
+      fb.isTracked = true; fb.isUser = isMineActive; fb.rivalId = isMineActive ? null : (rv && rv.id);
+    }
+    const ranked = filled.slice().sort((a,b)=> b.ovr - a.ovr);
+    const fillPriority = [4,3,5,2,1,6,7,8,9]; // best bat -> cleanup, then 3, 5, 2, leadoff...
+    const order = new Array(9).fill(null);
+    ranked.forEach((hitter,i)=>{ if(fillPriority[i]) order[fillPriority[i]-1] = { slot: fillPriority[i], ...hitter }; });
+    let pitcherBats = false;
+    if(!useDH){
+      pitcherBats = true;
+      order[8] = { slot:9, pos:"P", name: fabName(), ovr:20,
+        isTracked:false, isUser:false, rivalId:null, isPitcher:true };
+    }
+    return { order: order.filter(Boolean), pitcherBats, teamGrade };
+  }
+  // Shared "Projected Lineup" table for the team page and the player's own Team tab -- replaces the
+  // old QB1/QB2/QB3 depth chart. A tracked hitter links to his own profile.
+  function buildLineupTableHTML(teamId, year){
+    const lineup = buildTeamLineup(teamId, year);
+    const rows = lineup.order.map(h=>{
+      const nameHtml = h.isUser ? `${svgEscape(h.name)}`
+        : h.rivalId ? `<button type="button" class="rival-link" data-rival-id="${h.rivalId}">${svgEscape(h.name)}</button>`
+        : svgEscape(h.name);
+      const gr = h.isPitcher ? "—" : gradeFor(clamp(h.ovr,0,98)).grade;
+      return `<tr${h.isTracked?' class="me"':""}><td class="tabular">${h.slot}</td><td>${svgEscape(positionLabel(h.pos))}</td><td>${nameHtml}</td><td class="tabular">${h.isPitcher?"—":h.ovr}</td><td class="tabular">${gr}</td></tr>`;
+    }).join("");
+    return `<div class="table-wrap"><table class="career-table">
+        <thead><tr><th class="tabular">#</th><th>Pos</th><th>Player</th><th class="tabular">Ovr</th><th class="tabular">Grade</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>${lineup.pitcherBats?`<div class="calc-refnote" style="margin-top:0.4rem;">Pre-DH era — the pitcher bats ninth.</div>`:""}`;
   }
   function buildBracketBoxScoreModalHTML(match, year, roundLabel){
     const aName = svgEscape(teamNameAt(match.aId, year)), bName = svgEscape(teamNameAt(match.bId, year));
@@ -10081,32 +10155,6 @@ import {
       { ranks, teamId: career.teamId }
     );
 
-    // Wave 5 (tasks #6/#7): reads the same live, canonical getTeamQuarterbacks lookup the generic
-    // Team page now uses (buildTeamPageHTML/teamPageQbRowHTML) -- never the older, less-current
-    // leagueDepthCharts snapshot, so this can't show a QB2/QB3 who's already moved on, and QB2/QB3
-    // are clickable to their own profile ([data-rival-id], picked up by #careerContent's existing
-    // delegated click listener) exactly like QB1's rival link already was elsewhere in the app.
-    const qbs = getTeamQuarterbacks(career.teamId);
-    const depthRow = (slot, qbEntry)=>{
-      if(!qbEntry) return `<tr><td>${slot}</td><td>—</td><td class="tabular">—</td><td class="tabular">—</td><td>—</td></tr>`;
-      const isUserEntry = !!qbEntry.isUser;
-      const overall = isUserEntry ? Math.round(computeEffOverall(career.age, decadeForYear(career.year))) : rivalEffTalent(qbEntry);
-      const nameHtml = isUserEntry
-        ? svgEscape(qbEntry.name)+" (you)"
-        : `<button type="button" class="rival-link" data-rival-id="${qbEntry.id}">${svgEscape(qbEntry.name)}</button>`;
-      const availHtml = qbEntry.availability ? ` <b>(${svgEscape(qbEntry.availability.label || qbEntry.availability.reason || "Unavailable")})</b>` : "";
-      return `<tr${isUserEntry?' class="me"':""}><td>${slot}</td><td>${nameHtml}${availHtml}</td><td class="tabular">${overall}</td><td class="tabular">${qbEntry.age}</td><td>${svgEscape((qbEntry.contract&&qbEntry.contract.tier)||"—")}</td></tr>`;
-    };
-    // getTeamQuarterbacks only ever fills in the user's own QB1 slot automatically (Wave 2A) --
-    // when the user is a BACKUP, their own row has no registry entry at all (career/build ARE that
-    // record), so it's inserted here exactly where the old leagueDepthCharts-based version always
-    // placed it: QB2, same simplification as before this wave.
-    const depthRows = career.isBackup
-      ? [depthRow("QB1", qbs.QB1),
-         `<tr class="me"><td>QB2</td><td>${svgEscape(career.name)} (you)</td><td class="tabular">${Math.round(computeEffOverall(career.age, decadeForYear(career.year)))}</td><td class="tabular">${career.age}</td><td>${svgEscape(career.contract.tier)}</td></tr>`,
-         depthRow("QB3", qbs.QB3)]
-      : [depthRow("QB1", qbs.QB1), depthRow("QB2", qbs.QB2), depthRow("QB3", qbs.QB3)];
-
     const schemeId = career.teamScheme ? career.teamScheme[career.teamId] : null;
     const scheme = SCHEMES.find(s=>s.id===schemeId);
     const teamGrade = Math.round(career.teamStrength);
@@ -10114,14 +10162,9 @@ import {
     const teamRankHtml = ranks.overall[career.teamId] ? ` — #${ranks.overall[career.teamId]} of ${ranks.total}` : "";
     return `<div class="calc-refnote">${svgEscape(teamNameAt(career.teamId, career.year))} — Team Grade <b>${teamGrade}</b> (${svgEscape(gradeFor(clamp(teamGrade,0,98)).flavor)})${teamRankHtml}. Team Grade is a weighted read of the five grades below it (Rotation/Lineup 20% each, Defense &amp; Bullpen 30%, Coaching 20%, Front Office 10%) — each moves for its own legible reasons (roster churn, a new manager, front-office moves), and each has a real, direct effect on your own numbers, not just flavor.</div>
       <div class="team-grade-grid">${gradeCards}</div>
-      <div class="section-label" style="margin-top:1.4rem;">Depth Chart</div>
-      <div class="table-wrap">
-        <table class="career-table">
-          <thead><tr><th>Slot</th><th>Name</th><th class="tabular">Overall</th><th class="tabular">Age</th><th>Contract</th></tr></thead>
-          <tbody>${depthRows.join("")}</tbody>
-        </table>
-      </div>
-      ${career.isBackup ? `<div class="calc-refnote" style="margin-top:0.6rem;">You're competing for the starting job — see the Season tab's front-office widget for how that's going.</div>` : ""}
+      <div class="section-label" style="margin-top:1.4rem;">Projected Lineup</div>
+      ${buildLineupTableHTML(career.teamId, career.year)}
+      ${career.isBackup ? `<div class="calc-refnote" style="margin-top:0.6rem;">You're a bench bat competing for an everyday job — see the Season tab's front-office widget for how that's going.</div>` : ""}
       ${scheme ? `<div class="calc-refnote" style="margin-top:0.6rem;">Running <b>${svgEscape(scheme.name)}</b> — see the Scheme tab for the full attribute breakdown.</div>` : ""}
     `;
   }
