@@ -792,6 +792,9 @@
   table.standings-table{ width:100%; border-collapse: collapse; font-size: 0.82rem; }
   table.standings-table td{ padding: 0.25rem 0.3rem; border-bottom: 1px solid var(--line); }
   table.standings-table td:last-child{ text-align:right; font-family: var(--mono); }
+  table.standings-table td.tabular{ text-align:right; font-family: var(--mono); white-space:nowrap; }
+  table.standings-table thead th{ padding: 0.15rem 0.3rem; font-family: var(--mono); font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); border-bottom: 1.5px solid var(--line-strong); }
+  table.standings-table thead th.tabular{ text-align:right; }
   table.standings-table tr.me td{ font-weight: 700; color: var(--good); }
 
   /* ---------- League tab ---------- */

@@ -82,8 +82,11 @@ test("fa-role-matches-post-signing-depth-chart", async ({ page }) => {
   // Explicit incumbent fixtures exercise both branches. Random development changes must not be
   // able to silently remove one branch from this regression test's coverage.
   const attempts = [
-    { seed: 13579, decadeIndex: 1, seasonsFirst: 0, incumbentTalent: 20, expectedRole: "starter" },
-    { seed: 24681, decadeIndex: 2, seasonsFirst: 0, incumbentTalent: 65, expectedRole: "competition" },
+    // decadeIndex 3+ maps to the 1980s onward (helper's card 0 is "Random", card 1 is the 1960s) --
+    // post-1976, so a forced-expired rookie deal reaches the open market. Earlier decades are
+    // reserve-clause bound (no free agency before 1976) and never render offer cards.
+    { seed: 13579, decadeIndex: 3, seasonsFirst: 0, incumbentTalent: 20, expectedRole: "starter" },
+    { seed: 24681, decadeIndex: 4, seasonsFirst: 0, incumbentTalent: 65, expectedRole: "competition" },
   ];
 
   let sawStarter = false, sawCompetition = false;

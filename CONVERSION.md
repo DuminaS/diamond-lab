@@ -289,15 +289,52 @@ Post-deploy pass after playing the build. Plan: `~/.claude/plans/breezy-roaming-
   `playoff-series-resume-keeps-completed-games`; `postseason-never-produces-tie` rewritten.
   **61 regression / 58 balance green.**
 
-### Phase 13c — Broader faithfulness audit (catalogue)
-1. Standings: GB (games back), drop the ties column for modern eras, wild-card race.
-2. Drop the hitter's personal W-L (a football holdover) — keep only team record in his games.
-3. Name the opposing starting pitcher on game cards / box scores.
-4. Rookie call-up: a rookie's first season starts partway through (~90–120 games).
-5. Position changes with age (SS→3B→1B/DH, CF→corner) — affects Gold Glove.
-6. Era-accurate contract rules (reserve clause pre-1976, arbitration years, luxury tax).
-7. Silver Slugger / Gold Glove explicitly by position; Hank Aaron / Comeback Player flavor.
-8. Admin → Stat Calculator tab still shows the football intermediate math (admin-only).
-9. **Player-team win rate isn't clamped** the way flat teams are (`simulateGameScore` vs
-   `simpleWinProb`'s `[.35,.66]`) — a grade-90+ team the player is on can win 115-122 games while
-   the best flat team tops out ~100. Pre-existing engine asymmetry; needs a win-rate sweep.
+### Phase 13c — Broader faithfulness audit (catalogue)  ✅
+1. **Standings GB** — `buildStandingsTabHTML` division tables gained a Games Back column with a
+   header row (`gamesBack(r, lead)`). `recordLine` already drops a 0-ties column.
+2. **Dropped the hitter's personal W-L** — season card "Your Record" → "Team Record"
+   (teamWins/teamLosses); `recordNote` reframed ("with you in the lineup the team went X; in the N
+   games you missed, Y"); rival profile season table dropped the Record column, added Runs; rival
+   stats grid "Team Record" → "Runs".
+3. **Opposing starting pitcher named on every box score** — new `buildTeamRotation(teamId, year)`
+   (pitching sibling of `buildTeamLineup`; deterministic 4/5-man staff, 4-man pre-1975) +
+   `startingPitcherFor(teamId, year, gameNo, {playoff})` (rotation turns over in the regular season,
+   leads with the ace in a shortened postseason rotation). Box-score modal prints "Starting
+   pitchers: X (A) vs Y (B)"; the pre-DH #9 batting slot shows the real starter. Flavor only — the
+   sim still scores opposing runs off a team grade.
+4. **Rookie call-up** — the player's first career season (non-backup, full schedule) has a ~60%
+   chance of a 35–80-game Triple-A delay (~90–125 games played). `season.debutCallup` records it;
+   the missed games fold into `genericMissedGames` so a generic replacement covers them and the
+   team's own W-L is untouched. Roll is from a career-seeded stream — no RNG drift.
+5. **Position changes with age** — `DEFENSIVE_SHIFT` spectrum + `maybeShiftPositionWithAge()` run
+   each spring. A premium up-the-middle player (C/SS/CF/2B) slides down earliest; odds ramp from
+   age ~31. `career.positionHistory` logs moves, `season.position` stamps each year, season card +
+   career table show it. Gold Glove keys off `career.position`, so a move to DH ends eligibility.
+   Seeded stream — no RNG drift.
+6. **Era-accurate contract control** — no player free agency before 1976: an expired deal is a
+   reserve-clause renewal (`renderTeamControlledRenewal`, team-set 1-year capped below an open
+   market), with a small chance an aging player on a bad club is released instead. From 1976 on the
+   6-year rookie deal already models the modern club-control window (service time + arbitration), so
+   an expired deal is genuine free agency and `renderFAOffers` handles it unchanged. FA specs
+   re-decaded to post-1976 (their forced-early-expiry shortcut would otherwise land in the reserve
+   era and correctly see no open market).
+7. **Silver Slugger / Gold Glove by position** — `season.awardPos` maps an award label to a
+   position key, set at the grant site for the player and each rival. Internal `season.awards`
+   entries stay canonical so every `.includes()` / achievement-rule check is untouched; the
+   user-facing label gains a "(Shortstop)" suffix via `awardWithPos` / `decorateAwards`.
+8. **Admin Stat Calculator baseball-ified** — the math was already baseball; every label and
+   worked example relabelled (AVG / ISO / HR rate / K rate / PA per game; the NFL passer-rating
+   block → the OPS+ index formula; Baserunning (SB); GIDP; All-Star / Silver Slugger cards). Also
+   swapped the last two raw "O-Line"/"Weapons" strings (FA offer card, org-event text) for
+   "Rotation"/"Lineup".
+9. **Player-team win-rate clamp** — `scoreForInning` clamps the lineup-vs-staff grade gap to ±35,
+   mirroring `simpleWinProb`'s `[.35,.66]`, so a grade-90+ team the player is on can no longer run
+   a 72%+ per-game win rate / 115–122-win season. Guarded by
+   `team-win-totals-stay-in-a-realistic-band`.
+
+New specs: `box-score-line-score-and-lineups` (extended for starting pitchers),
+`rookie-callup-shortens-debut-season`, `aging-player-shifts-down-the-defensive-spectrum`,
+`pre-1976-contract-expiry-is-a-reserve-clause-renewal`, `team-win-totals-stay-in-a-realistic-band`.
+`admin-calculator-calls-production-math` + 4 FA specs updated; `standings-and-history-preserve-wlt`
+and `rival-season-table-has-team-column` hardened against an earlier career washout.
+**67 regression tests / 58 balance green.**

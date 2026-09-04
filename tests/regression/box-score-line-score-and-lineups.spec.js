@@ -18,6 +18,7 @@ test("box-score modal: per-inning line score + both-team batting boxes that add 
 
   const data = await page.evaluate(() => {
     const o = document.getElementById("bracketBoxScoreOverlay");
+    window.__spText = [...o.querySelectorAll(".calc-refnote")].map(n => n.textContent).join(" | ");
     const tables = [...o.querySelectorAll("table")];
     const ls = tables[0];
     const header = [...ls.querySelectorAll("thead th")].map(t => t.textContent.trim());
@@ -53,4 +54,8 @@ test("box-score modal: per-inning line score + both-team batting boxes that add 
     expect(boxR, "batting-box R column must equal the team's runs").toBe(teamR);
     expect(boxRBI, "batting-box RBI must not exceed the team's runs").toBeLessThanOrEqual(teamR);
   });
+
+  // Phase 13c: the box score names both starting pitchers.
+  const spText = await page.evaluate(() => window.__spText);
+  expect(spText, "box score should name the starting pitchers").toMatch(/Starting pitchers:/);
 });

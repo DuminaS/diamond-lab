@@ -60,9 +60,9 @@ test("admin-calculator-calls-production-math", async ({ page }) => {
   const data = await page.evaluate(() => {
     const cards = Array.from(document.querySelectorAll(".calc-metric"));
     const find = name => cards.find(c => c.querySelector(".calc-metric-name")?.textContent === name);
-    const pbCard = find("Pro Bowl Score");
+    const pbCard = find("All-Star Score");
     const gates = pbCard ? Array.from(pbCard.querySelectorAll(".calc-gate")).map(g => ({ pass: g.classList.contains("pass"), text: g.textContent })) : [];
-    const attemptsGate = gates.find(g => g.text.includes("attempts >"));
+    const attemptsGate = gates.find(g => g.text.includes("PA >"));
     const ratingGateStillPresent = gates.some(g => g.text.toLowerCase().includes("ratingedge") && g.text.includes("must grade out"));
     return {
       proBowlResult: pbCard?.querySelector(".calc-metric-result")?.textContent || null,
@@ -72,7 +72,7 @@ test("admin-calculator-calls-production-math", async ({ page }) => {
     };
   });
 
-  expect(data.proBowlResult, "expected the Pro Bowl Score card to render").toBeTruthy();
+  expect(data.proBowlResult, "expected the All-Star Score card to render").toBeTruthy();
   // The confirmed-removed gate text ("ratingEdge >= 1 -- must grade out above league average
   // himself") must no longer appear at all -- production's real proBowlEligible has no rating
   // component, only playing time.

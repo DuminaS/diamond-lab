@@ -553,6 +553,53 @@ import {
     { key:"DH", label:"Designated Hitter", w:8, defWeight:0.0 },
   ];
   function positionLabel(key){ const p = POSITIONS.find(x=>x.key===key); return p ? p.label : (key||"—"); }
+  // Silver Slugger and Gold Glove are per-position awards in real baseball (one of each per league
+  // per position). The sim models a single hitter per club so it can't run a true by-position vote,
+  // but it can name the position the winner actually played: season.awardPos maps an award label to
+  // a position key, set where the award is granted. Internal season.awards entries stay canonical
+  // ("Silver Slugger" / "Gold Glove") so every .includes()/achievement-rule check is untouched --
+  // only the user-facing label gets the "(Shortstop)" suffix.
+  function awardWithPos(label, season){
+    const pos = season && season.awardPos && season.awardPos[label];
+    return pos ? `${label} (${positionLabel(pos)})` : label;
+  }
+  function decorateAwards(list, season){ return (list||[]).map(a=>awardWithPos(a, season)); }
+  // The defensive spectrum, hardest -> easiest. A player ages DOWN it: a shortstop slides to
+  // second or third, a center fielder to a corner, everyone eventually to first base or DH. DH is
+  // terminal. maybeShiftPositionWithAge() walks one step per move.
+  const DEFENSIVE_SHIFT = {
+    "C":  ["1B","LF","DH"],
+    "SS": ["2B","3B","1B","DH"],
+    "2B": ["3B","1B","DH"],
+    "3B": ["1B","DH"],
+    "CF": ["RF","LF","1B","DH"],
+    "LF": ["1B","DH"],
+    "RF": ["1B","DH"],
+    "1B": ["DH"],
+    "DH": [],
+  };
+  // Once a season, in spring training, an aging player may be moved down the defensive spectrum --
+  // a real career arc (Jeter SS->DH, Biggio C->2B->CF->2B, Cabrera 3B->1B). Premium up-the-middle
+  // spots (C/SS/CF/2B) shift earliest; the odds ramp from age ~31 and rise into the late 30s.
+  // Sets career._positionChangedFrom for the season object + narrative; nulls it when nothing moved.
+  function maybeShiftPositionWithAge(){
+    career._positionChangedFrom = null;
+    const cur = career.position;
+    const next = (DEFENSIVE_SHIFT[cur] || [])[0];
+    if(!next || career.age < 31) return;
+    const prem = ({ C:1.0, SS:1.0, CF:0.9, "2B":0.72, "3B":0.5, LF:0.34, RF:0.34, "1B":0.26 })[cur] || 0.35;
+    const ageF = clamp((career.age - 29) * 0.09, 0, 0.78);
+    const chance = clamp(prem * ageF, 0, 0.6);
+    // Drawn from a career-derived seeded stream, NOT the global Math.random, so adding this check
+    // doesn't perturb every downstream seeded test's RNG sequence.
+    const rand = createSeededRandom(hashSeed("posshift:" + (career.name||"") + ":" + career.draftYear + ":" + career.year));
+    if(rand() < chance){
+      career.position = next;
+      career._positionChangedFrom = cur;
+      (career.positionHistory = career.positionHistory || []).push({ year: career.year, from: cur, to: next });
+      career.transactions.push(`${career.year}: Moves off ${positionLabel(cur)} — will play ${positionLabel(next)} this season.`);
+    }
+  }
   function randomPosition(){
     const total = POSITIONS.reduce((s,p)=>s+p.w,0);
     let r = Math.random()*total;
@@ -3279,9 +3326,13 @@ import {
   // with a rare crooked number. The `tds`/`fgs` fields are kept at 0 so the overtime/box-score
   // code that still destructures them keeps working during the conversion.
   function scoreForInning(off, def){
-    const diff = off - def;
-    // Deliberately shallow: even a huge lineup-vs-staff mismatch only shifts a half-inning's
-    // rally odds a little, so a great team beats a bad one ~60-65% of the time, not 85%+.
+    // Deliberately shallow: even a huge lineup-vs-staff mismatch only shifts a half-inning's rally
+    // odds a little, so a great team beats a bad one ~62-66% of the time, not 85%+. The grade gap
+    // is clamped to +/-35 first so an extreme blend (a grade-90+ team the player is on facing a
+    // grade-45 club) can't run away to a 72%+ per-game win rate -- flat teams are already capped
+    // similarly by simpleWinProb's [.35,.66] clamp, and this keeps the player's own team in the
+    // same band. Retune with a full-season standings sweep if the spread looks wrong.
+    const diff = clamp(off - def, -35, 35);
     const rallyProb = clamp(0.205 + diff*0.0017, 0.09, 0.34);
     let runs = 0;
     if(Math.random() < rallyProb){
@@ -4562,12 +4613,13 @@ import {
     const seasonsRows = (rival.seasons||[]).slice().reverse().map(s=>`
         <tr><td>${s.year}</td><td>${s.age}</td><td class="team-cell">${svgEscape(teamNameAt(s.teamId ?? rival.teamId, s.year))}</td>
         <td class="tabular">${(s.avg!=null?s.avg:0).toFixed(3).replace(/^0/,"")}</td>
-        <td class="tabular">${s.hr!=null?s.hr:s.td}</td><td class="tabular">${s.rbi||0}</td><td class="tabular">${s.sb||0}</td>
-        <td class="tabular">${s.opsPlus!=null?s.opsPlus:Math.round(s.rating||0)}</td><td class="tabular">${recordLine(s.wins, s.losses, s.ties||0)}</td>
-        <td>${(s.awards||[]).join(", ")||"—"}</td></tr>`).join("");
+        <td class="tabular">${s.hr!=null?s.hr:s.td}</td><td class="tabular">${s.rbi||0}</td>
+        <td class="tabular">${s.runs||0}</td><td class="tabular">${s.sb||0}</td>
+        <td class="tabular">${s.opsPlus!=null?s.opsPlus:Math.round(s.rating||0)}</td>
+        <td>${decorateAwards(s.awards, s).join(", ")||"—"}</td></tr>`).join("");
     const seasonsTableHtml = seasonsRows ? `<div class="table-wrap" style="margin-top:0.8rem;">
         <table class="career-table">
-          <thead><tr><th>Year</th><th>Age</th><th>Team</th><th>AVG</th><th>HR</th><th>RBI</th><th>SB</th><th>OPS+</th><th>Record</th><th>Awards</th></tr></thead>
+          <thead><tr><th>Year</th><th>Age</th><th>Team</th><th>AVG</th><th>HR</th><th>RBI</th><th>R</th><th>SB</th><th>OPS+</th><th>Awards</th></tr></thead>
           <tbody>${seasonsRows}</tbody>
         </table>
       </div>` : "";
@@ -4583,7 +4635,7 @@ import {
           <div><div class="rv-label">Home Runs</div><div class="rv-value tabular">${t.td||0}</div></div>
           <div><div class="rv-label">RBI</div><div class="rv-value tabular">${(t.rbi||0).toLocaleString()}</div></div>
           <div><div class="rv-label">OPS+</div><div class="rv-value tabular">${Math.round(rating)}</div></div>
-          <div><div class="rv-label">Team Record</div><div class="rv-value tabular">${recordLine(t.wins, t.losses, t.ties||0)}${totalGames?` (${winPct}%)`:""}</div></div>
+          <div><div class="rv-label">Runs</div><div class="rv-value tabular">${(t.runs||0).toLocaleString()}</div></div>
           <div><div class="rv-label">Games</div><div class="rv-value tabular">${t.games}</div></div>
         </div>
         ${badges ? `<div class="rival-badges">${badges}</div>` : ""}
@@ -5442,7 +5494,8 @@ import {
   }
   function resolveSeasonAllProAndProBowl(season, year){
     const rows = [{ isMine:true, teamId: career.teamId, conf: conferenceOf(career.teamId, year),
-      awards: season.awards, proBowlScore: season.proBowlScore, proBowlEligible: season.proBowlEligible,
+      awards: season.awards, season, pos: career.position,
+      proBowlScore: season.proBowlScore, proBowlEligible: season.proBowlEligible,
       allProScore: season.allProScore, allProEligible: season.allProEligible, totals: career.totals }];
     // Wave 7 (task #7): same fix as resolveSeasonMVP above -- iterate the full qbsById registry so
     // a bench QB's real, played season is never excluded from Pro Bowl/All-Pro consideration just
@@ -5451,7 +5504,8 @@ import {
       const s = (r.seasons||[]).find(x=>x.year===year);
       if(!s) return;
       rows.push({ isMine:false, teamId: r.teamId, conf: conferenceOf(r.teamId, year),
-        awards: s.awards, proBowlScore: s.proBowlScore, proBowlEligible: s.proBowlEligible,
+        awards: s.awards, season: s, pos: rivalPosition(r),
+        proBowlScore: s.proBowlScore, proBowlEligible: s.proBowlEligible,
         allProScore: s.allProScore, allProEligible: s.allProEligible, totals: r.totals });
     });
 
@@ -5488,6 +5542,9 @@ import {
     [["Silver Slugger", firstTeam], ["All-MLB Second Team", secondTeam]].forEach(([label, r])=>{
       if(!r) return;
       r.awards.push(label);
+      if(label==="Silver Slugger" && r.season && r.pos){
+        (r.season.awardPos = r.season.awardPos || {})["Silver Slugger"] = r.pos;
+      }
       r.totals.allPros++;
       if(!seated.has(r)){ r.awards.push("All-Star"); r.totals.proBowls++; seated.add(r); }
     });
@@ -5540,6 +5597,43 @@ import {
         if(!r.awards.includes("Rookie of the Year")) r.awards.push("Rookie of the Year");
       });
     }
+
+    // Hank Aaron Award (1999+): the best all-around offensive season in the league -- resolved here
+    // as the top OPS+ among qualified regulars, one league-wide winner (kept as simple as ROY/the
+    // stat titles, which the rival model can't do by-league anyway).
+    if(year >= 1999 && qualified.length){
+      const bestOps = Math.max(...pool.map(r=> r.s.opsPlus!=null ? r.s.opsPlus : Math.round(r.s.rating||0)));
+      if(bestOps > 100) pool.filter(r=> (r.s.opsPlus!=null ? r.s.opsPlus : Math.round(r.s.rating||0)) === bestOps).forEach(r=>{
+        if(!r.awards.includes("Hank Aaron Award")) r.awards.push("Hank Aaron Award");
+      });
+    }
+
+    // Comeback Player of the Year (1965+): the biggest bounce-back from a down or injury-shortened
+    // prior year. One league-wide winner -- needs a real prior season that was either well below
+    // 100 OPS+ or badly interrupted, and a this-year OPS+ north of 110 that clears it by 25+.
+    const opsOf = s => s && (s.opsPlus!=null ? s.opsPlus : Math.round(s.rating||0));
+    const comebackRows = [];
+    const prevPlayer = career.seasonLog.filter(s=>s.year<year && (s.games||0)>0).slice(-1)[0];
+    if(prevPlayer && (season.pa||0) >= games*3.1){
+      const now = opsOf(season), was = opsOf(prevPlayer);
+      const interrupted = (prevPlayer.games||0) < games*0.55;
+      if(now >= 110 && now - was >= 25 && (was < 95 || interrupted)) comebackRows.push({ awards: season.awards, gain: now - was });
+    }
+    Object.values(career.qbsById||{}).forEach(r=>{
+      const s = (r.seasons||[]).find(x=>x.year===year);
+      if(!s || (s.pa||0) < games*3.1) return;
+      const prev = (r.seasons||[]).filter(x=>x.year<year && (x.games||0)>0).slice(-1)[0];
+      if(!prev) return;
+      const now = opsOf(s), was = opsOf(prev);
+      const interrupted = (prev.games||0) < games*0.55;
+      if(now >= 110 && now - was >= 25 && (was < 95 || interrupted)) comebackRows.push({ awards: s.awards, gain: now - was });
+    });
+    if(comebackRows.length){
+      const bestGain = Math.max(...comebackRows.map(r=>r.gain));
+      comebackRows.filter(r=>r.gain===bestGain).forEach(r=>{
+        if(!r.awards.includes("Comeback Player of the Year")) r.awards.push("Comeback Player of the Year");
+      });
+    }
   }
 
   // Gold Glove: a player-only self-check (the sim doesn't model rival fielding). Chance scales
@@ -5556,6 +5650,7 @@ import {
     const chance = clamp((defScore - 58) * 0.012, 0, 0.34);
     if(Math.random() < chance){
       season.awards.push("Gold Glove");
+      (season.awardPos = season.awardPos || {})["Gold Glove"] = career.position;
       career.transactions.push(`${season.year}: Wins a Gold Glove at ${positionLabel(career.position)}.`);
       recordLedgerEvent("award_won", { teamId: season.teamId, outcomeId: "Gold Glove" });
     }
@@ -6732,6 +6827,7 @@ import {
   function generateSeason(){
     const decade = decadeForYear(career.year);
     const league = LEAGUE[decade];
+    maybeShiftPositionWithAge();
     const developmentPlan = prepareDevelopmentPlanForSeason();
     // Must run before career.seasonLog.push(season) below makes THIS season the new "last" entry --
     // applyCoordinatorCarouselIfDue needs the PREVIOUS season's fully-resolved playoffs record.
@@ -6795,7 +6891,20 @@ import {
     career._backupMissedGames = 0; career._backupIncumbentWins = 0; career._backupIncumbentLosses = 0;
     career._backupIncumbentName = null; career._backupIncumbentSeasonSnapshot = null;
 
-    const gamesPlayed = clamp(league.games - missedGames, 0, league.games);
+    // Rookie call-up: a real position prospect rarely breaks camp on the Opening Day roster --
+    // most open the year in Triple-A and come up in April-June. The player's FIRST career season
+    // (not a bench/backup role, and only when the schedule is a real full one) usually starts
+    // partway through: ~60% chance of a 35-80-game delay, so a debut season is ~90-125 games, not
+    // a full 162. Those games are covered by a generic replacement (folded into genericMissedGames
+    // below) exactly like an injury absence -- the team's season doesn't wait for the call-up.
+    let debutCallup = 0;
+    if(career.seasonLog.length===0 && !career.isBackup && league.games>=100){
+      // Career-derived seeded stream, not the global Math.random -- so this roll can't shift the
+      // RNG sequence every other seeded test depends on.
+      const cuRand = createSeededRandom(hashSeed("callup:" + (career.name||"") + ":" + career.draftYear));
+      if(cuRand() < 0.6) debutCallup = clamp(35 + Math.floor(cuRand()*46), 0, league.games - 40);
+    }
+    const gamesPlayed = clamp(league.games - missedGames - debutCallup, 0, league.games);
 
     // a reduced-role contract (backup/minimum) means fewer starts, not just worse play
     const roleShare = career.contract.tier==="minimum" ? clamp(0.15+Math.random()*0.4, 0.1, 0.6)
@@ -6897,7 +7006,7 @@ import {
     // documented trade-off (a little less precision on this one flavor number) for actually fixing
     // the double-simulation. His REAL per-game stat line still lands on the correct tagged weeks
     // once simulateRivalSeasons runs (see the patch step right after that call).
-    const genericMissedGames = missedGamesInjury + missedGamesSuspension;
+    const genericMissedGames = missedGamesInjury + missedGamesSuspension + debutCallup;
     const incumbentTotalGames = backupIncumbentWins + backupIncumbentLosses;
     const incumbentWinRate = incumbentTotalGames>0 ? backupIncumbentWins/incumbentTotalGames
       : clamp(0.5 + (career.teamStrength-65)*0.01, 0.12, 0.88);
@@ -6977,6 +7086,7 @@ import {
 
     const season = {
       year: career.year, age: career.age, teamId: career.teamId, teamName: teamNameAt(career.teamId, career.year),
+      position: career.position, positionChangedFrom: career._positionChangedFrom || null,
       decade, games: gamesPlayed, comp: completionsFinal, att: attempts, pct: avg,
       yards: yardsFinal, td: tdFinal, int: intFinal, sacks, rating, wins, losses, ties,
       rushAtt, rushYards, rushTd, gameLog,
@@ -6984,7 +7094,7 @@ import {
       pa, ab, hits, singles, doubles: doublesN, triples, hr, bb: walks, hbp, sf, k: strikeouts,
       sb, cs, rbi, runs, avg, obp, slg, ops, opsPlus,
       teamGames: league.games, teamWins: wins+backupWins+incumbentWins, teamLosses: losses+backupLosses+incumbentLosses, teamTies: ties, missedGames,
-      missedGamesInjury, missedGamesSuspension, missedGamesBackup,
+      missedGamesInjury, missedGamesSuspension, missedGamesBackup, debutCallup,
       incumbentName: backupIncumbentName,
       incumbentSeasonSnapshot: backupIncumbentSeasonSnapshot,
       teamOverall: career.teamStrength,
@@ -8079,7 +8189,7 @@ import {
     const good = netGood && !netBad;
     const effectParts = [];
     if(repDelta) effectParts.push(`Reputation ${fmtDelta(repDelta)}`);
-    if(strengthDelta) effectParts.push(`${ev.target==="oline"?"O-Line grade":ev.target==="weapons"?"Weapons grade":"Team grade"} ${fmtDelta(strengthDelta)}`);
+    if(strengthDelta) effectParts.push(`${ev.target==="oline"?"Rotation grade":ev.target==="weapons"?"Lineup grade":"Team grade"} ${fmtDelta(strengthDelta)}`);
     if(gmDelta) effectParts.push(`GM relations ${fmtDelta(gmDelta)}`);
     if(!effectParts.length) effectParts.push("No direct stat change — narrative only.");
     content.innerHTML = eraWrap(decadeForYear(career.year), `
@@ -8845,14 +8955,90 @@ import {
     return offers;
   }
 
+  // Era-accurate contract control. Player free agency did not exist before the 1975 Seitz decision
+  // (effective 1976) -- a player whose deal is up before then is simply renewed by his club under
+  // the reserve clause: no market, no negotiation, the team sets the number. (The 6-year rookie
+  // deal already models the modern club-control window -- service time plus arbitration -- so once
+  // it expires, in any era from 1976 on, that's genuine free agency and renderFAOffers handles it.)
   function renderFreeAgencyEvent(){
     const decade = decadeForYear(career.year);
     const effOverall = computeEffOverall(career.age, decade);
     const tier = performanceTier(effOverall);
     const oldTeamId = career.contract.apy>0 ? career.teamId : null;
+    if(oldTeamId!=null && career.year < 1976){ renderTeamControlledRenewal(decade, "reserve"); return; }
     const oldTeamName = career.teamId ? teamNameAt(career.teamId, career.year) : null;
     const offers = buildFreeAgentOffers(decade, tier, oldTeamId);
     renderFAOffers(offers, { decade, tier, oldTeamId, oldTeamName });
+  }
+
+  // The player's club exercises its control: a one-year renewal at a team-set number, no shopping
+  // around. `mode` is "reserve" -- pre-1976, the only era with no player free agency at all.
+  function renderTeamControlledRenewal(decade, mode){
+    const content = document.getElementById("careerContent");
+    const teamId = career.teamId, teamName = teamNameAt(teamId, career.year);
+    const effOverall = computeEffOverall(career.age, decade);
+    const tier = performanceTier(effOverall);
+    const cur = career.contract.apy || veteranAPY(decade, "minimum");
+    // Career-derived seeded stream, not the global Math.random -- keeps this branch from shifting
+    // every downstream seeded test's RNG.
+    const rand = createSeededRandom(hashSeed("renewal:" + (career.name||"") + ":" + career.year + ":" + mode));
+
+    // Pre-1976 a poor club could just cut an aging regular loose -- one of the few ways off a team.
+    if(career.age>=36 && career.teamStrength<45 && rand()<0.42){
+      renderReserveClauseRelease(decade, teamName);
+      return;
+    }
+
+    // The reserve clause kept salaries well below what an open market would bear -- cap the renewal
+    // at a "good regular" number no matter how well he played, and keep it team-favorable.
+    const ceiling = veteranAPY(decade, tier==="elite" ? "good" : tier);
+    const apy = Math.round(clamp(Math.max(cur*(1.0+rand()*0.14), ceiling*0.7), cur*0.9, ceiling));
+    const tierLabel = "reserve clause";
+    const blurb = `There's no such thing as free agency in ${career.year}. The ${teamName} hold his rights under the reserve clause and mail him a contract for next season. He can sign it or sit out — and nobody sits out.`;
+
+    career.contract = { apy, years: 1, tier: tierLabel };
+    career.transactions.push(`${career.year}: Renewed by the ${teamName} — ${fmtMoney(apy)} (${tierLabel}).`);
+    recordLedgerEvent("contract_signed", { teamId, choiceId: mode, outcomeId: "renewed", metadata:{ apy, years:1 } });
+    saveActiveCareer({ phase:"decision", eventId:"team_control_renewal" });
+
+    content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · Contract</div>
+        <h3>Renewed under the reserve clause.</h3>
+        <p>${blurb}</p>
+        <div class="fa-offer-terms tabular" style="margin:0.6rem 0;">${fmtMoney(apy)}/yr · 1 yr · ${tierLabel}</div>
+        <div class="event-choices"><button class="choice-btn" id="renewAck"><div class="cb-title">Report to camp</div></button></div>
+      `);
+    document.getElementById("renewAck").addEventListener("click", checkInjuryThenPlay);
+  }
+
+  function renderReserveClauseRelease(decade, oldTeamName){
+    const content = document.getElementById("careerContent");
+    const landing = pickTeamByStrength(career.year, career.teamId, 15, 55);
+    content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · Contract</div>
+        <h3>Given his release.</h3>
+        <p>The ${oldTeamName} decide a younger, cheaper body can do the job. In ${career.year} that's about the only way a player ever changes teams — the club just lets him go.</p>
+        <div class="event-choices">
+          <button class="choice-btn" id="rcSign"><div class="cb-title">Catch on with the ${teamNameAt(landing.id, career.year)} for the minimum</div><div class="cb-sub">A bench job and a chance to keep playing.</div></button>
+          <button class="choice-btn" id="rcRetire"><div class="cb-title">Retire</div><div class="cb-sub">Walk away on his own terms.</div></button>
+        </div>
+      `);
+    document.getElementById("rcSign").addEventListener("click", ()=>{
+      reassignRivalsForTeamChange(career.teamId, landing.id);
+      if(!career.leagueTeamGrades) career.leagueTeamGrades = {};
+      career.leagueTeamGrades[career.teamId] = { oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade };
+      career.teamId = landing.id;
+      career.oline = landing.oline ?? career.oline; career.weapons = landing.weapons ?? career.weapons;
+      career.defense = landing.defense ?? career.defense; career.coaching = landing.coaching ?? career.coaching; career.gmGrade = landing.gmGrade ?? career.gmGrade;
+      career.teamChemistry = 45; career.seasonsWithTeam = 0;
+      recomputeMyTeamStrength();
+      career.contract = { apy: veteranAPY(decade, "minimum"), years: 1, tier: "minimum" };
+      career.transactions.push(`${career.year}: Released by the ${oldTeamName}; signed with the ${teamNameAt(landing.id, career.year)} for the minimum.`);
+      recordLedgerEvent("contract_signed", { teamId: landing.id, choiceId:"reserve-release", outcomeId:"signed", metadata:{ apy: veteranAPY(decade,"minimum"), years:1 } });
+      saveActiveCareer({ phase:"decision", eventId:"reserve_release_sign" });
+      checkInjuryThenPlay();
+    });
+    document.getElementById("rcRetire").addEventListener("click", ()=>{ career.exitReason = "retired"; finishCareer(); });
   }
 
   function renderFAOffers(offers, meta){
@@ -8870,7 +9056,7 @@ import {
         <div class="fa-offer-head"><b><button type="button" class="rival-link" data-team-id="${o.teamId}" data-fa-role="${svgEscape(roleLabel)}">${teamName}</button></b><span class="fa-role">${roleLabel}</span></div>
         <div class="fa-offer-terms tabular">${fmtMoney(o.apy)}/yr · ${o.years} yr${o.years===1?"":"s"}</div>
         <div class="fa-offer-grade">Team grade <b class="tabular">${grade}</b> <span class="fa-grade-tag">${gradeTag}</span></div>
-        <div class="fa-offer-cast">O-Line <b>${castLetterGrade(o.oline)}</b> &nbsp;·&nbsp; Weapons <b>${castLetterGrade(o.weapons)}</b></div>
+        <div class="fa-offer-cast">Rotation <b>${castLetterGrade(o.oline)}</b> &nbsp;·&nbsp; Lineup <b>${castLetterGrade(o.weapons)}</b></div>
         ${o.reason ? `<div class="fa-offer-reason">${svgEscape(o.reason)}</div>` : ""}
         ${agentNote}
         <div class="event-choices">
@@ -9285,7 +9471,8 @@ import {
         }
       }
     }
-    return { aId: m.aId, bId: m.bId, aScore: m.aScore, bScore: m.bScore, winnerId, realRound, aInnings, bInnings };
+    return { aId: m.aId, bId: m.bId, aScore: m.aScore, bScore: m.bScore, winnerId, realRound, aInnings, bInnings,
+      gameNo: Math.max(0, (week||1)-1), playoff:false };
   }
   function weekMatchupTeamLineHTML(teamId, score, won, _qb, year){
     const mine = teamId===career.teamId;
@@ -9406,13 +9593,20 @@ import {
         return `<li class="${mine?"me":""} ${statusClass(t.id)}">${teamNameLinkHtml(t.id, season.year)}${flagsFor(t.id)} <span class="team-ovr">${teamOverall(t.id)} OVR</span><span class="tabular">${recordLine(t.wins, t.losses, t.ties||0)}</span></li>`;
       }).join("") + `</ol>`;
     }
+    // Games back from the division leader: ((lead.w - r.w) + (r.l - lead.l)) / 2.
+    const gamesBack = (r, lead) => {
+      const gb = ((lead.wins - r.wins) + (r.losses - lead.losses)) / 2;
+      return gb <= 0 ? "—" : (Number.isInteger(gb) ? String(gb) : gb.toFixed(1));
+    };
     function divTables(conf){
       return (ls.divisions || divisionsForYear(season.year)).filter(d=>d.conf===conf).map(d=>{
-        const rows = d.teams.map(id=>ls.results[id]).sort((a,b)=>compareTeamsForStandings(a,b,season.year,"division")).map(r=>{
+        const ordered = d.teams.map(id=>ls.results[id]).sort((a,b)=>compareTeamsForStandings(a,b,season.year,"division"));
+        const lead = ordered[0];
+        const rows = ordered.map(r=>{
           const mine = r.id===career.teamId;
-          return `<tr class="${mine?"me":""} ${statusClass(r.id)}"><td class="team-cell">${teamNameLinkHtml(r.id, season.year)}${mine?" (you)":""}${flagsFor(r.id)} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td>${recordLine(r.wins, r.losses, r.ties||0)}</td></tr>`;
+          return `<tr class="${mine?"me":""} ${statusClass(r.id)}"><td class="team-cell">${teamNameLinkHtml(r.id, season.year)}${mine?" (you)":""}${flagsFor(r.id)} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td class="tabular">${recordLine(r.wins, r.losses, r.ties||0)}</td><td class="tabular">${lead?gamesBack(r, lead):"—"}</td></tr>`;
         }).join("");
-        return `<div class="standings-div"><div class="standings-div-name">${confLabel(conf, season.year)} ${d.name}</div><table class="standings-table"><tbody>${rows}</tbody></table></div>`;
+        return `<div class="standings-div"><div class="standings-div-name">${confLabel(conf, season.year)} ${d.name}</div><table class="standings-table"><thead><tr><th></th><th class="tabular">W-L</th><th class="tabular">GB</th></tr></thead><tbody>${rows}</tbody></table></div>`;
       }).join("");
     }
     return `<div class="standings-columns">
@@ -9697,6 +9891,43 @@ import {
         <tbody>${rows}</tbody>
       </table></div>${lineup.pitcherBats?`<div class="calc-refnote" style="margin-top:0.4rem;">Pre-DH era — the pitcher bats ninth.</div>`:""}`;
   }
+  // A team's starting rotation for a season -- DETERMINISTIC and display-only, the pitching sibling
+  // of buildTeamLineup. The sim never models an individual pitcher (opposing run scoring is a team
+  // grade), so this is pure flavor: a named 4/5-man staff so a box score can say who started. Ace
+  // grade tracks the team grade; the rotation steps down from there. Pre-1975 seasons ran a 4-man
+  // rotation, modern seasons a 5-man.
+  function buildTeamRotation(teamId, year){
+    const rand = createSeededRandom(hashSeed("rotation:" + teamId + ":" + year));
+    const grade = Math.round(teamId===career.teamId ? career.teamStrength : (career.leagueStrength[teamId] ?? 60));
+    const size = year < 1975 ? 4 : 5;
+    const used = new Set();
+    const fabName = ()=>{
+      let name;
+      for(let i=0;i<12;i++){
+        name = `${FIRST_NAMES[Math.floor(rand()*FIRST_NAMES.length)]} ${LAST_NAMES[Math.floor(rand()*LAST_NAMES.length)]}`;
+        if(!used.has(name)) break;
+      }
+      used.add(name);
+      return name;
+    };
+    const staff = [];
+    for(let i=0;i<size;i++){
+      const ovr = clamp(Math.round(grade + 6 - i*4 + (rand()*8 - 4)), 28, 96);
+      staff.push({ slot:i+1, name: fabName(), ovr });
+    }
+    return staff;
+  }
+  // Which starter takes the ball. Regular season: the rotation just turns over (game N -> slot
+  // N mod size). Postseason: teams shorten to 3-4 starters and lead with the ace, so game N ->
+  // [ace, 2, 3, 4][N mod 4]. gameNo is 0-based.
+  function startingPitcherFor(teamId, year, gameNo, opts){
+    const staff = buildTeamRotation(teamId, year);
+    if(!staff.length) return null;
+    const idx = (opts && opts.playoff)
+      ? [0,1,2,3][((gameNo||0)%4)] % staff.length
+      : ((gameNo||0) % staff.length);
+    return staff[idx] || staff[0];
+  }
   // One fabricated batter's line for a single game, biased by ovr and lineup slot, drawn from a
   // caller-supplied seeded rand so the box renders identically every time it's opened.
   function fabricateBatterGameLine(ovr, slot, rand){
@@ -9721,6 +9952,7 @@ import {
       if(h.isPitcher) return { ...h, ab:2, h:0, bb:0, hr:0, r:0, rbi:0 };
       return { ...h, r:0, rbi:0, ...fabricateBatterGameLine(h.ovr, h.slot, rand) };
     });
+    if(opts.pitcherName){ const p = rows.find(r=>r.isPitcher); if(p) p.name = opts.pitcherName; }
     const tracked = rows.find(r=>r.isTracked);
     if(tracked){
       if(opts.realBox){
@@ -9814,6 +10046,7 @@ import {
       aInnings: clinchInn ? (meIsA ? clinchInn.my : clinchInn.opp) : null,
       bInnings: clinchInn ? (meIsA ? clinchInn.opp : clinchInn.my) : null,
       realRound: clinchBox ? { box: clinchBox } : null,
+      gameNo: lastIdx, playoff:true,
     };
     return `<div class="modal-box">
         <div class="modal-head"><h3 id="bracketBoxScoreHeading">${svgEscape(roundDisplayLabel(roundLabel, year))}</h3><button type="button" class="modal-close">Close</button></div>
@@ -9854,8 +10087,15 @@ import {
     // Batting boxes -- the tracked hitter's real line goes onto his row where we have one.
     const meIsA = match.aId===career.teamId, meIsB = match.bId===career.teamId;
     const myBox = match.realRound && match.realRound.box;
-    const aRows = buildGameBattingBox(match.aId, year, match.aScore, { key: roundLabel+"a", isMine: meIsA, realBox: meIsA ? myBox : null });
-    const bRows = buildGameBattingBox(match.bId, year, match.bScore, { key: roundLabel+"b", isMine: meIsB, realBox: meIsB ? myBox : null });
+    const PLAYOFF_LABELS = new Set(["Wild Card","Divisional","Conference Championship","Super Bowl"]);
+    const isPlayoff = match.playoff!=null ? match.playoff : PLAYOFF_LABELS.has(roundLabel);
+    const gameNo = match.gameNo!=null ? match.gameNo
+      : (hashSeed("gno:"+match.aId+":"+match.bId+":"+year+":"+roundLabel) % (isPlayoff?4:5));
+    const aSP = startingPitcherFor(match.aId, year, gameNo, { playoff:isPlayoff });
+    const bSP = startingPitcherFor(match.bId, year, gameNo, { playoff:isPlayoff });
+    const spNote = (aSP && bSP) ? `<div class="calc-refnote" style="margin-top:0.4rem;">Starting pitchers: <b>${svgEscape(aSP.name)}</b> (${aName}) vs <b>${svgEscape(bSP.name)}</b> (${bName}).</div>` : "";
+    const aRows = buildGameBattingBox(match.aId, year, match.aScore, { key: roundLabel+"a", isMine: meIsA, realBox: meIsA ? myBox : null, pitcherName: aSP && aSP.name });
+    const bRows = buildGameBattingBox(match.bId, year, match.bScore, { key: roundLabel+"b", isMine: meIsB, realBox: meIsB ? myBox : null, pitcherName: bSP && bSP.name });
 
     const margin = Math.abs(match.aScore-match.bScore);
     const recap = match.winnerId==null ? "Nobody blinked — this one went to extras and stayed level."
@@ -9868,6 +10108,7 @@ import {
             <tr class="${match.winnerId===match.aId?"me":""}"><td>${aName}</td>${innRow(aInn)}<td class="tabular"><b>${match.aScore}</b></td></tr>
             <tr class="${match.winnerId===match.bId?"me":""}"><td>${bName}</td>${innRow(bInn)}<td class="tabular"><b>${match.bScore}</b></td></tr>
           </tbody></table></div>
+        ${spNote}
         ${fillInNote}
         ${battingBoxTableHTML(match.aId, year, aRows)}
         ${battingBoxTableHTML(match.bId, year, bRows)}
@@ -10083,6 +10324,8 @@ import {
     const silverSluggers = rows.filter(r=>r.awards.includes("Silver Slugger"));
     const allMlbSecond = rows.filter(r=>r.awards.includes("All-MLB Second Team"));
     const roy = rows.filter(r=>r.awards.includes("Rookie of the Year"));
+    const hankAaron = rows.filter(r=>r.awards.includes("Hank Aaron Award"));
+    const comeback = rows.filter(r=>r.awards.includes("Comeback Player of the Year"));
 
     const statLine = r => `${r.td} HR · ${r.rbi!=null?r.rbi+" RBI · ":""}${(r.pct||0).toFixed(3).replace(/^0/,"")} AVG · ${Math.round(r.rating)} OPS+`;
     const rowLine = r => `${svgEscape(r.name)}${r.mine?" (you)":""} — ${svgEscape(teamNameAt(r.teamId, year))} — ${statLine(r)}`;
@@ -10116,6 +10359,8 @@ import {
     return `<div class="award-ceremony">
         ${mvpHtml}
         ${roy.length ? listSection("Rookie of the Year", roy) : ""}
+        ${hankAaron.length ? listSection("Hank Aaron Award", hankAaron) : ""}
+        ${comeback.length ? listSection("Comeback Player of the Year", comeback) : ""}
         ${listSection("Silver Slugger", silverSluggers)}
         ${listSection("All-MLB Second Team", allMlbSecond)}
         ${listSection("All-Star", allStars)}
@@ -10359,7 +10604,7 @@ import {
     const log = career.seasonLog;
     const rows = log.slice().reverse().map(s=>`
         <tr><td>${s.year}</td><td class="team-cell">${s.teamName}</td><td>${(s.avg||0).toFixed(3).replace(/^0/,"")}</td><td>${s.hr||s.td||0}</td>
-        <td>${s.rbi||0}</td><td>${s.opsPlus||s.rating||0}</td><td>${s.awards.join(", ")||"—"}</td></tr>`).join("");
+        <td>${s.rbi||0}</td><td>${s.opsPlus||s.rating||0}</td><td>${decorateAwards(s.awards, s).join(", ")||"—"}</td></tr>`).join("");
     return `
       <div class="sparkline-wrap">
         <div id="trendsSparklineHolder"></div>
@@ -10743,7 +10988,7 @@ import {
 
   function renderSeasonCard(season, animate){
     const content = document.getElementById("careerContent");
-    const badges = season.awards.map(a=>`<span class="badge ${/Champion$/.test(a)||a==="MVP"?"gold":"good"}">${a}</span>`).join("");
+    const badges = season.awards.map(a=>`<span class="badge ${/Champion$/.test(a)||a==="MVP"?"gold":"good"}">${awardWithPos(a, season)}</span>`).join("");
     const brokenRecords = checkSeasonRecords(season);
     const recBy = {}; brokenRecords.forEach(r=> recBy[r.key]=r);
     const simBests = checkSimHistoricalBest(season);
@@ -10762,6 +11007,7 @@ import {
     } else if(season.missedGamesBackup>0){
       narratives.push(`Got into ${season.games} game${season.games===1?"":"s"} behind ${svgEscape(season.incumbentName||"the veteran ahead of him")}, who took the other ${season.missedGamesBackup}.`);
     }
+    if(season.positionChangedFrom) narratives.push(`Moved off ${positionLabel(season.positionChangedFrom)} to ${positionLabel(season.position)} this year — the bat still plays, the range doesn't.`);
     if(season.wonStartingJob===true) narratives.push(`Wins the everyday job — the regular at ${positionLabel(career.position)} heading into next season.`);
     else if(season.wonStartingJob===false) narratives.push(`Still on the bench — back to spring training next year to fight for the job again.`);
     if(career.seasonsWithTeam===1 && career.seasonNumber>1) narratives.push(`First season in a new uniform with the ${season.teamName}.`);
@@ -10779,9 +11025,11 @@ import {
     const standingsLine = p.made
       ? `<span class="badge good">Made the playoffs</span> — <b>#${p.seed} seed</b>, ${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}, #${p.confRank} of ${p.confSize} in the conference.`
       : `Missed the playoffs — ${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}, #${p.confRank} of ${p.confSize} in the conference.`;
-    const recordDiffers = (season.wins!==season.teamWins) || (season.losses!==season.teamLosses);
-    const recordNote = recordDiffers
-      ? `<div class="record-note">As the starter you went <b>${recordLine(season.wins, season.losses, season.ties||0)}</b>; the backup went ${recordLine(season.teamWins-season.wins, season.teamLosses-season.losses, (season.teamTies||0)-(season.ties||0))} in relief.</div>`
+    const missedW = (season.teamWins||0)-(season.wins||0), missedL = (season.teamLosses||0)-(season.losses||0);
+    const recordNote = season.debutCallup
+      ? `<div class="record-note">Called up after ${season.debutCallup} game${season.debutCallup===1?"":"s"} in Triple-A — you played <b>${season.games}</b> of the team's ${season.teamGames}, going <b>${recordLine(season.wins, season.losses, season.ties||0)}</b> once you were up.</div>`
+      : (missedW+missedL) >= 3
+      ? `<div class="record-note">With you in the lineup the team went <b>${recordLine(season.wins, season.losses, season.ties||0)}</b>; in the ${missedW+missedL} game${missedW+missedL===1?"":"s"} you missed, ${recordLine(missedW, missedL, (season.teamTies||0)-(season.ties||0))}.</div>`
       : "";
 
     let playoffRoundsHtml = "";
@@ -10833,7 +11081,7 @@ import {
             </div>
           </div>
           <div class="sb-right">
-            <div class="sb-record"><span>Your Record</span>${recordLine(season.wins, season.losses, season.ties||0)}</div>
+            <div class="sb-record"><span>Team Record</span>${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}</div>
           </div>
         </div>
 
@@ -11660,7 +11908,7 @@ import {
     const badgesPanel = document.getElementById("tabpanel-badges");
     if(badgesPanel) badgesPanel.innerHTML = buildAchievementsTabHTML();
     const badgeRow = document.getElementById("badgeRow");
-    if(badgeRow) badgeRow.innerHTML = season.awards.map(a=>`<span class="badge ${/Champion$/.test(a)||a==="MVP"?"gold":"good"}">${a}</span>`).join("");
+    if(badgeRow) badgeRow.innerHTML = season.awards.map(a=>`<span class="badge ${/Champion$/.test(a)||a==="MVP"?"gold":"good"}">${awardWithPos(a, season)}</span>`).join("");
     refreshFrontOfficeWidget();
     const trendsPanel = document.getElementById("tabpanel-trends");
     if(trendsPanel){ trendsPanel.innerHTML = buildTrendsTabHTML(); renderTrendsSparkline(); }
@@ -11943,7 +12191,7 @@ import {
         : `A ${career.slot.label.toLowerCase()} selection in ${career.draftYear} out of ${safeCollege}, ${safeName} climbed the farm system with modest expectations and a chip on his shoulder.`;
     paras.push(originLine);
 
-    const peakLine = `The season people still cite is <b>${peak.year}</b>: ${peak.td} home runs, ${peak.rbi!=null?peak.rbi+' RBI, ':''}a ${(peak.avg!=null?peak.avg:0).toFixed(3).replace(/^0/,'')} average and a ${Math.round(peak.rating)} OPS+ for the ${peak.teamName}${peak.awards.length?` \u2014 the year he ${/MVP/.test(peak.awards.join(' '))?'ran away with the MVP':'earned '+peak.awards.slice(0,2).join(' and ')}`:''}. It's the year that told the league who he really was.`;
+    const peakLine = `The season people still cite is <b>${peak.year}</b>: ${peak.td} home runs, ${peak.rbi!=null?peak.rbi+' RBI, ':''}a ${(peak.avg!=null?peak.avg:0).toFixed(3).replace(/^0/,'')} average and a ${Math.round(peak.rating)} OPS+ for the ${peak.teamName}${peak.awards.length?` \u2014 the year he ${/MVP/.test(peak.awards.join(' '))?'ran away with the MVP':'earned '+decorateAwards(peak.awards.slice(0,2), peak).join(' and ')}`:''}. It's the year that told the league who he really was.`;
     paras.push(peakLine);
 
     if(t.rings>0){
@@ -12155,15 +12403,15 @@ import {
 
     const table = document.getElementById("careerTable");
     const avg3 = v => (v==null?0:v).toFixed(3).replace(/^0\./, ".");
-    table.innerHTML = `<thead><tr><th>Year</th><th>Age</th><th>Team</th><th>G</th><th>PA</th><th>H/AB</th><th>AVG</th><th>TB</th><th>HR</th><th>K</th><th>OPS+</th><th>SB</th><th>Team Rec</th><th>Playoffs</th><th>Pay</th><th>Awards</th></tr></thead>
+    table.innerHTML = `<thead><tr><th>Year</th><th>Age</th><th>Team</th><th>Pos</th><th>G</th><th>PA</th><th>H/AB</th><th>AVG</th><th>TB</th><th>HR</th><th>K</th><th>OPS+</th><th>SB</th><th>Team Rec</th><th>Playoffs</th><th>Pay</th><th>Awards</th></tr></thead>
       <tbody>${career.seasonLog.map(s=>`<tr>
-        <td>${s.year}</td><td>${s.age}</td><td class="team-cell">${s.teamName}</td><td>${s.games}</td>
+        <td>${s.year}</td><td>${s.age}</td><td class="team-cell">${s.teamName}</td><td>${s.position || career.position}</td><td>${s.games}</td>
         <td>${s.pa ?? s.att}</td><td>${(s.hits ?? s.comp)}/${s.ab ?? "—"}</td><td>${avg3(s.avg ?? s.pct)}</td><td>${s.yards.toLocaleString()}</td>
         <td>${s.td}</td><td>${s.int}</td><td>${s.rating}</td>
         <td>${s.rushAtt>0 ? (s.sb ?? s.rushYards).toLocaleString() : "—"}</td>
         <td>${recordLine(s.teamWins, s.teamLosses, s.teamTies||0)}</td>
         <td>${s.playoffs.made ? "Seed #"+s.playoffs.seed+(s.playoffs.wonRing?" — Champs":"") : "Missed"}</td>
-        <td>${fmtMoney(s.contractApy)}</td><td>${s.awards.join(", ")||"—"}</td>
+        <td>${fmtMoney(s.contractApy)}</td><td>${decorateAwards(s.awards, s).join(", ")||"—"}</td>
       </tr>`).join("")}</tbody>`;
 
     showScreen("careerSummary");
@@ -12581,101 +12829,100 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
     };
     const asPct1 = x=>fmtPct(x), asPct2 = x=>(x*100).toFixed(2)+"%", asNum1 = x=>x.toFixed(1);
 
-    const compCard = rateCard("Completion %", fmtPct(d.comp), asPct1, d.league.comp, "leagueComp", d.effAcc, d.neutralAcc, d.cal.comp, "+", d.W.acc, d.eff, d.neutral);
-    const ypaCard = rateCard("Yards / Attempt", d.ypa.toFixed(2), asNum1, d.league.ypa, "leagueY/A", d.effYpa, d.neutralYpa, d.cal.ypa, "+", d.W.ypa, d.eff, d.neutral);
-    const tdRateCard = rateCard("TD Rate (per attempt)", (d.tdRate*100).toFixed(2)+"%", asPct2, d.league.tdRate, "leagueTdRate", d.effTd, d.neutralTd, d.cal.td, "+", d.W.td, d.eff, d.neutral);
-    const intRateCard = rateCard("INT Rate (per attempt)", (d.intRate*100).toFixed(2)+"%", asPct2, d.league.intRate, "leagueIntRate", d.effInt, d.neutralInt, d.cal.int, "−", d.W.int, d.eff, d.neutral);
+    const compCard = rateCard("Batting Average (AVG)", fmtPct(d.comp), asPct1, d.league.comp, "leagueAVG", d.effAcc, d.neutralAcc, d.cal.comp, "+", d.W.acc, d.eff, d.neutral);
+    const ypaCard = rateCard("Isolated Power (ISO, extra bases / PA)", d.ypa.toFixed(2), asNum1, d.league.ypa, "leagueISO", d.effYpa, d.neutralYpa, d.cal.ypa, "+", d.W.ypa, d.eff, d.neutral);
+    const tdRateCard = rateCard("Home Run Rate (per PA)", (d.tdRate*100).toFixed(2)+"%", asPct2, d.league.tdRate, "leagueHRrate", d.effTd, d.neutralTd, d.cal.td, "+", d.W.td, d.eff, d.neutral);
+    const intRateCard = rateCard("Strikeout Rate (per PA)", (d.intRate*100).toFixed(2)+"%", asPct2, d.league.intRate, "leagueKrate", d.effInt, d.neutralInt, d.cal.int, "−", d.W.int, d.eff, d.neutral);
 
-    const attCard = card("Attempts / Game", d.attPerGame.toFixed(1),
+    const attCard = card("Plate Appearances / Game", d.attPerGame.toFixed(1),
       [
         weightedLine(d.eff, OVERALL_WEIGHTS, "effOverall (you, this season)"),
         weightedLine(d.neutral, OVERALL_WEIGHTS, "neutralOverall (flat-65 baseline)"),
         "",
-        `Att/Game = clamp((leagueAtt/G − ΔMOB×0.05 + (effOverall−neutralOverall)×primeMult×0.06 ± noise) × roleShare, 4, 48)`,
-        `         = clamp((${d.league.attPerGame} − (${d.eff.MOB.toFixed(0)}−${d.neutral.MOB.toFixed(0)})×0.05 + (${d.effOverall.toFixed(1)}−${d.neutralOverall.toFixed(1)})×${d.primeMult.toFixed(2)}×0.06 ± up to 2) × ${d.roleShare.toFixed(2)}, 4, 48)`,
-        `         = ${d.attPerGame.toFixed(1)} (shown here without the ±2 per-season noise the real sim adds)`,
+        `PA/Game = clamp((leaguePA/G + (effOverall−neutralOverall)×0.010 ± noise) × roleShare, 2.4, 4.9)`,
+        `        = clamp((${d.league.attPerGame} + (${d.effOverall.toFixed(1)}−${d.neutralOverall.toFixed(1)})×0.010 ± up to 0.12) × ${d.roleShare.toFixed(2)}, 2.4, 4.9)`,
+        `        = ${d.attPerGame.toFixed(1)} (shown here without the small per-season noise the real sim adds)`,
         "",
         (career.contract.tier!=="minimum" && career.contract.tier!=="backup")
-          ? `Role share: full starter (contract tier "${career.contract.tier}") = 1.00`
+          ? `Role share: everyday player (contract tier "${career.contract.tier}") = 1.00`
           : `Role share: contract tier "${career.contract.tier}" rolls a FRESH random value in [${d.roleShareRange[0].toFixed(2)}, ${d.roleShareRange[1].toFixed(2)}] every season -- ${d.roleShare.toFixed(2)} shown here is just that range's midpoint.`,
       ]);
 
-    const ratingCard = card("Passer Rating (expected, full season)", d.expRating.toFixed(1),
+    const ratingCard = card("OPS+ (expected, full season)", d.expRating.toFixed(1),
       [
         `Over an expected ${d.expGames}-game healthy season at the rates above:`,
-        `  Attempts ≈ ${d.expAttempts}, Completions ≈ ${d.expComp}, Yards ≈ ${d.expYards.toLocaleString()}, TD ≈ ${d.expTd}, INT ≈ ${d.expInt}`,
+        `  PA ≈ ${d.expAttempts}, Hits ≈ ${d.expComp}, Total Bases ≈ ${d.expYards.toLocaleString()}, HR ≈ ${d.expTd}, K ≈ ${d.expInt}`,
         "",
-        "Standard NFL formula, each of 4 components clamped to [0, 2.375]:",
-        `  a = clamp((comp/att − 0.3) × 5)       = ${clamp(((d.expComp/d.expAttempts)-0.3)*5,0,2.375).toFixed(3)}`,
-        `  b = clamp((yards/att − 3) × 0.25)     = ${clamp(((d.expYards/d.expAttempts)-3)*0.25,0,2.375).toFixed(3)}`,
-        `  c = clamp((td/att) × 20)              = ${clamp((d.expTd/d.expAttempts)*20,0,2.375).toFixed(3)}`,
-        `  d = clamp(2.375 − (int/att) × 25)     = ${clamp(2.375-((d.expInt/d.expAttempts)*25),0,2.375).toFixed(3)}`,
-        `  Rating = (a+b+c+d)/6 × 100             = ${d.expRating.toFixed(1)}`,
+        "OPS+ = (OBP / lgOBP + SLG / lgSLG − 1) × 100, with lgOBP 0.328 and lgSLG 0.410:",
+        `  AB    ≈ PA − BB − HBP − SF                = ${Math.max(1, Math.round(d.expAttempts - d.expAttempts*0.085 - d.expAttempts*0.009 - d.expAttempts*0.006))}`,
+        `  OBP   = (H + BB + HBP) / (AB + BB + HBP + SF)`,
+        `  SLG   = Total Bases / AB`,
+        `  100 = exactly league average; 150 = 50% better than league at getting on base and slugging, park/era-adjusted.`,
+        `  OPS+ ≈ ${d.expRating.toFixed(1)}`,
       ]);
 
-    const rushCard = card("Rushing (Att/Game, Yds/Carry, TD Rate)",
-      `${d.rushAttPerGame.toFixed(1)} att · ${d.rushYpc.toFixed(2)} ypc · ${(d.rushTdRate*100).toFixed(2)}% TD`,
+    const rushCard = card("Baserunning (SB Att/Game, SB Success Rate)",
+      `${d.rushAttPerGame.toFixed(2)} att/G · ${(d.rushYpc*100).toFixed(0)}% success`,
       [
-        weightedLine(d.eff, d.W.rush, "effRush"),
+        weightedLine(d.eff, d.W.rush, "effRush (stolen-base signal)"),
         "",
-        `Rush Att/Game = clamp((effRush − 45) × 0.14, 0.2, 9.5)          = ${d.rushAttPerGame.toFixed(2)}`,
-        `Rush Yds/Carry = clamp(3.4 + (effRush − 55) × 0.045, 1.8, 7.8)   = ${d.rushYpc.toFixed(2)}`,
-        `Rush TD Rate = clamp(0.018 + (effRush − 55) × 0.0006, ...)      = ${(d.rushTdRate*100).toFixed(2)}%`,
-        `Over ${d.expGames} games ≈ ${d.expRushAtt} carries, ${d.expRushYards.toLocaleString()} yards, ${d.expRushTd} TD`,
+        `SB Att/Game   = clamp((effRush − 58) × 0.010, 0, 0.9)             = ${d.rushAttPerGame.toFixed(2)}`,
+        `SB Success %   = clamp(0.62 + (effRush − 60) × 0.006, 0.45, 0.92)  = ${(d.rushYpc*100).toFixed(0)}%`,
+        `Over ${d.expGames} games ≈ ${d.expRushAtt} attempts, ${d.expRushYards.toLocaleString()} steals`,
       ]);
 
-    const sackCard = card("Sacks Taken", `${d.expSacks} / season`,
+    const sackCard = card("Grounded Into Double Play (GIDP)", `${d.expSacks} / season`,
       [
-        `SackRate = clamp(0.075 − (PKT−neutralPKT)×0.0012 − (teamGrade−65)×0.0004, 1.5%, 16%)`,
-        `         = ${(d.sackRate*100).toFixed(2)}% per dropback`,
-        `Over ${d.expGames} games and ${d.expAttempts} attempts ≈ ${d.expSacks} sacks taken`,
-        `Driven by pocket presence (individually) and team quality (o-line) -- a good pocket passer on a good team gets sacked well below league-average; a statue on a bad line gets sacked a lot more.`,
+        `GIDPRate = clamp(0.022 − (effRush−60)×0.00035, 0.4%, 5%)   (the real sim adds a small bump for a high-ISO ground-ball bat)`,
+        `         = ${(d.sackRate*100).toFixed(2)}% per PA`,
+        `Over ${d.expGames} games and ${d.expAttempts} PA ≈ ${d.expSacks} double plays grounded into`,
+        `A slow, ground-ball-prone hitter rolls into more; a fast one beats the throw and stays out of them.`,
       ]);
 
     const winCard = card("Win Probability (per game)", fmtPct(d.winProb),
       [
-        `Each game is now simulated individually against that WEEK'S actual opponent grade (simulateGameScore, the same engine the playoffs use) instead of one flat season-long roll -- so a soft schedule and a brutal one produce visibly different records for the same build.`,
-        `Offensive grade is now BLENDED with team quality, not just nudged by it: myOff = teamGrade + (effOverall−teamGrade)×${QB_INFLUENCE_REGULAR} + (Clutch−65)×0.03 = ${d.myOff.toFixed(2)} -- a QB whose personal grade diverges sharply from the team around him gets pulled hard toward that team's level, in EITHER direction.`,
+        `Each game is simulated individually against that DAY'S actual opponent grade (simulateGameScore, the same engine the playoffs use) instead of one flat season-long roll -- so a soft stretch of the schedule and a brutal one produce visibly different records for the same build.`,
+        `Your lineup's offensive grade is BLENDED with team quality, not just nudged by it: myOff = teamGrade + (effOverall−teamGrade)×${QB_INFLUENCE_REGULAR} + (Clutch−65)×0.03 = ${d.myOff.toFixed(2)} -- one hitter whose personal grade diverges sharply from the club around him gets pulled hard toward that club's level, in EITHER direction (it's still eight other bats and a pitching staff).`,
         `Shown here vs. a league-average (grade 65) opponent: WinProb ≈ clamp(0.5 + (myOff−oppGrade)×0.012, 6%, 94%)`,
-        `        = clamp(0.5 + (${d.myOff.toFixed(1)}−65)×0.012, ...) = ${fmtPct(d.winProb)} vs. an average opponent this season`,
-        `A genuinely better opponent (higher grade) meaningfully lowers this game's odds, and vice versa -- see the Season tab for the real week-by-week schedule and results.`,
+        `        = clamp(0.5 + (${d.myOff.toFixed(1)}−65)×0.012, ...) = ${fmtPct(d.winProb)} vs. an average opponent`,
+        `A genuinely better opponent (higher grade) meaningfully lowers this game's odds, and vice versa -- see the Season tab for the real series-by-series schedule and results.`,
       ]);
 
     function gateLine(ok, text){ return `<div class="calc-gate ${ok?"pass":"fail"}">${ok?"✓":"✗"} ${svgEscape(text)}</div>`; }
 
-    const awardsIntro = `<div class="calc-refnote">All three season awards are judged on what actually happened -- passer rating vs. that year's league average (ratingEdge), TD production, wins ABOVE what this team's own preseason grade already predicted (winsAboveExpectation -- Balance Wave 5, replacing raw win% so a stacked roster's own expected win total no longer inflates the score by itself), and (for Pro Bowl/All-Pro) how much of the season was actually played -- never on the underlying attribute grade. This preview assumes a full healthy season, so the games-played gates always read ✓ here; a real season that misses a big chunk of games fails them and the award becomes unreachable no matter how good the per-game numbers were.</div>`;
+    const awardsIntro = `<div class="calc-refnote">All three season awards are judged on what actually happened -- OPS+ vs. that year's league average (ratingEdge), home-run production, wins ABOVE what this team's own preseason grade already predicted (winsAboveExpectation -- Balance Wave 5, replacing raw win% so a stacked roster's own expected win total no longer inflates the score by itself), and (for All-Star/Silver Slugger) how much of the season was actually played -- never on the underlying attribute grade. This preview assumes a full healthy season, so the games-played gates always read ✓ here; a real season that misses a big chunk of games fails them and the award becomes unreachable no matter how good the per-PA numbers were.</div>`;
 
-    const pbCard = card("Pro Bowl Score", d.proBowlScore.toFixed(2),
+    const pbCard = card("All-Star Score", d.proBowlScore.toFixed(2),
       [
-        `ratingEdge = expectedRating − leagueAvgRating = ${d.expRating.toFixed(1)} − ${d.leagueAvgRating.toFixed(1)} = ${d.ratingEdge.toFixed(1)}`,
+        `ratingEdge = expectedOPS+ − leagueAvgOPS+ = ${d.expRating.toFixed(1)} − ${d.leagueAvgRating.toFixed(1)} = ${d.ratingEdge.toFixed(1)}`,
         `expectedWinPct(teamOverall=${career.teamStrength}) = clamp(0.5 + (teamOverall−65)×0.011, 15%, 85%) = ${fmtPct(d.expectedWinPct)}`,
         `winsAboveExpectation = clamp(winPct − expectedWinPct, −0.5, 0.5) = clamp(${d.winProb.toFixed(2)} − ${d.expectedWinPct.toFixed(2)}, ...) = ${d.winsAboveExpectation.toFixed(2)}`,
-        `score = ratingEdge×0.6 + max(0, TD−16)×0.45 + winsAboveExpectation×10`,
+        `score = ratingEdge×0.6 + max(0, HR−16)×0.45 + winsAboveExpectation×10`,
         `      = ${d.ratingEdge.toFixed(1)}×0.6 + max(0, ${d.expTd}−16)×0.45 + ${d.winsAboveExpectation.toFixed(2)}×10 = ${d.proBowlScore.toFixed(2)}`,
-        `Pro Bowl is no longer an independent per-QB roll -- the top scorers in each conference make it (2/conf through the 1980s, 3/conf from the 1990s on, with an extra qualifying 3rd spot possible pre-1990), decided once every other league QB's season is locked in.`,
+        `The All-Star team is no longer an independent per-hitter roll -- the top scorers in each league make it (2/league through the 1980s, 3/league from the 1990s on, with an extra qualifying 3rd spot possible pre-1990), decided once every other league hitter's season is locked in.`,
       ],
-      gateLine(d.expAttempts>200, `attempts > 200 (${d.expAttempts})`) +
+      gateLine(d.expAttempts>200, `PA > 200 (${d.expAttempts})`) +
       gateLine(true, `played ≥ 65% of games (this preview assumes a full healthy season)`) +
-      gateLine(d.proBowlEligible, `proBowlEligible (production's real gate — playing time only, no rating bar)`));
+      gateLine(d.proBowlEligible, `All-Star eligible (production's real gate — playing time only, no OPS+ bar)`));
 
-    const apCard = card("All-Pro Score", d.allProScore.toFixed(2),
+    const apCard = card("Silver Slugger Score", d.allProScore.toFixed(2),
       [
-        `score = ratingEdge×0.75 + max(0, TD−22)×0.55 + winsAboveExpectation×18`,
+        `score = ratingEdge×0.75 + max(0, HR−22)×0.55 + winsAboveExpectation×18`,
         `      = ${d.ratingEdge.toFixed(1)}×0.75 + max(0, ${d.expTd}−22)×0.55 + ${d.winsAboveExpectation.toFixed(2)}×18 = ${d.allProScore.toFixed(2)}`,
-        `All-Pro is no longer an independent per-QB roll -- exactly 1 First-Team and 1 Second-Team All-Pro are named league-wide, the two highest scores across the player and every simulated rival this season.`,
+        `Silver Slugger is no longer an independent per-hitter roll -- exactly 1 Silver Slugger and 1 All-MLB Second Team are named league-wide, the two highest scores across the player and every simulated rival this season (the position the winner played is shown alongside the award).`,
       ],
-      gateLine(d.expAttempts>250, `attempts > 250 (${d.expAttempts})`) +
+      gateLine(d.expAttempts>250, `PA > 250 (${d.expAttempts})`) +
       gateLine(true, `played ≥ 80% of games (this preview assumes a full healthy season)`) +
-      gateLine(d.allProEligible, `allProEligible (production's real gate — playing time only, no rating bar)`));
+      gateLine(d.allProEligible, `Silver Slugger eligible (production's real gate — playing time only, no OPS+ bar)`));
 
     const mvpCard = card("MVP Score", d.mvpScore.toFixed(1),
       [
         `Balance Wave 5: MVP is a 5-component weighted composite, per the balance brief's own explicit split -- 45% era-relative efficiency, 20% volume, 20% wins above expectation, 10% availability, 5% narrative (an outright winning record, distinct from whether it was "expected").`,
-        `score = [clamp(ratingEdge/15,±2)×0.45 + clamp((TD−20)/8,±2)×0.20 + clamp(winsAboveExpectation×8,±2)×0.20 + clamp((gamesShare−0.85)×4,−2,1)×0.10 + clamp((winPct−0.5)×3,±1.5)×0.05] × 16`,
+        `score = [clamp(ratingEdge/15,±2)×0.45 + clamp((HR−20)/8,±2)×0.20 + clamp(winsAboveExpectation×8,±2)×0.20 + clamp((gamesShare−0.85)×4,−2,1)×0.10 + clamp((winPct−0.5)×3,±1.5)×0.05] × 16`,
         `      = [${clamp(d.ratingEdge/15,-2,2).toFixed(2)}×0.45 + ${clamp((d.expTd-20)/8,-2,2).toFixed(2)}×0.20 + ${clamp(d.winsAboveExpectation*8,-2,2).toFixed(2)}×0.20 + ${clamp((d.gamesPlayedShare-0.85)*4,-2,1).toFixed(2)}×0.10 + ${clamp((d.winProb-0.5)*3,-1.5,1.5).toFixed(2)}×0.05] × 16 = ${d.mvpScore.toFixed(2)}`,
-        `MVP is no longer an independent per-QB roll -- this score is compared against every other starting QB in the league at season's end, and whoever's highest wins it outright (a genuine tie produces co-MVPs).`,
+        `MVP is no longer an independent per-hitter roll -- this score is compared against every other regular in the league at season's end, and whoever's highest wins it outright (a genuine tie produces co-MVPs).`,
       ],
-      gateLine(d.expAttempts>150, `attempts > 150 (${d.expAttempts})`) +
+      gateLine(d.expAttempts>150, `PA > 150 (${d.expAttempts})`) +
       gateLine(true, `played ≥ 50% of games (this preview assumes a full healthy season)`));
 
     return `
@@ -12684,10 +12931,10 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
       ${devCard}
       <div class="calc-group"><div class="calc-group-head">League Baseline by Decade</div>${refTable}</div>
       <div class="calc-group"><div class="calc-group-head">Age & Scheme</div>${primeCard}</div>
-      <div class="calc-group"><div class="calc-group-head">Passing Rates</div>${compCard}${ypaCard}${tdRateCard}${intRateCard}${attCard}</div>
-      <div class="calc-group"><div class="calc-group-head">Passer Rating</div>${ratingCard}</div>
-      <div class="calc-group"><div class="calc-group-head">Rushing</div>${rushCard}</div>
-      <div class="calc-group"><div class="calc-group-head">Sacks</div>${sackCard}</div>
+      <div class="calc-group"><div class="calc-group-head">Hitting Rates</div>${compCard}${ypaCard}${tdRateCard}${intRateCard}${attCard}</div>
+      <div class="calc-group"><div class="calc-group-head">OPS+</div>${ratingCard}</div>
+      <div class="calc-group"><div class="calc-group-head">Baserunning</div>${rushCard}</div>
+      <div class="calc-group"><div class="calc-group-head">Double Plays</div>${sackCard}</div>
       <div class="calc-group"><div class="calc-group-head">Team Success</div>${winCard}</div>
       <div class="calc-group"><div class="calc-group-head">Season Awards</div>${awardsIntro}${pbCard}${apCard}${mvpCard}</div>`;
   }
