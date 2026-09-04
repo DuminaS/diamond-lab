@@ -3478,9 +3478,10 @@ import {
     bbRate = bbRate || 0.08;
     const mySlots = schedule.weeks
       .map((pairs, wIdx)=>{
-        const pair = pairs.find(([a,b])=>a===career.teamId || b===career.teamId);
+        const pair = pairs.find(g=>g.a===career.teamId || g.b===career.teamId);
         if(!pair) return null;
-        return { week: wIdx+1, opponentId: pair[0]===career.teamId ? pair[1] : pair[0] };
+        return { week: wIdx+1, opponentId: pair.a===career.teamId ? pair.b : pair.a,
+          seriesId: pair.seriesId, gameInSeries: pair.gameInSeries, seriesLen: pair.seriesLen };
       })
       .filter(Boolean);
     // Normally mySlots.length===schedule.gamesN exactly; clamp against it anyway so the rare
@@ -3531,7 +3532,8 @@ import {
         // incumbent's real stat line gets distributed onto exactly these tagged weeks once
         // simulateRivalSeasons actually simulates him, later this same generateSeason() call (see
         // applyStatLineToGames there).
-        games.push({ week: slot.week, opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
+        games.push({ week: slot.week, seriesId: slot.seriesId, gameInSeries: slot.gameInSeries, seriesLen: slot.seriesLen,
+          opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
           opponentGrade: Math.round(oppGrade), opponentQbId: oppRival?oppRival.id:null,
           opponentQbName: oppRival?oppRival.name:null, opponentQbOverall: oppRival?rivalEffTalent(oppRival):null,
           won: isTie?null:won, tie: isTie, myScore: isTie?winnerScore:(won?winnerScore:loserScore), oppScore: isTie?loserScore:(won?loserScore:winnerScore),
@@ -3573,7 +3575,8 @@ import {
       tComp+=gComp; tAtt+=gAtt; tYards+=gYards; tTd+=gTd; tInt+=gInt; tSacks+=gSacks; tBb+=gBb;
       tRushAtt+=gRushAtt; tRushYards+=gRushYards; tRushTd+=gRushTd;
 
-      games.push({ week: slot.week, opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
+      games.push({ week: slot.week, seriesId: slot.seriesId, gameInSeries: slot.gameInSeries, seriesLen: slot.seriesLen,
+        opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
         opponentGrade: Math.round(oppGrade),
         opponentQbId: oppRival ? oppRival.id : null,
         opponentQbName: oppRival ? oppRival.name : null,
@@ -3777,101 +3780,56 @@ import {
   // teams, 0 placement failures, and division games landing roughly evenly across every week of a
   // 32-team/17-game season instead of bunched at the front.
   // Real bye weeks were introduced league-wide in 1990 -- before that, every team played every
-  // single week of the season with no week off (season weeks === games, no slack). From 1990
-  // onward each team gets exactly one bye, so the calendar runs one week longer than the game
-  // count. An ODD number of teams (only possible during a mid-decade expansion year) makes at
-  // least one team's bye mathematically unavoidable every single week regardless of era, so that
-  // case always gets extra slack weeks even in a pre-bye decade -- 2 extra rather than 1, since
-  // the underlying greedy scheduler (see scheduleGamesIntoWeeks) is noticeably more likely to
-  // leave a team a game short of gamesN with only 1 spare week to work with when the team count
-  // doesn't divide evenly; validated via schedule_bye_sweep.mjs (odd-count shortfall dropped from
-  // ~2.8 teams/season at 1 spare week to ~0.7 teams/season at 2).
-  function weeksForSeason(decade, teamCount){
-    const gamesN = LEAGUE[decade].games;
-    const byeEra = decade!=="1960s" && decade!=="1970s" && decade!=="1980s";
-    let weeks = byeEra ? gamesN+1 : gamesN;
-    if(teamCount % 2 !== 0) weeks = Math.max(weeks, gamesN+2);
-    return weeks;
-  }
-  // weeksN is now independent of gamesN (see weeksForSeason) -- a team can go multiple weeks
-  // without playing (a real bye, or just bad luck in the greedy fill below), it just needs to reach
-  // exactly gamesN total games by the end of weeksN weeks. Two-team-double-booking is still
-  // structurally impossible (tryPlaceInWeek always checks both teams are free that week first).
-  function scheduleGamesIntoWeeks(divs, allIds, gamesN, weeksN){
-    const remaining = {}; allIds.forEach(id=>{ remaining[id] = gamesN; });
-    const weeks = Array.from({length: weeksN}, ()=>[]);
-    const usedThisWeek = Array.from({length: weeksN}, ()=>new Set());
-    function tryPlaceInWeek(w, a, b){
-      if(usedThisWeek[w].has(a) || usedThisWeek[w].has(b)) return false;
-      weeks[w].push([a,b]);
-      usedThisWeek[w].add(a); usedThisWeek[w].add(b);
-      remaining[a]--; remaining[b]--;
-      return true;
-    }
-    function placeGameInHalf(a, b, half){
-      let guard = 0;
-      while(guard++<50){
-        if(remaining[a]<=0 || remaining[b]<=0) return false;
-        const w = half[0] + Math.floor(Math.random()*(half[1]-half[0]));
-        if(tryPlaceInWeek(w, a, b)) return true;
+  // Phase 13b: the round-based series scheduler (scheduleGamesIntoWeeks, below) sizes the calendar
+  // itself -- weeksN is now just weeks.length. Every team plays every round, so game counts land
+  // exactly on gamesN with no repair pass needed.
+  // Baseball is played in SERIES -- 2-4 consecutive games vs the same opponent. This builds the
+  // calendar in ROUNDS: every round, all teams pair off and each pair plays a 2-4-game series in
+  // the same block of calendar slots. Because every team plays every round, all game counts stay
+  // in lockstep and land exactly on gamesN. Each game is tagged { seriesId, gameInSeries,
+  // seriesLen }; the rest of the engine still reads a flat per-game list, only the schedule tab
+  // groups by seriesId. `weeksN` (the input calendar length) is now advisory -- the real length
+  // is however many slots the rounds fill (see buildSeasonSchedule).
+  function scheduleGamesIntoWeeks(divs, allIds, gamesN /*, weeksN */){
+    const divOf = {}; divs.forEach(d=> d.teams.forEach(id=> divOf[id]=d));
+    const weeks = [];
+    const played = {}; allIds.forEach(id=> played[id]=0);
+    let nextSeriesId = 1, cursor = 0, guard = 0;
+    const need = id => gamesN - played[id];
+    while(Math.max(...allIds.map(need)) > 0 && guard++ < 800){
+      // Most-behind teams first, and paired with each other -- keeps everyone converging on gamesN
+      // together (a team that keeps drawing short series would otherwise fall behind and strand).
+      const pool = allIds.filter(id=> need(id) > 0).sort((a,b)=> need(b) - need(a));
+      if(pool.length < 2) break;
+      const taken = new Set();
+      const pairs = [];
+      for(const a of pool){
+        if(taken.has(a)) continue;
+        let cands = pool.filter(b=> b!==a && !taken.has(b));
+        if(!cands.length) continue;
+        // among the most-behind available, prefer a same-league opponent
+        const front = cands.slice(0, Math.max(2, Math.ceil(cands.length/3)));
+        const sameConf = front.filter(b=> divOf[b] && divOf[a] && divOf[b].conf===divOf[a].conf);
+        const b = (sameConf.length && Math.random()<0.75) ? pick(sameConf) : pick(front);
+        taken.add(a); taken.add(b);
+        pairs.push([a,b]);
       }
-      for(let w=half[0]; w<half[1]; w++){ if(remaining[a]>0 && remaining[b]>0 && tryPlaceInWeek(w,a,b)) return true; }
-      for(let w=0; w<weeksN; w++){ if(remaining[a]>0 && remaining[b]>0 && tryPlaceInWeek(w,a,b)) return true; }
-      return false;
-    }
-    const mid = Math.floor(weeksN/2);
-    divs.forEach(d=>{
-      for(let i=0;i<d.teams.length;i++){
-        for(let j=i+1;j<d.teams.length;j++){
-          placeGameInHalf(d.teams[i], d.teams[j], [0, mid || 1]);
-          placeGameInHalf(d.teams[i], d.teams[j], [mid, weeksN]);
+      if(!pairs.length) break;
+      let roundLen = 1;
+      for(const [a,b] of pairs){
+        const cap = Math.min(need(a), need(b));
+        if(cap <= 0) continue;
+        const len = Math.min(pick([2,3,3,3,3,4]), cap);
+        const sid = nextSeriesId++;
+        for(let k=0;k<len;k++){
+          const wi = cursor + k;
+          while(weeks.length <= wi) weeks.push([]);
+          weeks[wi].push({ a, b, seriesId: sid, gameInSeries: k+1, seriesLen: len });
         }
+        played[a]+=len; played[b]+=len;
+        roundLen = Math.max(roundLen, len);
       }
-    });
-    // remaining slate (cross-division/filler): same flat greedy-per-week matching as before,
-    // just with no division-rival preference bias left to apply -- those are already placed above.
-    // A team left over some week (odd pool size, or everyone else already used) simply sits that
-    // week -- a real bye -- and gets another shot at a partner in a later week instead of ever
-    // being double-booked.
-    for(let w=0; w<weeksN; w++){
-      const pool = shuffle(allIds.filter(id=> remaining[id]>0 && !usedThisWeek[w].has(id)));
-      pool.forEach(a=>{
-        if(usedThisWeek[w].has(a) || remaining[a]<=0) return;
-        const cands = pool.filter(id=> id!==a && !usedThisWeek[w].has(id) && remaining[id]>0);
-        if(cands.length) tryPlaceInWeek(w, a, pick(cands));
-      });
-    }
-    // Repair pass: the greedy fill above can still leave a handful of teams short of gamesN (each
-    // one's remaining free weeks just never lined up with another short team's free weeks in the
-    // same single pass). Re-scan every still-short team against every OTHER still-short team, in
-    // full passes, until a whole pass places nothing new -- this must retry ALL leftover teams each
-    // pass, not just re-attempt the same first one repeatedly (an earlier version of this loop did
-    // exactly that: it picked leftover[0] and, on failure, dropped it for the rest of ITS OWN pass
-    // but then reintroduced it unchanged at the top of the very next pass, so a single unfixable
-    // team could burn the entire retry budget forever while other, actually-fixable teams next to
-    // it in the list never got a turn -- confirmed and fixed via schedule_bye_sweep.mjs, which
-    // showed near-zero improvement from more retries until this was corrected).
-    let changed = true, guard2 = 0;
-    while(changed && guard2++<200){
-      changed = false;
-      const leftover = allIds.filter(id=>remaining[id]>0);
-      for(let i=0;i<leftover.length;i++){
-        const a = leftover[i];
-        if(remaining[a]<=0) continue;
-        for(let j=0;j<leftover.length;j++){
-          const b = leftover[j];
-          if(b===a || remaining[b]<=0) continue;
-          let placed = false;
-          for(let w=0; w<weeksN; w++){
-            if(!usedThisWeek[w].has(a) && !usedThisWeek[w].has(b)){
-              tryPlaceInWeek(w,a,b);
-              placed = true; changed = true;
-              break;
-            }
-          }
-          if(placed) break;
-        }
-      }
+      cursor += roundLen; // shorter series in this round get an off-slot; next round starts clean
     }
     return weeks;
   }
@@ -3885,9 +3843,8 @@ import {
     const divs = divisionsForYear(year);
     const allIds = divs.flatMap(d=>d.teams);
     const gamesN = LEAGUE[decade].games;
-    const weeksN = weeksForSeason(decade, allIds.length);
-    const weeks = scheduleGamesIntoWeeks(divs, allIds, gamesN, weeksN);
-    return { divs, allIds, gamesN, weeksN, weeks };
+    const weeks = scheduleGamesIntoWeeks(divs, allIds, gamesN);
+    return { divs, allIds, gamesN, weeksN: weeks.length, weeks };
   }
 
   // `schedule` is the SAME weeks array (see buildSeasonSchedule) that already decided the player's
@@ -3913,7 +3870,9 @@ import {
     const tieProb = tieProbability(season.year);
     schedule.weeks.forEach((weekPairs, weekIdx)=>{
       const week = weekIdx+1;
-      weekPairs.forEach(([a,b])=>{
+      weekPairs.forEach(pr=>{
+        const a = pr.a, b = pr.b;
+        const seriesTag = { seriesId: pr.seriesId, gameInSeries: pr.gameInSeries, seriesLen: pr.seriesLen };
         const myId = a===career.teamId ? a : (b===career.teamId ? b : null);
         let w, winnerScore, loserScore;
         const myGame = myId!=null ? myResultByWeek[week] : null;
@@ -3944,9 +3903,11 @@ import {
         // game. The OPPONENT side's qbId gets filled in later by simulateRivalSeasons/
         // simulateDepthChartSeasons (see applyStatLineToGames) -- never pre-seeded here.
         gameLogs[a].push({ week, opponentId: b, won: w===null?null:w===a, tie: w===null, myScore: w===a||w===null?winnerScore:loserScore, oppScore: w===a||w===null?loserScore:winnerScore,
+          ...seriesTag,
           qbId: (a===career.teamId && myGame) ? (myGame.qbId||null) : undefined, qbName: (a===career.teamId && myGame) ? (myGame.qbName||null) : undefined,
           startedByBackup: (a===career.teamId && myGame) ? !!myGame.startedByBackup : undefined });
         gameLogs[b].push({ week, opponentId: a, won: w===null?null:w===b, tie: w===null, myScore: w===b||w===null?winnerScore:loserScore, oppScore: w===b||w===null?loserScore:winnerScore,
+          ...seriesTag,
           qbId: (b===career.teamId && myGame) ? (myGame.qbId||null) : undefined, qbName: (b===career.teamId && myGame) ? (myGame.qbName||null) : undefined,
           startedByBackup: (b===career.teamId && myGame) ? !!myGame.startedByBackup : undefined });
       });
@@ -9083,7 +9044,8 @@ import {
       // the schedule after that week -- previously the week shown in the event text and the
       // eventual missed-games count were two fully independent random rolls, so a "Week 12"
       // injury could claim "10 games missed" in a 17-game season with only ~5 left to miss.
-      const week = randInt(3, Math.max(3, Math.min(13, league.games-1)));
+      // Land the injury somewhere across the real season (with room left to miss games after it).
+      const week = randInt(15, Math.max(20, league.games-25));
       renderInjuryEvent(rollInjuryType(), dur, injMult, decade, week);
       return;
     }
@@ -9343,26 +9305,65 @@ import {
   let scheduleTabSeason = null;
   function renderScheduleTabInner(){
     const season = scheduleTabSeason;
-    // The calendar now runs longer than the game count once bye weeks exist (see
-    // weeksForSeason/buildSeasonSchedule) -- career.currentSeasonWeeksN is the real week count for
-    // THIS season, set alongside currentSeasonSchedules in simulateLeagueStandings. Falls back to
-    // the old games-only count only if it's somehow missing (e.g. a schedule tab render before any
-    // season has actually been simulated yet).
-    const weeksN = career.currentSeasonWeeksN || LEAGUE[season.decade].games;
-    const options = Array.from({length: weeksN}, (_,i)=>i+1)
-      .map(w=>`<option value="${w}"${w===scheduleTabWeek?" selected":""}>Week ${w}</option>`).join("");
-    const matchups = buildWeekMatchups(season, scheduleTabWeek);
-    const cards = matchups.map(m=>`<div class="week-matchup-card clickable" data-schedule-week="${scheduleTabWeek}" data-schedule-a="${m.aId}" data-schedule-b="${m.bId}">
-        ${weekMatchupTeamLineHTML(m.aId, m.aScore, m.aWon, m.aQb, season.year)}
-        ${weekMatchupTeamLineHTML(m.bId, m.bScore, m.bWon, m.bQb, season.year)}
-      </div>`).join("");
-    const body = matchups.length ? `<div class="week-matchup-grid">${cards}</div>`
-      : `<div class="calc-refnote">No games recorded for this week.</div>`;
-    return `<div class="schedule-week-picker"><label>Week <select id="scheduleWeekSelect" class="spk-select">${options}</select></label></div>${body}`;
+    // The player's own season, grouped into series (2-4 consecutive games vs one opponent). Every
+    // game already carries seriesId/gameInSeries (see scheduleGamesIntoWeeks); an untagged old save
+    // falls back to one series per week.
+    const list = buildPlayerSeriesList(season);
+    if(!list.length){
+      // No player game log yet (a schedule-tab render before the first season is simulated).
+      return `<div class="calc-refnote">The schedule isn't available yet.</div>`;
+    }
+    if(scheduleTabWeek < 0 || scheduleTabWeek >= list.length) scheduleTabWeek = 0;
+    const options = list.map((s,i)=>{
+      const homeAway = s.homeForPlayer ? "vs" : "at";
+      return `<option value="${i}"${i===scheduleTabWeek?" selected":""}>Series ${i+1} · ${homeAway} ${svgEscape(teamNameAt(s.oppId, season.year))}${s.games.length!==3?` (${s.games.length}g)`:""}</option>`;
+    }).join("");
+    const series = list[scheduleTabWeek];
+    const rec = series.games.reduce((r,g)=>{ if(g.tie) r.t++; else if(g.won) r.w++; else r.l++; return r; }, {w:0,l:0,t:0});
+    const cards = series.games.map(g=>{
+      const badge = g.startedByBackup ? ` <span style="opacity:0.6;">(rest day)</span>` : "";
+      const res = g.tie ? "T" : g.won ? "W" : "L";
+      return `<div class="week-matchup-card clickable" data-schedule-week="${g.week}" data-schedule-a="${series.aId(g)}" data-schedule-b="${series.bId(g)}">
+        <div class="week-matchup-team${g.won?" good":""}${" me"}">
+          <span class="week-matchup-name">Game ${g.gameInSeries||"?"} — <b>${res}</b>${badge}</span>
+          <span class="tabular week-matchup-score">${g.myScore}-${g.oppScore}</span>
+        </div>
+      </div>`;
+    }).join("");
+    const oppName = svgEscape(teamNameAt(series.oppId, season.year));
+    return `<div class="schedule-week-picker"><label>Series <select id="scheduleWeekSelect" class="spk-select">${options}</select></label></div>
+      <div class="calc-refnote" style="margin:0.4rem 0;">${series.homeForPlayer?"vs":"at"} <b>${oppName}</b> — ${recordLine(rec.w, rec.l, rec.t)} in the series. Tap a game for the box score.</div>
+      <div class="week-matchup-grid">${cards}</div>`;
+  }
+  // The player's own season as a list of series -- groups season.gameLog by seriesId (falls back to
+  // one game per series for an untagged legacy save).
+  function buildPlayerSeriesList(season){
+    const log = (season.gameLog || []).slice().sort((a,b)=> (a.week||0) - (b.week||0));
+    if(!log.length) return [];
+    const bySeries = new Map();
+    let fallback = 0;
+    log.forEach(g=>{
+      const sid = g.seriesId != null ? g.seriesId : ("solo" + (fallback++));
+      if(!bySeries.has(sid)) bySeries.set(sid, []);
+      bySeries.get(sid).push(g);
+    });
+    const list = [...bySeries.values()].map(games=>{
+      games.sort((a,b)=> (a.gameInSeries||a.week||0) - (b.gameInSeries||b.week||0));
+      const first = games[0];
+      // home/away alternates by series in real scheduling -- approximate from the series id parity
+      const homeForPlayer = ((first.seriesId || 0) % 2) === 0;
+      return {
+        oppId: first.opponentId, startWeek: first.week, homeForPlayer, games,
+        aId: g => homeForPlayer ? career.teamId : first.opponentId,
+        bId: g => homeForPlayer ? first.opponentId : career.teamId,
+      };
+    });
+    list.sort((a,b)=> a.startWeek - b.startWeek);
+    return list;
   }
   function buildScheduleTabHTML(season){
     scheduleTabSeason = season;
-    scheduleTabWeek = 1;
+    scheduleTabWeek = 0;
     return `<div id="scheduleTabRoot">${renderScheduleTabInner()}</div>`;
   }
 
@@ -12929,8 +12930,10 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
       const season = scheduleTabSeason;
       const week = Number(scheduleNode.dataset.scheduleWeek);
       const aId = scheduleNode.dataset.scheduleA, bId = scheduleNode.dataset.scheduleB;
-      const m = buildWeekMatchups(season, week).find(x=>x.aId===aId && x.bId===bId);
-      if(m) openBracketBoxScore(scheduleMatchToBracketMatch(m, week, season), season.year, `Week ${week}`);
+      const m = buildWeekMatchups(season, week).find(x=> (x.aId===aId && x.bId===bId) || (x.aId===bId && x.bId===aId));
+      const myGame = (season.gameLog||[]).find(g=>g.week===week);
+      const label = myGame && myGame.seriesId!=null ? `Game ${myGame.gameInSeries||"?"} vs. ${teamNameAt(myGame.opponentId, season.year)}` : `Game ${week}`;
+      if(m) openBracketBoxScore(scheduleMatchToBracketMatch(m, week, season), season.year, label);
     }
   });
   // Manually advances whichever conference(s) have nothing real left gating them -- while the

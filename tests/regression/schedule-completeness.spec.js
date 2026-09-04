@@ -29,29 +29,45 @@ test("every-active-team-completes-era-game-count", async ({ page }) => {
   const overScheduled = teamIds.filter(id => schedules[id].length > expectedGames);
   expect(overScheduled, `team(s) exceeded the league's own game count (${expectedGames}): ${JSON.stringify(overScheduled)}`).toEqual([]);
 
-  const duplicateWeekViolations = [];
+  // Phase 13b: two games in one calendar slot is allowed ONLY as a doubleheader against the SAME
+  // opponent (a real baseball thing, esp. a rained-out makeup). Two DIFFERENT opponents in one
+  // slot is still a scheduling bug.
+  const doubleBookViolations = [];
   const selfScheduledViolations = [];
+  const dhCounts = [];
   teamIds.forEach(id => {
-    const weeks = new Set();
+    const byWeek = new Map();
     schedules[id].forEach(g => {
-      if (weeks.has(g.week)) duplicateWeekViolations.push({ id, week: g.week });
-      weeks.add(g.week);
       if (g.opponentId === id) selfScheduledViolations.push({ id, week: g.week });
+      if (!byWeek.has(g.week)) byWeek.set(g.week, []);
+      byWeek.get(g.week).push(g.opponentId);
     });
+    let dh = 0;
+    byWeek.forEach((opps, week) => {
+      if (opps.length > 1) {
+        if (opps.length > 2 || opps[0] !== opps[1]) doubleBookViolations.push({ id, week, opps });
+        else dh++;
+      }
+    });
+    dhCounts.push(dh);
   });
-  expect(duplicateWeekViolations, `team(s) scheduled twice in the same week: ${JSON.stringify(duplicateWeekViolations)}`).toEqual([]);
+  expect(doubleBookViolations, `team(s) double-booked against different opponents in one slot: ${JSON.stringify(doubleBookViolations)}`).toEqual([]);
   expect(selfScheduledViolations, `team(s) scheduled against themselves: ${JSON.stringify(selfScheduledViolations)}`).toEqual([]);
+  expect(Math.max(...dhCounts), "doubleheaders should stay rare (a handful per team at most)").toBeLessThanOrEqual(6);
 
-  // Both sides of every game must agree on the game having happened -- team A's opponent-B-in-
-  // week-W entry must be mirrored by team B's opponent-A-in-week-W entry (Section 3 invariant #9).
+  // Both sides of every game must agree -- for every (opponent, week) pair team A has, team B must
+  // have the same COUNT of A-in-week-W entries (so a doubleheader mirrors a doubleheader).
   const mismatches = [];
   teamIds.forEach(id => {
-    schedules[id].forEach(g => {
-      const opp = schedules[g.opponentId];
-      if (!opp) { mismatches.push({ id, week: g.week, reason: "opponent has no schedule at all" }); return; }
-      const mirror = opp.find(x => x.week === g.week && x.opponentId === id);
-      if (!mirror) mismatches.push({ id, week: g.week, reason: "opponent has no matching entry for this week" });
+    const myPairs = {};
+    schedules[id].forEach(g => { const k = g.opponentId + "@" + g.week; myPairs[k] = (myPairs[k] || 0) + 1; });
+    Object.entries(myPairs).forEach(([k, n]) => {
+      const [oppId, week] = k.split("@");
+      const opp = schedules[oppId];
+      if (!opp) { mismatches.push({ id, k, reason: "opponent has no schedule" }); return; }
+      const mirror = opp.filter(x => String(x.week) === week && x.opponentId === id).length;
+      if (mirror !== n) mismatches.push({ id, k, mine: n, theirs: mirror });
     });
   });
-  expect(mismatches, `game(s) where both sides disagree on having played: ${JSON.stringify(mismatches.slice(0, 5))}`).toEqual([]);
+  expect(mismatches, `game(s) where both sides disagree: ${JSON.stringify(mismatches.slice(0, 5))}`).toEqual([]);
 });
