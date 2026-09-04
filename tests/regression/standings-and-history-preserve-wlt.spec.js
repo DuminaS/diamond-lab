@@ -33,6 +33,7 @@ test("standings-and-history-preserve-wlt", async ({ page }) => {
     if (!stillActive) break;
     const ok = await advanceOneSeason(page);
     const saved = await readActiveCareer(page);
+    if (!saved) break; // the career just ended (a short 1960s career can wash out before 8 seasons)
     const lastSeason = saved.career.seasonLog[saved.career.seasonLog.length - 1];
     const ls = lastSeason && lastSeason.leagueStandings;
     const schedules = saved.career.currentSeasonSchedules || {};

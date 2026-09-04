@@ -5597,6 +5597,43 @@ import {
         if(!r.awards.includes("Rookie of the Year")) r.awards.push("Rookie of the Year");
       });
     }
+
+    // Hank Aaron Award (1999+): the best all-around offensive season in the league -- resolved here
+    // as the top OPS+ among qualified regulars, one league-wide winner (kept as simple as ROY/the
+    // stat titles, which the rival model can't do by-league anyway).
+    if(year >= 1999 && qualified.length){
+      const bestOps = Math.max(...pool.map(r=> r.s.opsPlus!=null ? r.s.opsPlus : Math.round(r.s.rating||0)));
+      if(bestOps > 100) pool.filter(r=> (r.s.opsPlus!=null ? r.s.opsPlus : Math.round(r.s.rating||0)) === bestOps).forEach(r=>{
+        if(!r.awards.includes("Hank Aaron Award")) r.awards.push("Hank Aaron Award");
+      });
+    }
+
+    // Comeback Player of the Year (1965+): the biggest bounce-back from a down or injury-shortened
+    // prior year. One league-wide winner -- needs a real prior season that was either well below
+    // 100 OPS+ or badly interrupted, and a this-year OPS+ north of 110 that clears it by 25+.
+    const opsOf = s => s && (s.opsPlus!=null ? s.opsPlus : Math.round(s.rating||0));
+    const comebackRows = [];
+    const prevPlayer = career.seasonLog.filter(s=>s.year<year && (s.games||0)>0).slice(-1)[0];
+    if(prevPlayer && (season.pa||0) >= games*3.1){
+      const now = opsOf(season), was = opsOf(prevPlayer);
+      const interrupted = (prevPlayer.games||0) < games*0.55;
+      if(now >= 110 && now - was >= 25 && (was < 95 || interrupted)) comebackRows.push({ awards: season.awards, gain: now - was });
+    }
+    Object.values(career.qbsById||{}).forEach(r=>{
+      const s = (r.seasons||[]).find(x=>x.year===year);
+      if(!s || (s.pa||0) < games*3.1) return;
+      const prev = (r.seasons||[]).filter(x=>x.year<year && (x.games||0)>0).slice(-1)[0];
+      if(!prev) return;
+      const now = opsOf(s), was = opsOf(prev);
+      const interrupted = (prev.games||0) < games*0.55;
+      if(now >= 110 && now - was >= 25 && (was < 95 || interrupted)) comebackRows.push({ awards: s.awards, gain: now - was });
+    });
+    if(comebackRows.length){
+      const bestGain = Math.max(...comebackRows.map(r=>r.gain));
+      comebackRows.filter(r=>r.gain===bestGain).forEach(r=>{
+        if(!r.awards.includes("Comeback Player of the Year")) r.awards.push("Comeback Player of the Year");
+      });
+    }
   }
 
   // Gold Glove: a player-only self-check (the sim doesn't model rival fielding). Chance scales
@@ -10316,6 +10353,8 @@ import {
     const silverSluggers = rows.filter(r=>r.awards.includes("Silver Slugger"));
     const allMlbSecond = rows.filter(r=>r.awards.includes("All-MLB Second Team"));
     const roy = rows.filter(r=>r.awards.includes("Rookie of the Year"));
+    const hankAaron = rows.filter(r=>r.awards.includes("Hank Aaron Award"));
+    const comeback = rows.filter(r=>r.awards.includes("Comeback Player of the Year"));
 
     const statLine = r => `${r.td} HR · ${r.rbi!=null?r.rbi+" RBI · ":""}${(r.pct||0).toFixed(3).replace(/^0/,"")} AVG · ${Math.round(r.rating)} OPS+`;
     const rowLine = r => `${svgEscape(r.name)}${r.mine?" (you)":""} — ${svgEscape(teamNameAt(r.teamId, year))} — ${statLine(r)}`;
@@ -10349,6 +10388,8 @@ import {
     return `<div class="award-ceremony">
         ${mvpHtml}
         ${roy.length ? listSection("Rookie of the Year", roy) : ""}
+        ${hankAaron.length ? listSection("Hank Aaron Award", hankAaron) : ""}
+        ${comeback.length ? listSection("Comeback Player of the Year", comeback) : ""}
         ${listSection("Silver Slugger", silverSluggers)}
         ${listSection("All-MLB Second Team", allMlbSecond)}
         ${listSection("All-Star", allStars)}
