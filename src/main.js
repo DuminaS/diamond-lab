@@ -8152,7 +8152,7 @@ import {
     const good = netGood && !netBad;
     const effectParts = [];
     if(repDelta) effectParts.push(`Reputation ${fmtDelta(repDelta)}`);
-    if(strengthDelta) effectParts.push(`${ev.target==="oline"?"O-Line grade":ev.target==="weapons"?"Weapons grade":"Team grade"} ${fmtDelta(strengthDelta)}`);
+    if(strengthDelta) effectParts.push(`${ev.target==="oline"?"Rotation grade":ev.target==="weapons"?"Lineup grade":"Team grade"} ${fmtDelta(strengthDelta)}`);
     if(gmDelta) effectParts.push(`GM relations ${fmtDelta(gmDelta)}`);
     if(!effectParts.length) effectParts.push("No direct stat change — narrative only.");
     content.innerHTML = eraWrap(decadeForYear(career.year), `
@@ -9048,7 +9048,7 @@ import {
         <div class="fa-offer-head"><b><button type="button" class="rival-link" data-team-id="${o.teamId}" data-fa-role="${svgEscape(roleLabel)}">${teamName}</button></b><span class="fa-role">${roleLabel}</span></div>
         <div class="fa-offer-terms tabular">${fmtMoney(o.apy)}/yr · ${o.years} yr${o.years===1?"":"s"}</div>
         <div class="fa-offer-grade">Team grade <b class="tabular">${grade}</b> <span class="fa-grade-tag">${gradeTag}</span></div>
-        <div class="fa-offer-cast">O-Line <b>${castLetterGrade(o.oline)}</b> &nbsp;·&nbsp; Weapons <b>${castLetterGrade(o.weapons)}</b></div>
+        <div class="fa-offer-cast">Rotation <b>${castLetterGrade(o.oline)}</b> &nbsp;·&nbsp; Lineup <b>${castLetterGrade(o.weapons)}</b></div>
         ${o.reason ? `<div class="fa-offer-reason">${svgEscape(o.reason)}</div>` : ""}
         ${agentNote}
         <div class="event-choices">
@@ -12817,101 +12817,100 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
     };
     const asPct1 = x=>fmtPct(x), asPct2 = x=>(x*100).toFixed(2)+"%", asNum1 = x=>x.toFixed(1);
 
-    const compCard = rateCard("Completion %", fmtPct(d.comp), asPct1, d.league.comp, "leagueComp", d.effAcc, d.neutralAcc, d.cal.comp, "+", d.W.acc, d.eff, d.neutral);
-    const ypaCard = rateCard("Yards / Attempt", d.ypa.toFixed(2), asNum1, d.league.ypa, "leagueY/A", d.effYpa, d.neutralYpa, d.cal.ypa, "+", d.W.ypa, d.eff, d.neutral);
-    const tdRateCard = rateCard("TD Rate (per attempt)", (d.tdRate*100).toFixed(2)+"%", asPct2, d.league.tdRate, "leagueTdRate", d.effTd, d.neutralTd, d.cal.td, "+", d.W.td, d.eff, d.neutral);
-    const intRateCard = rateCard("INT Rate (per attempt)", (d.intRate*100).toFixed(2)+"%", asPct2, d.league.intRate, "leagueIntRate", d.effInt, d.neutralInt, d.cal.int, "−", d.W.int, d.eff, d.neutral);
+    const compCard = rateCard("Batting Average (AVG)", fmtPct(d.comp), asPct1, d.league.comp, "leagueAVG", d.effAcc, d.neutralAcc, d.cal.comp, "+", d.W.acc, d.eff, d.neutral);
+    const ypaCard = rateCard("Isolated Power (ISO, extra bases / PA)", d.ypa.toFixed(2), asNum1, d.league.ypa, "leagueISO", d.effYpa, d.neutralYpa, d.cal.ypa, "+", d.W.ypa, d.eff, d.neutral);
+    const tdRateCard = rateCard("Home Run Rate (per PA)", (d.tdRate*100).toFixed(2)+"%", asPct2, d.league.tdRate, "leagueHRrate", d.effTd, d.neutralTd, d.cal.td, "+", d.W.td, d.eff, d.neutral);
+    const intRateCard = rateCard("Strikeout Rate (per PA)", (d.intRate*100).toFixed(2)+"%", asPct2, d.league.intRate, "leagueKrate", d.effInt, d.neutralInt, d.cal.int, "−", d.W.int, d.eff, d.neutral);
 
-    const attCard = card("Attempts / Game", d.attPerGame.toFixed(1),
+    const attCard = card("Plate Appearances / Game", d.attPerGame.toFixed(1),
       [
         weightedLine(d.eff, OVERALL_WEIGHTS, "effOverall (you, this season)"),
         weightedLine(d.neutral, OVERALL_WEIGHTS, "neutralOverall (flat-65 baseline)"),
         "",
-        `Att/Game = clamp((leagueAtt/G − ΔMOB×0.05 + (effOverall−neutralOverall)×primeMult×0.06 ± noise) × roleShare, 4, 48)`,
-        `         = clamp((${d.league.attPerGame} − (${d.eff.MOB.toFixed(0)}−${d.neutral.MOB.toFixed(0)})×0.05 + (${d.effOverall.toFixed(1)}−${d.neutralOverall.toFixed(1)})×${d.primeMult.toFixed(2)}×0.06 ± up to 2) × ${d.roleShare.toFixed(2)}, 4, 48)`,
-        `         = ${d.attPerGame.toFixed(1)} (shown here without the ±2 per-season noise the real sim adds)`,
+        `PA/Game = clamp((leaguePA/G + (effOverall−neutralOverall)×0.010 ± noise) × roleShare, 2.4, 4.9)`,
+        `        = clamp((${d.league.attPerGame} + (${d.effOverall.toFixed(1)}−${d.neutralOverall.toFixed(1)})×0.010 ± up to 0.12) × ${d.roleShare.toFixed(2)}, 2.4, 4.9)`,
+        `        = ${d.attPerGame.toFixed(1)} (shown here without the small per-season noise the real sim adds)`,
         "",
         (career.contract.tier!=="minimum" && career.contract.tier!=="backup")
-          ? `Role share: full starter (contract tier "${career.contract.tier}") = 1.00`
+          ? `Role share: everyday player (contract tier "${career.contract.tier}") = 1.00`
           : `Role share: contract tier "${career.contract.tier}" rolls a FRESH random value in [${d.roleShareRange[0].toFixed(2)}, ${d.roleShareRange[1].toFixed(2)}] every season -- ${d.roleShare.toFixed(2)} shown here is just that range's midpoint.`,
       ]);
 
-    const ratingCard = card("Passer Rating (expected, full season)", d.expRating.toFixed(1),
+    const ratingCard = card("OPS+ (expected, full season)", d.expRating.toFixed(1),
       [
         `Over an expected ${d.expGames}-game healthy season at the rates above:`,
-        `  Attempts ≈ ${d.expAttempts}, Completions ≈ ${d.expComp}, Yards ≈ ${d.expYards.toLocaleString()}, TD ≈ ${d.expTd}, INT ≈ ${d.expInt}`,
+        `  PA ≈ ${d.expAttempts}, Hits ≈ ${d.expComp}, Total Bases ≈ ${d.expYards.toLocaleString()}, HR ≈ ${d.expTd}, K ≈ ${d.expInt}`,
         "",
-        "Standard NFL formula, each of 4 components clamped to [0, 2.375]:",
-        `  a = clamp((comp/att − 0.3) × 5)       = ${clamp(((d.expComp/d.expAttempts)-0.3)*5,0,2.375).toFixed(3)}`,
-        `  b = clamp((yards/att − 3) × 0.25)     = ${clamp(((d.expYards/d.expAttempts)-3)*0.25,0,2.375).toFixed(3)}`,
-        `  c = clamp((td/att) × 20)              = ${clamp((d.expTd/d.expAttempts)*20,0,2.375).toFixed(3)}`,
-        `  d = clamp(2.375 − (int/att) × 25)     = ${clamp(2.375-((d.expInt/d.expAttempts)*25),0,2.375).toFixed(3)}`,
-        `  Rating = (a+b+c+d)/6 × 100             = ${d.expRating.toFixed(1)}`,
+        "OPS+ = (OBP / lgOBP + SLG / lgSLG − 1) × 100, with lgOBP 0.328 and lgSLG 0.410:",
+        `  AB    ≈ PA − BB − HBP − SF                = ${Math.max(1, Math.round(d.expAttempts - d.expAttempts*0.085 - d.expAttempts*0.009 - d.expAttempts*0.006))}`,
+        `  OBP   = (H + BB + HBP) / (AB + BB + HBP + SF)`,
+        `  SLG   = Total Bases / AB`,
+        `  100 = exactly league average; 150 = 50% better than league at getting on base and slugging, park/era-adjusted.`,
+        `  OPS+ ≈ ${d.expRating.toFixed(1)}`,
       ]);
 
-    const rushCard = card("Rushing (Att/Game, Yds/Carry, TD Rate)",
-      `${d.rushAttPerGame.toFixed(1)} att · ${d.rushYpc.toFixed(2)} ypc · ${(d.rushTdRate*100).toFixed(2)}% TD`,
+    const rushCard = card("Baserunning (SB Att/Game, SB Success Rate)",
+      `${d.rushAttPerGame.toFixed(2)} att/G · ${(d.rushYpc*100).toFixed(0)}% success`,
       [
-        weightedLine(d.eff, d.W.rush, "effRush"),
+        weightedLine(d.eff, d.W.rush, "effRush (stolen-base signal)"),
         "",
-        `Rush Att/Game = clamp((effRush − 45) × 0.14, 0.2, 9.5)          = ${d.rushAttPerGame.toFixed(2)}`,
-        `Rush Yds/Carry = clamp(3.4 + (effRush − 55) × 0.045, 1.8, 7.8)   = ${d.rushYpc.toFixed(2)}`,
-        `Rush TD Rate = clamp(0.018 + (effRush − 55) × 0.0006, ...)      = ${(d.rushTdRate*100).toFixed(2)}%`,
-        `Over ${d.expGames} games ≈ ${d.expRushAtt} carries, ${d.expRushYards.toLocaleString()} yards, ${d.expRushTd} TD`,
+        `SB Att/Game   = clamp((effRush − 58) × 0.010, 0, 0.9)             = ${d.rushAttPerGame.toFixed(2)}`,
+        `SB Success %   = clamp(0.62 + (effRush − 60) × 0.006, 0.45, 0.92)  = ${(d.rushYpc*100).toFixed(0)}%`,
+        `Over ${d.expGames} games ≈ ${d.expRushAtt} attempts, ${d.expRushYards.toLocaleString()} steals`,
       ]);
 
-    const sackCard = card("Sacks Taken", `${d.expSacks} / season`,
+    const sackCard = card("Grounded Into Double Play (GIDP)", `${d.expSacks} / season`,
       [
-        `SackRate = clamp(0.075 − (PKT−neutralPKT)×0.0012 − (teamGrade−65)×0.0004, 1.5%, 16%)`,
-        `         = ${(d.sackRate*100).toFixed(2)}% per dropback`,
-        `Over ${d.expGames} games and ${d.expAttempts} attempts ≈ ${d.expSacks} sacks taken`,
-        `Driven by pocket presence (individually) and team quality (o-line) -- a good pocket passer on a good team gets sacked well below league-average; a statue on a bad line gets sacked a lot more.`,
+        `GIDPRate = clamp(0.022 − (effRush−60)×0.00035, 0.4%, 5%)   (the real sim adds a small bump for a high-ISO ground-ball bat)`,
+        `         = ${(d.sackRate*100).toFixed(2)}% per PA`,
+        `Over ${d.expGames} games and ${d.expAttempts} PA ≈ ${d.expSacks} double plays grounded into`,
+        `A slow, ground-ball-prone hitter rolls into more; a fast one beats the throw and stays out of them.`,
       ]);
 
     const winCard = card("Win Probability (per game)", fmtPct(d.winProb),
       [
-        `Each game is now simulated individually against that WEEK'S actual opponent grade (simulateGameScore, the same engine the playoffs use) instead of one flat season-long roll -- so a soft schedule and a brutal one produce visibly different records for the same build.`,
-        `Offensive grade is now BLENDED with team quality, not just nudged by it: myOff = teamGrade + (effOverall−teamGrade)×${QB_INFLUENCE_REGULAR} + (Clutch−65)×0.03 = ${d.myOff.toFixed(2)} -- a QB whose personal grade diverges sharply from the team around him gets pulled hard toward that team's level, in EITHER direction.`,
+        `Each game is simulated individually against that DAY'S actual opponent grade (simulateGameScore, the same engine the playoffs use) instead of one flat season-long roll -- so a soft stretch of the schedule and a brutal one produce visibly different records for the same build.`,
+        `Your lineup's offensive grade is BLENDED with team quality, not just nudged by it: myOff = teamGrade + (effOverall−teamGrade)×${QB_INFLUENCE_REGULAR} + (Clutch−65)×0.03 = ${d.myOff.toFixed(2)} -- one hitter whose personal grade diverges sharply from the club around him gets pulled hard toward that club's level, in EITHER direction (it's still eight other bats and a pitching staff).`,
         `Shown here vs. a league-average (grade 65) opponent: WinProb ≈ clamp(0.5 + (myOff−oppGrade)×0.012, 6%, 94%)`,
-        `        = clamp(0.5 + (${d.myOff.toFixed(1)}−65)×0.012, ...) = ${fmtPct(d.winProb)} vs. an average opponent this season`,
-        `A genuinely better opponent (higher grade) meaningfully lowers this game's odds, and vice versa -- see the Season tab for the real week-by-week schedule and results.`,
+        `        = clamp(0.5 + (${d.myOff.toFixed(1)}−65)×0.012, ...) = ${fmtPct(d.winProb)} vs. an average opponent`,
+        `A genuinely better opponent (higher grade) meaningfully lowers this game's odds, and vice versa -- see the Season tab for the real series-by-series schedule and results.`,
       ]);
 
     function gateLine(ok, text){ return `<div class="calc-gate ${ok?"pass":"fail"}">${ok?"✓":"✗"} ${svgEscape(text)}</div>`; }
 
-    const awardsIntro = `<div class="calc-refnote">All three season awards are judged on what actually happened -- passer rating vs. that year's league average (ratingEdge), TD production, wins ABOVE what this team's own preseason grade already predicted (winsAboveExpectation -- Balance Wave 5, replacing raw win% so a stacked roster's own expected win total no longer inflates the score by itself), and (for Pro Bowl/All-Pro) how much of the season was actually played -- never on the underlying attribute grade. This preview assumes a full healthy season, so the games-played gates always read ✓ here; a real season that misses a big chunk of games fails them and the award becomes unreachable no matter how good the per-game numbers were.</div>`;
+    const awardsIntro = `<div class="calc-refnote">All three season awards are judged on what actually happened -- OPS+ vs. that year's league average (ratingEdge), home-run production, wins ABOVE what this team's own preseason grade already predicted (winsAboveExpectation -- Balance Wave 5, replacing raw win% so a stacked roster's own expected win total no longer inflates the score by itself), and (for All-Star/Silver Slugger) how much of the season was actually played -- never on the underlying attribute grade. This preview assumes a full healthy season, so the games-played gates always read ✓ here; a real season that misses a big chunk of games fails them and the award becomes unreachable no matter how good the per-PA numbers were.</div>`;
 
-    const pbCard = card("Pro Bowl Score", d.proBowlScore.toFixed(2),
+    const pbCard = card("All-Star Score", d.proBowlScore.toFixed(2),
       [
-        `ratingEdge = expectedRating − leagueAvgRating = ${d.expRating.toFixed(1)} − ${d.leagueAvgRating.toFixed(1)} = ${d.ratingEdge.toFixed(1)}`,
+        `ratingEdge = expectedOPS+ − leagueAvgOPS+ = ${d.expRating.toFixed(1)} − ${d.leagueAvgRating.toFixed(1)} = ${d.ratingEdge.toFixed(1)}`,
         `expectedWinPct(teamOverall=${career.teamStrength}) = clamp(0.5 + (teamOverall−65)×0.011, 15%, 85%) = ${fmtPct(d.expectedWinPct)}`,
         `winsAboveExpectation = clamp(winPct − expectedWinPct, −0.5, 0.5) = clamp(${d.winProb.toFixed(2)} − ${d.expectedWinPct.toFixed(2)}, ...) = ${d.winsAboveExpectation.toFixed(2)}`,
-        `score = ratingEdge×0.6 + max(0, TD−16)×0.45 + winsAboveExpectation×10`,
+        `score = ratingEdge×0.6 + max(0, HR−16)×0.45 + winsAboveExpectation×10`,
         `      = ${d.ratingEdge.toFixed(1)}×0.6 + max(0, ${d.expTd}−16)×0.45 + ${d.winsAboveExpectation.toFixed(2)}×10 = ${d.proBowlScore.toFixed(2)}`,
-        `Pro Bowl is no longer an independent per-QB roll -- the top scorers in each conference make it (2/conf through the 1980s, 3/conf from the 1990s on, with an extra qualifying 3rd spot possible pre-1990), decided once every other league QB's season is locked in.`,
+        `The All-Star team is no longer an independent per-hitter roll -- the top scorers in each league make it (2/league through the 1980s, 3/league from the 1990s on, with an extra qualifying 3rd spot possible pre-1990), decided once every other league hitter's season is locked in.`,
       ],
-      gateLine(d.expAttempts>200, `attempts > 200 (${d.expAttempts})`) +
+      gateLine(d.expAttempts>200, `PA > 200 (${d.expAttempts})`) +
       gateLine(true, `played ≥ 65% of games (this preview assumes a full healthy season)`) +
-      gateLine(d.proBowlEligible, `proBowlEligible (production's real gate — playing time only, no rating bar)`));
+      gateLine(d.proBowlEligible, `All-Star eligible (production's real gate — playing time only, no OPS+ bar)`));
 
-    const apCard = card("All-Pro Score", d.allProScore.toFixed(2),
+    const apCard = card("Silver Slugger Score", d.allProScore.toFixed(2),
       [
-        `score = ratingEdge×0.75 + max(0, TD−22)×0.55 + winsAboveExpectation×18`,
+        `score = ratingEdge×0.75 + max(0, HR−22)×0.55 + winsAboveExpectation×18`,
         `      = ${d.ratingEdge.toFixed(1)}×0.75 + max(0, ${d.expTd}−22)×0.55 + ${d.winsAboveExpectation.toFixed(2)}×18 = ${d.allProScore.toFixed(2)}`,
-        `All-Pro is no longer an independent per-QB roll -- exactly 1 First-Team and 1 Second-Team All-Pro are named league-wide, the two highest scores across the player and every simulated rival this season.`,
+        `Silver Slugger is no longer an independent per-hitter roll -- exactly 1 Silver Slugger and 1 All-MLB Second Team are named league-wide, the two highest scores across the player and every simulated rival this season (the position the winner played is shown alongside the award).`,
       ],
-      gateLine(d.expAttempts>250, `attempts > 250 (${d.expAttempts})`) +
+      gateLine(d.expAttempts>250, `PA > 250 (${d.expAttempts})`) +
       gateLine(true, `played ≥ 80% of games (this preview assumes a full healthy season)`) +
-      gateLine(d.allProEligible, `allProEligible (production's real gate — playing time only, no rating bar)`));
+      gateLine(d.allProEligible, `Silver Slugger eligible (production's real gate — playing time only, no OPS+ bar)`));
 
     const mvpCard = card("MVP Score", d.mvpScore.toFixed(1),
       [
         `Balance Wave 5: MVP is a 5-component weighted composite, per the balance brief's own explicit split -- 45% era-relative efficiency, 20% volume, 20% wins above expectation, 10% availability, 5% narrative (an outright winning record, distinct from whether it was "expected").`,
-        `score = [clamp(ratingEdge/15,±2)×0.45 + clamp((TD−20)/8,±2)×0.20 + clamp(winsAboveExpectation×8,±2)×0.20 + clamp((gamesShare−0.85)×4,−2,1)×0.10 + clamp((winPct−0.5)×3,±1.5)×0.05] × 16`,
+        `score = [clamp(ratingEdge/15,±2)×0.45 + clamp((HR−20)/8,±2)×0.20 + clamp(winsAboveExpectation×8,±2)×0.20 + clamp((gamesShare−0.85)×4,−2,1)×0.10 + clamp((winPct−0.5)×3,±1.5)×0.05] × 16`,
         `      = [${clamp(d.ratingEdge/15,-2,2).toFixed(2)}×0.45 + ${clamp((d.expTd-20)/8,-2,2).toFixed(2)}×0.20 + ${clamp(d.winsAboveExpectation*8,-2,2).toFixed(2)}×0.20 + ${clamp((d.gamesPlayedShare-0.85)*4,-2,1).toFixed(2)}×0.10 + ${clamp((d.winProb-0.5)*3,-1.5,1.5).toFixed(2)}×0.05] × 16 = ${d.mvpScore.toFixed(2)}`,
-        `MVP is no longer an independent per-QB roll -- this score is compared against every other starting QB in the league at season's end, and whoever's highest wins it outright (a genuine tie produces co-MVPs).`,
+        `MVP is no longer an independent per-hitter roll -- this score is compared against every other regular in the league at season's end, and whoever's highest wins it outright (a genuine tie produces co-MVPs).`,
       ],
-      gateLine(d.expAttempts>150, `attempts > 150 (${d.expAttempts})`) +
+      gateLine(d.expAttempts>150, `PA > 150 (${d.expAttempts})`) +
       gateLine(true, `played ≥ 50% of games (this preview assumes a full healthy season)`));
 
     return `
@@ -12920,10 +12919,10 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
       ${devCard}
       <div class="calc-group"><div class="calc-group-head">League Baseline by Decade</div>${refTable}</div>
       <div class="calc-group"><div class="calc-group-head">Age & Scheme</div>${primeCard}</div>
-      <div class="calc-group"><div class="calc-group-head">Passing Rates</div>${compCard}${ypaCard}${tdRateCard}${intRateCard}${attCard}</div>
-      <div class="calc-group"><div class="calc-group-head">Passer Rating</div>${ratingCard}</div>
-      <div class="calc-group"><div class="calc-group-head">Rushing</div>${rushCard}</div>
-      <div class="calc-group"><div class="calc-group-head">Sacks</div>${sackCard}</div>
+      <div class="calc-group"><div class="calc-group-head">Hitting Rates</div>${compCard}${ypaCard}${tdRateCard}${intRateCard}${attCard}</div>
+      <div class="calc-group"><div class="calc-group-head">OPS+</div>${ratingCard}</div>
+      <div class="calc-group"><div class="calc-group-head">Baserunning</div>${rushCard}</div>
+      <div class="calc-group"><div class="calc-group-head">Double Plays</div>${sackCard}</div>
       <div class="calc-group"><div class="calc-group-head">Team Success</div>${winCard}</div>
       <div class="calc-group"><div class="calc-group-head">Season Awards</div>${awardsIntro}${pbCard}${apCard}${mvpCard}</div>`;
   }
