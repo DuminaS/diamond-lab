@@ -267,14 +267,27 @@ Post-deploy pass after playing the build. Plan: `~/.claude/plans/breezy-roaming-
 - New specs: `team-page-shows-batting-order`, `box-score-line-score-and-lineups`,
   `rival-season-table-has-team-column`. 59 regression / 58 balance green.
 
-### Phase 13b — Series mechanics (NOT started)
-- Playoffs as best-of-N (era-accurate: WS 7; LCS 5 then 7; DS 5; WC 1 then 3; pre-1969 WS only).
-  Player's own series reveals **game by game**; the Key Moment can fire in a pivotal game.
-  Wraps `simulateMatch` + `advanceToNextPlayoffRound`/`confirmPlayoffRound`/`animatePlayoffQuarters`;
-  checkpoints per game. Bracket shows "NYY def. BOS 4–2".
-- Real regular-season **series** structure: 162 games grouped into ~52 series of 2–4 vs one
-  opponent; "Week 34" → "Series 12 · vs Yankees". Touches `scheduleGamesIntoWeeks`, standings,
-  `buildWeekMatchups`, the schedule tab.
+### Phase 13b — Series mechanics  ✅
+- **Playoffs as best-of-N**, era-accurate: `seriesWinsNeeded` — WC bo1 then bo3 (2022+); DS bo5;
+  LCS bo5 pre-1985 then bo7; WS bo7. Also fixed the long-broken **1994–2011 bracket**
+  (`PLAYOFF_ERAS` wcGames 0→2 — it was collapsing a 4-team DS+LCS bracket into a phantom
+  seed-1-vs-seed-2 round). Round objects are series shells (`seriesTarget`/`seriesWins`/`games[]`);
+  games are simulated lazily by `ensurePlayoffGame` so a Key Moment flipping game N changes whether
+  game N+1 is even played. `animatePlayoffQuarters` rewritten with a game loop — per-round series
+  strip, **every game revealed inning-by-inning**, KM only in a pivotal game (either side one win
+  from clinching). Checkpoint after every game; a mid-series reload keeps completed games and
+  re-reveals only the current one; a decided run re-renders static and settles a not-yet-final
+  bracket. Flat matchups + the flat WS run full series via `flatSeriesResult`. Box-score modal:
+  `buildSeriesBoxScoreModalHTML` — series header, game-by-game line score, clinching-game boxes.
+- **Regular season scheduled in series** — `scheduleGamesIntoWeeks` rewritten as a **round-based**
+  scheduler: every round all teams pair off and each pair plays a 2-4-game series in the same
+  calendar block. Game counts land exactly on `gamesN` with no repair pass. ~52 series/season,
+  3-game modal. Every game carries `seriesId`/`gameInSeries`/`seriesLen`. Schedule tab: Week
+  picker → **Series picker** ("Series 12 · vs Yankees"), the series' games as clickable cards.
+  Mid-season injury event now lands across the real calendar ("Game 87").
+- New specs: `playoff-round-is-a-series`, `regular-season-is-scheduled-in-series`,
+  `playoff-series-resume-keeps-completed-games`; `postseason-never-produces-tie` rewritten.
+  **61 regression / 58 balance green.**
 
 ### Phase 13c — Broader faithfulness audit (catalogue)
 1. Standings: GB (games back), drop the ties column for modern eras, wild-card race.
@@ -285,3 +298,6 @@ Post-deploy pass after playing the build. Plan: `~/.claude/plans/breezy-roaming-
 6. Era-accurate contract rules (reserve clause pre-1976, arbitration years, luxury tax).
 7. Silver Slugger / Gold Glove explicitly by position; Hank Aaron / Comeback Player flavor.
 8. Admin → Stat Calculator tab still shows the football intermediate math (admin-only).
+9. **Player-team win rate isn't clamped** the way flat teams are (`simulateGameScore` vs
+   `simpleWinProb`'s `[.35,.66]`) — a grade-90+ team the player is on can win 115-122 games while
+   the best flat team tops out ~100. Pre-existing engine asymmetry; needs a win-rate sweep.
