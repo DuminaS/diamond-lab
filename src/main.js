@@ -3279,9 +3279,13 @@ import {
   // with a rare crooked number. The `tds`/`fgs` fields are kept at 0 so the overtime/box-score
   // code that still destructures them keeps working during the conversion.
   function scoreForInning(off, def){
-    const diff = off - def;
-    // Deliberately shallow: even a huge lineup-vs-staff mismatch only shifts a half-inning's
-    // rally odds a little, so a great team beats a bad one ~60-65% of the time, not 85%+.
+    // Deliberately shallow: even a huge lineup-vs-staff mismatch only shifts a half-inning's rally
+    // odds a little, so a great team beats a bad one ~62-66% of the time, not 85%+. The grade gap
+    // is clamped to +/-35 first so an extreme blend (a grade-90+ team the player is on facing a
+    // grade-45 club) can't run away to a 72%+ per-game win rate -- flat teams are already capped
+    // similarly by simpleWinProb's [.35,.66] clamp, and this keeps the player's own team in the
+    // same band. Retune with a full-season standings sweep if the spread looks wrong.
+    const diff = clamp(off - def, -35, 35);
     const rallyProb = clamp(0.205 + diff*0.0017, 0.09, 0.34);
     let runs = 0;
     if(Math.random() < rallyProb){
@@ -4562,12 +4566,13 @@ import {
     const seasonsRows = (rival.seasons||[]).slice().reverse().map(s=>`
         <tr><td>${s.year}</td><td>${s.age}</td><td class="team-cell">${svgEscape(teamNameAt(s.teamId ?? rival.teamId, s.year))}</td>
         <td class="tabular">${(s.avg!=null?s.avg:0).toFixed(3).replace(/^0/,"")}</td>
-        <td class="tabular">${s.hr!=null?s.hr:s.td}</td><td class="tabular">${s.rbi||0}</td><td class="tabular">${s.sb||0}</td>
-        <td class="tabular">${s.opsPlus!=null?s.opsPlus:Math.round(s.rating||0)}</td><td class="tabular">${recordLine(s.wins, s.losses, s.ties||0)}</td>
+        <td class="tabular">${s.hr!=null?s.hr:s.td}</td><td class="tabular">${s.rbi||0}</td>
+        <td class="tabular">${s.runs||0}</td><td class="tabular">${s.sb||0}</td>
+        <td class="tabular">${s.opsPlus!=null?s.opsPlus:Math.round(s.rating||0)}</td>
         <td>${(s.awards||[]).join(", ")||"—"}</td></tr>`).join("");
     const seasonsTableHtml = seasonsRows ? `<div class="table-wrap" style="margin-top:0.8rem;">
         <table class="career-table">
-          <thead><tr><th>Year</th><th>Age</th><th>Team</th><th>AVG</th><th>HR</th><th>RBI</th><th>SB</th><th>OPS+</th><th>Record</th><th>Awards</th></tr></thead>
+          <thead><tr><th>Year</th><th>Age</th><th>Team</th><th>AVG</th><th>HR</th><th>RBI</th><th>R</th><th>SB</th><th>OPS+</th><th>Awards</th></tr></thead>
           <tbody>${seasonsRows}</tbody>
         </table>
       </div>` : "";
@@ -4583,7 +4588,7 @@ import {
           <div><div class="rv-label">Home Runs</div><div class="rv-value tabular">${t.td||0}</div></div>
           <div><div class="rv-label">RBI</div><div class="rv-value tabular">${(t.rbi||0).toLocaleString()}</div></div>
           <div><div class="rv-label">OPS+</div><div class="rv-value tabular">${Math.round(rating)}</div></div>
-          <div><div class="rv-label">Team Record</div><div class="rv-value tabular">${recordLine(t.wins, t.losses, t.ties||0)}${totalGames?` (${winPct}%)`:""}</div></div>
+          <div><div class="rv-label">Runs</div><div class="rv-value tabular">${(t.runs||0).toLocaleString()}</div></div>
           <div><div class="rv-label">Games</div><div class="rv-value tabular">${t.games}</div></div>
         </div>
         ${badges ? `<div class="rival-badges">${badges}</div>` : ""}
@@ -9406,13 +9411,20 @@ import {
         return `<li class="${mine?"me":""} ${statusClass(t.id)}">${teamNameLinkHtml(t.id, season.year)}${flagsFor(t.id)} <span class="team-ovr">${teamOverall(t.id)} OVR</span><span class="tabular">${recordLine(t.wins, t.losses, t.ties||0)}</span></li>`;
       }).join("") + `</ol>`;
     }
+    // Games back from the division leader: ((lead.w - r.w) + (r.l - lead.l)) / 2.
+    const gamesBack = (r, lead) => {
+      const gb = ((lead.wins - r.wins) + (r.losses - lead.losses)) / 2;
+      return gb <= 0 ? "—" : (Number.isInteger(gb) ? String(gb) : gb.toFixed(1));
+    };
     function divTables(conf){
       return (ls.divisions || divisionsForYear(season.year)).filter(d=>d.conf===conf).map(d=>{
-        const rows = d.teams.map(id=>ls.results[id]).sort((a,b)=>compareTeamsForStandings(a,b,season.year,"division")).map(r=>{
+        const ordered = d.teams.map(id=>ls.results[id]).sort((a,b)=>compareTeamsForStandings(a,b,season.year,"division"));
+        const lead = ordered[0];
+        const rows = ordered.map(r=>{
           const mine = r.id===career.teamId;
-          return `<tr class="${mine?"me":""} ${statusClass(r.id)}"><td class="team-cell">${teamNameLinkHtml(r.id, season.year)}${mine?" (you)":""}${flagsFor(r.id)} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td>${recordLine(r.wins, r.losses, r.ties||0)}</td></tr>`;
+          return `<tr class="${mine?"me":""} ${statusClass(r.id)}"><td class="team-cell">${teamNameLinkHtml(r.id, season.year)}${mine?" (you)":""}${flagsFor(r.id)} <span class="team-ovr">${teamOverall(r.id)} OVR</span></td><td class="tabular">${recordLine(r.wins, r.losses, r.ties||0)}</td><td class="tabular">${lead?gamesBack(r, lead):"—"}</td></tr>`;
         }).join("");
-        return `<div class="standings-div"><div class="standings-div-name">${confLabel(conf, season.year)} ${d.name}</div><table class="standings-table"><tbody>${rows}</tbody></table></div>`;
+        return `<div class="standings-div"><div class="standings-div-name">${confLabel(conf, season.year)} ${d.name}</div><table class="standings-table"><thead><tr><th></th><th class="tabular">W-L</th><th class="tabular">GB</th></tr></thead><tbody>${rows}</tbody></table></div>`;
       }).join("");
     }
     return `<div class="standings-columns">
@@ -10779,9 +10791,9 @@ import {
     const standingsLine = p.made
       ? `<span class="badge good">Made the playoffs</span> — <b>#${p.seed} seed</b>, ${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}, #${p.confRank} of ${p.confSize} in the conference.`
       : `Missed the playoffs — ${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}, #${p.confRank} of ${p.confSize} in the conference.`;
-    const recordDiffers = (season.wins!==season.teamWins) || (season.losses!==season.teamLosses);
-    const recordNote = recordDiffers
-      ? `<div class="record-note">As the starter you went <b>${recordLine(season.wins, season.losses, season.ties||0)}</b>; the backup went ${recordLine(season.teamWins-season.wins, season.teamLosses-season.losses, (season.teamTies||0)-(season.ties||0))} in relief.</div>`
+    const missedW = (season.teamWins||0)-(season.wins||0), missedL = (season.teamLosses||0)-(season.losses||0);
+    const recordNote = (missedW+missedL) >= 3
+      ? `<div class="record-note">With you in the lineup the team went <b>${recordLine(season.wins, season.losses, season.ties||0)}</b>; in the ${missedW+missedL} game${missedW+missedL===1?"":"s"} you missed, ${recordLine(missedW, missedL, (season.teamTies||0)-(season.ties||0))}.</div>`
       : "";
 
     let playoffRoundsHtml = "";
@@ -10833,7 +10845,7 @@ import {
             </div>
           </div>
           <div class="sb-right">
-            <div class="sb-record"><span>Your Record</span>${recordLine(season.wins, season.losses, season.ties||0)}</div>
+            <div class="sb-record"><span>Team Record</span>${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}</div>
           </div>
         </div>
 
