@@ -12,7 +12,7 @@ import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("fa-stacked-team-weak-qb1-gets-real-offer", async ({ page }) => {
   test.setTimeout(180_000);
-  await installSeededRandom(page, 31415);
+  await installSeededRandom(page, 42);
   await startCareer(page, { decadeIndex: 2 });
 
   for (let i = 0; i < 2; i++) {

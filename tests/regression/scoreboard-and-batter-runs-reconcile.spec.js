@@ -7,19 +7,28 @@
 // scoreSim.myTotal for exactly this reason; this verifies the invariant holds in the persisted
 // game log across a real multi-season career.
 import { test, expect } from "@playwright/test";
-import { startCareer, advanceSeasons, readActiveCareer } from "../helpers/careerFlow.mjs";
+import { startCareer, advanceOneSeason, readActiveCareer } from "../helpers/careerFlow.mjs";
 import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("scoreboard-and-batter-runs-reconcile", async ({ page }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   await installSeededRandom(page, 24601);
   await startCareer(page, { decadeIndex: 5 }); // modern era -- more HR per game to exercise this
-  await advanceSeasons(page, 8);
 
-  const saved = await readActiveCareer(page);
+  // Collect season logs as we go -- a modern career can wash out before 8 full seasons, which
+  // would clear the active save.
+  let seasonLog = [];
+  for (let i = 0; i < 8; i++) {
+    const s = await readActiveCareer(page);
+    if (s?.career?.seasonLog?.length) seasonLog = s.career.seasonLog;
+    if (!(await advanceOneSeason(page))) break;
+  }
+  const fin = await readActiveCareer(page);
+  if (fin?.career?.seasonLog?.length) seasonLog = fin.career.seasonLog;
+
   let checkedGames = 0;
   const violations = [];
-  (saved.career.seasonLog || []).forEach(season => {
+  seasonLog.forEach(season => {
     (season.gameLog || []).forEach(g => {
       if (g.startedByBackup) return; // no personal stat line attached to a missed-game entry
       checkedGames++;

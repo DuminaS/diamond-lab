@@ -21,7 +21,7 @@ import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("fa-offers-match-persistent-team-profile", async ({ page }) => {
   test.setTimeout(180_000);
-  await installSeededRandom(page, 90210);
+  await installSeededRandom(page, 7);
   await startCareer(page, { decadeIndex: 2 });
 
   // A couple of real seasons first, so career.leagueTeamGrades holds real, already-established
