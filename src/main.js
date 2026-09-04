@@ -6356,6 +6356,81 @@ import {
     return candidates.length ? pick(candidates) : null;
   }
 
+  // Fills a team's now-empty everyday job -- promote its best bench bat (with a fresh replacement
+  // slotted behind), or, failing that, hand it to a rookie. Used after a free-agent departure.
+  function backfillStarter(teamId, decade, year){
+    if(rivalForTeam(teamId)) return;
+    const chart = career.leagueDepthCharts[teamId];
+    const promote = chart && [chart.qb2, chart.qb3].filter(p=>p && !p.retired)
+      .sort((a,b)=>rivalEffTalent(b)-rivalEffTalent(a))[0];
+    const teamGrade = career.leagueStrength[teamId] ?? 60;
+    if(promote){
+      const fromSlot = chart.qb2 && chart.qb2.id===promote.id ? "QB2" : "QB3";
+      const promoted = { ...promote, contract: rollRivalContract(decade, promote.talent), entrenchedYears: rollEntrenchedYears(promote.talent) };
+      registerQuarterback(promoted);
+      assignQuarterbackToRoster(promoted.id, teamId, "QB1");
+      assignQuarterbackToRoster(generateBenchPlayer(teamId, decade, year, teamGrade, false).id, teamId, fromSlot);
+      return;
+    }
+    const newTalent = clamp(teamGrade + randInt(-15, 12), 20, 99);
+    const rookie = { id:"riv_"+teamId+"_"+year+"_bf", name: randomFullName(), teamId, talent:newTalent, age:23,
+      retireAge: clamp(23+randInt(4,14), 30, 45), draftYear: year-1, seasons: [],
+      totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
+      retired:false, contract: rollRookieDepthContract(decade, randInt(1,4)), entrenchedYears: rollEntrenchedYears(newTalent) };
+    registerQuarterback(rookie);
+    assignQuarterbackToRoster(rookie.id, teamId, "QB1");
+  }
+  // Baseball free agency: a good everyday player whose contract has run out changes teams far more
+  // often than the replacement-driven succession churn produces on its own -- for money, a
+  // contender, a fresh start. Once per season in the FA era (1976+), a handful of expiring-contract
+  // regulars move: a straight swap where the other club's regular is also a free agent (both change
+  // uniforms), otherwise a one-way signing with the vacated team backfilling from within.
+  function rollVeteranFreeAgency(decade, year){
+    if(year < 1976) return; // reserve clause -- no free agency before 1976
+    // Every established regular gets a small independent per-season chance of changing teams --
+    // higher when his contract is up and his club isn't heavily invested (low entrenchedYears),
+    // lower for a franchise cornerstone mid-extension. A steady trickle (~2-3 league-wide a year)
+    // rather than a churn, so a long career genuinely tends to span multiple uniforms.
+    const pool = (career.leagueRivals||[]).filter(r=>
+      !r.retired && r.id!==USER_QB_ID && r.teamId!==career.teamId &&
+      r.age >= 27 && r.age < 37 && (r.seasons||[]).length >= 3);
+    const eligible = pool.filter(r=>{
+      const contractUp = !r.contract || r.contract.years<=1;
+      const invested = (r.entrenchedYears||0) >= 3;
+      let p = contractUp ? 0.22 : 0.04;
+      if(invested) p *= 0.35;
+      if(r.age >= 33) p *= 1.4;
+      return Math.random() < p;
+    });
+    shuffle(eligible);
+    let moved = 0;
+    for(const r of eligible){
+      if(moved >= 4) break;
+      const fromTeam = r.teamId;
+      const others = (career.leagueRivals||[]).filter(o=>
+        !o.retired && o.id!==r.id && o.teamId!==fromTeam && o.teamId!==career.teamId);
+      if(!others.length) continue;
+      others.sort((a,b)=> rivalEffTalent(a) - rivalEffTalent(b)); // weakest incumbent first -- a club buying an upgrade
+      const dest = others[Math.floor(Math.random()*Math.min(6, others.length))];
+      const destTeam = dest.teamId;
+      const swap = dest.contract && dest.contract.years<=1 && (dest.entrenchedYears||0)<=1 && dest.age < 37 && !dest.retired;
+      r.contract = rollRivalContract(decade, r.talent); r.entrenchedYears = rollEntrenchedYears(r.talent);
+      assignQuarterbackToRoster(r.id, destTeam, "QB1"); // displaces `dest` out of the QB1 slot
+      if(swap){
+        dest.contract = rollRivalContract(decade, dest.talent); dest.entrenchedYears = rollEntrenchedYears(dest.talent);
+        assignQuarterbackToRoster(dest.id, fromTeam, "QB1");
+        career.leagueNewsLog.push({ year, teamId: destTeam, title:"Free-Agent Signing", delta:0,
+          flavor:`${teamNameAt(destTeam, year)} and ${teamNameAt(fromTeam, year)} effectively swap everyday bats — ${r.name} in, ${dest.name} the other way.` });
+      } else {
+        enterFreeAgentPool(dest, "lost-job");
+        backfillStarter(fromTeam, decade, year);
+        career.leagueNewsLog.push({ year, teamId: destTeam, title:"Free-Agent Signing", delta:0,
+          flavor:`${r.name} signs with ${teamNameAt(destTeam, year)} in free agency, leaving ${teamNameAt(fromTeam, year)}.` });
+      }
+      moved++;
+    }
+  }
+
   /* ----- Succession: does a team stick with its starter, promote from within, sign a veteran
      replacement, or add a fresh rookie to the depth chart? Runs once per team per season, after
      both the starter and the bench have their year's stats in hand. "Entrenched" (rollEntrenchedYears)
@@ -6942,6 +7017,7 @@ import {
       }
     }
     simulateDepthChartSeasons(decade, league, career.year);
+    rollVeteranFreeAgency(decade, career.year);
     TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateSuccession(t.id, decade, career.year));
     // Phase 2 of the QB-entity redesign: real bench mobility (trade/waive) and free-agent-pool
     // resolution (retirement hazard + teams signing off the pool), both once per team per season,
