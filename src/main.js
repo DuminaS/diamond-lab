@@ -9307,7 +9307,8 @@ import {
         }
       }
     }
-    return { aId: m.aId, bId: m.bId, aScore: m.aScore, bScore: m.bScore, winnerId, realRound, aInnings, bInnings };
+    return { aId: m.aId, bId: m.bId, aScore: m.aScore, bScore: m.bScore, winnerId, realRound, aInnings, bInnings,
+      gameNo: Math.max(0, (week||1)-1), playoff:false };
   }
   function weekMatchupTeamLineHTML(teamId, score, won, _qb, year){
     const mine = teamId===career.teamId;
@@ -9726,6 +9727,43 @@ import {
         <tbody>${rows}</tbody>
       </table></div>${lineup.pitcherBats?`<div class="calc-refnote" style="margin-top:0.4rem;">Pre-DH era — the pitcher bats ninth.</div>`:""}`;
   }
+  // A team's starting rotation for a season -- DETERMINISTIC and display-only, the pitching sibling
+  // of buildTeamLineup. The sim never models an individual pitcher (opposing run scoring is a team
+  // grade), so this is pure flavor: a named 4/5-man staff so a box score can say who started. Ace
+  // grade tracks the team grade; the rotation steps down from there. Pre-1975 seasons ran a 4-man
+  // rotation, modern seasons a 5-man.
+  function buildTeamRotation(teamId, year){
+    const rand = createSeededRandom(hashSeed("rotation:" + teamId + ":" + year));
+    const grade = Math.round(teamId===career.teamId ? career.teamStrength : (career.leagueStrength[teamId] ?? 60));
+    const size = year < 1975 ? 4 : 5;
+    const used = new Set();
+    const fabName = ()=>{
+      let name;
+      for(let i=0;i<12;i++){
+        name = `${FIRST_NAMES[Math.floor(rand()*FIRST_NAMES.length)]} ${LAST_NAMES[Math.floor(rand()*LAST_NAMES.length)]}`;
+        if(!used.has(name)) break;
+      }
+      used.add(name);
+      return name;
+    };
+    const staff = [];
+    for(let i=0;i<size;i++){
+      const ovr = clamp(Math.round(grade + 6 - i*4 + (rand()*8 - 4)), 28, 96);
+      staff.push({ slot:i+1, name: fabName(), ovr });
+    }
+    return staff;
+  }
+  // Which starter takes the ball. Regular season: the rotation just turns over (game N -> slot
+  // N mod size). Postseason: teams shorten to 3-4 starters and lead with the ace, so game N ->
+  // [ace, 2, 3, 4][N mod 4]. gameNo is 0-based.
+  function startingPitcherFor(teamId, year, gameNo, opts){
+    const staff = buildTeamRotation(teamId, year);
+    if(!staff.length) return null;
+    const idx = (opts && opts.playoff)
+      ? [0,1,2,3][((gameNo||0)%4)] % staff.length
+      : ((gameNo||0) % staff.length);
+    return staff[idx] || staff[0];
+  }
   // One fabricated batter's line for a single game, biased by ovr and lineup slot, drawn from a
   // caller-supplied seeded rand so the box renders identically every time it's opened.
   function fabricateBatterGameLine(ovr, slot, rand){
@@ -9750,6 +9788,7 @@ import {
       if(h.isPitcher) return { ...h, ab:2, h:0, bb:0, hr:0, r:0, rbi:0 };
       return { ...h, r:0, rbi:0, ...fabricateBatterGameLine(h.ovr, h.slot, rand) };
     });
+    if(opts.pitcherName){ const p = rows.find(r=>r.isPitcher); if(p) p.name = opts.pitcherName; }
     const tracked = rows.find(r=>r.isTracked);
     if(tracked){
       if(opts.realBox){
@@ -9843,6 +9882,7 @@ import {
       aInnings: clinchInn ? (meIsA ? clinchInn.my : clinchInn.opp) : null,
       bInnings: clinchInn ? (meIsA ? clinchInn.opp : clinchInn.my) : null,
       realRound: clinchBox ? { box: clinchBox } : null,
+      gameNo: lastIdx, playoff:true,
     };
     return `<div class="modal-box">
         <div class="modal-head"><h3 id="bracketBoxScoreHeading">${svgEscape(roundDisplayLabel(roundLabel, year))}</h3><button type="button" class="modal-close">Close</button></div>
@@ -9883,8 +9923,15 @@ import {
     // Batting boxes -- the tracked hitter's real line goes onto his row where we have one.
     const meIsA = match.aId===career.teamId, meIsB = match.bId===career.teamId;
     const myBox = match.realRound && match.realRound.box;
-    const aRows = buildGameBattingBox(match.aId, year, match.aScore, { key: roundLabel+"a", isMine: meIsA, realBox: meIsA ? myBox : null });
-    const bRows = buildGameBattingBox(match.bId, year, match.bScore, { key: roundLabel+"b", isMine: meIsB, realBox: meIsB ? myBox : null });
+    const PLAYOFF_LABELS = new Set(["Wild Card","Divisional","Conference Championship","Super Bowl"]);
+    const isPlayoff = match.playoff!=null ? match.playoff : PLAYOFF_LABELS.has(roundLabel);
+    const gameNo = match.gameNo!=null ? match.gameNo
+      : (hashSeed("gno:"+match.aId+":"+match.bId+":"+year+":"+roundLabel) % (isPlayoff?4:5));
+    const aSP = startingPitcherFor(match.aId, year, gameNo, { playoff:isPlayoff });
+    const bSP = startingPitcherFor(match.bId, year, gameNo, { playoff:isPlayoff });
+    const spNote = (aSP && bSP) ? `<div class="calc-refnote" style="margin-top:0.4rem;">Starting pitchers: <b>${svgEscape(aSP.name)}</b> (${aName}) vs <b>${svgEscape(bSP.name)}</b> (${bName}).</div>` : "";
+    const aRows = buildGameBattingBox(match.aId, year, match.aScore, { key: roundLabel+"a", isMine: meIsA, realBox: meIsA ? myBox : null, pitcherName: aSP && aSP.name });
+    const bRows = buildGameBattingBox(match.bId, year, match.bScore, { key: roundLabel+"b", isMine: meIsB, realBox: meIsB ? myBox : null, pitcherName: bSP && bSP.name });
 
     const margin = Math.abs(match.aScore-match.bScore);
     const recap = match.winnerId==null ? "Nobody blinked — this one went to extras and stayed level."
@@ -9897,6 +9944,7 @@ import {
             <tr class="${match.winnerId===match.aId?"me":""}"><td>${aName}</td>${innRow(aInn)}<td class="tabular"><b>${match.aScore}</b></td></tr>
             <tr class="${match.winnerId===match.bId?"me":""}"><td>${bName}</td>${innRow(bInn)}<td class="tabular"><b>${match.bScore}</b></td></tr>
           </tbody></table></div>
+        ${spNote}
         ${fillInNote}
         ${battingBoxTableHTML(match.aId, year, aRows)}
         ${battingBoxTableHTML(match.bId, year, bRows)}
