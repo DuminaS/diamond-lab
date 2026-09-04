@@ -6817,7 +6817,17 @@ import {
     career._backupMissedGames = 0; career._backupIncumbentWins = 0; career._backupIncumbentLosses = 0;
     career._backupIncumbentName = null; career._backupIncumbentSeasonSnapshot = null;
 
-    const gamesPlayed = clamp(league.games - missedGames, 0, league.games);
+    // Rookie call-up: a real position prospect rarely breaks camp on the Opening Day roster --
+    // most open the year in Triple-A and come up in April-June. The player's FIRST career season
+    // (not a bench/backup role, and only when the schedule is a real full one) usually starts
+    // partway through: ~60% chance of a 35-80-game delay, so a debut season is ~90-125 games, not
+    // a full 162. Those games are covered by a generic replacement (folded into genericMissedGames
+    // below) exactly like an injury absence -- the team's season doesn't wait for the call-up.
+    let debutCallup = 0;
+    if(career.seasonLog.length===0 && !career.isBackup && league.games>=100 && Math.random()<0.6){
+      debutCallup = clamp(randInt(35, 80), 0, league.games - 40);
+    }
+    const gamesPlayed = clamp(league.games - missedGames - debutCallup, 0, league.games);
 
     // a reduced-role contract (backup/minimum) means fewer starts, not just worse play
     const roleShare = career.contract.tier==="minimum" ? clamp(0.15+Math.random()*0.4, 0.1, 0.6)
@@ -6919,7 +6929,7 @@ import {
     // documented trade-off (a little less precision on this one flavor number) for actually fixing
     // the double-simulation. His REAL per-game stat line still lands on the correct tagged weeks
     // once simulateRivalSeasons runs (see the patch step right after that call).
-    const genericMissedGames = missedGamesInjury + missedGamesSuspension;
+    const genericMissedGames = missedGamesInjury + missedGamesSuspension + debutCallup;
     const incumbentTotalGames = backupIncumbentWins + backupIncumbentLosses;
     const incumbentWinRate = incumbentTotalGames>0 ? backupIncumbentWins/incumbentTotalGames
       : clamp(0.5 + (career.teamStrength-65)*0.01, 0.12, 0.88);
@@ -7006,7 +7016,7 @@ import {
       pa, ab, hits, singles, doubles: doublesN, triples, hr, bb: walks, hbp, sf, k: strikeouts,
       sb, cs, rbi, runs, avg, obp, slg, ops, opsPlus,
       teamGames: league.games, teamWins: wins+backupWins+incumbentWins, teamLosses: losses+backupLosses+incumbentLosses, teamTies: ties, missedGames,
-      missedGamesInjury, missedGamesSuspension, missedGamesBackup,
+      missedGamesInjury, missedGamesSuspension, missedGamesBackup, debutCallup,
       incumbentName: backupIncumbentName,
       incumbentSeasonSnapshot: backupIncumbentSeasonSnapshot,
       teamOverall: career.teamStrength,
@@ -10857,7 +10867,9 @@ import {
       ? `<span class="badge good">Made the playoffs</span> — <b>#${p.seed} seed</b>, ${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}, #${p.confRank} of ${p.confSize} in the conference.`
       : `Missed the playoffs — ${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}, #${p.confRank} of ${p.confSize} in the conference.`;
     const missedW = (season.teamWins||0)-(season.wins||0), missedL = (season.teamLosses||0)-(season.losses||0);
-    const recordNote = (missedW+missedL) >= 3
+    const recordNote = season.debutCallup
+      ? `<div class="record-note">Called up after ${season.debutCallup} game${season.debutCallup===1?"":"s"} in Triple-A — you played <b>${season.games}</b> of the team's ${season.teamGames}, going <b>${recordLine(season.wins, season.losses, season.ties||0)}</b> once you were up.</div>`
+      : (missedW+missedL) >= 3
       ? `<div class="record-note">With you in the lineup the team went <b>${recordLine(season.wins, season.losses, season.ties||0)}</b>; in the ${missedW+missedL} game${missedW+missedL===1?"":"s"} you missed, ${recordLine(missedW, missedL, (season.teamTies||0)-(season.ties||0))}.</div>`
       : "";
 
