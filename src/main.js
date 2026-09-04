@@ -8956,74 +8956,45 @@ import {
   }
 
   // Era-accurate contract control. Player free agency did not exist before the 1975 Seitz decision
-  // (effective 1976). Even after it, a player needs ~6 years of MLB service to get there: his first
-  // two-plus years he's renewed near the minimum, then years 3-5 go to salary arbitration -- a real
-  // raise, but still no open market and no choice of team. Only a 6th-year player hits true free
-  // agency and the multi-team negotiation renderFAOffers models.
-  function playerServiceYears(){ return career.seasonLog.length; }
+  // (effective 1976) -- a player whose deal is up before then is simply renewed by his club under
+  // the reserve clause: no market, no negotiation, the team sets the number. (The 6-year rookie
+  // deal already models the modern club-control window -- service time plus arbitration -- so once
+  // it expires, in any era from 1976 on, that's genuine free agency and renderFAOffers handles it.)
   function renderFreeAgencyEvent(){
     const decade = decadeForYear(career.year);
     const effOverall = computeEffOverall(career.age, decade);
     const tier = performanceTier(effOverall);
     const oldTeamId = career.contract.apy>0 ? career.teamId : null;
-    // The initial 6-year rookie deal already models the full pre-free-agency club-control window
-    // (real service requirement: ~6 years) -- when it runs out, that IS free agency. Era control
-    // only re-applies to a player on a SUBSEQUENT short deal who hasn't yet banked 6 years (cut and
-    // re-signed early in his career). The one exception is the reserve clause: before 1976 nobody
-    // reaches the open market at all, whatever contract just ended.
-    if(oldTeamId!=null){
-      if(career.year < 1976){ renderTeamControlledRenewal(decade, "reserve"); return; }
-      const svc = playerServiceYears();
-      if(career.contract.tier !== "rookie" && svc < 6){
-        renderTeamControlledRenewal(decade, svc < 3 ? "preArb" : "arbitration"); return;
-      }
-    }
+    if(oldTeamId!=null && career.year < 1976){ renderTeamControlledRenewal(decade, "reserve"); return; }
     const oldTeamName = career.teamId ? teamNameAt(career.teamId, career.year) : null;
     const offers = buildFreeAgentOffers(decade, tier, oldTeamId);
     renderFAOffers(offers, { decade, tier, oldTeamId, oldTeamName });
   }
 
   // The player's club exercises its control: a one-year renewal at a team-set number, no shopping
-  // around. `mode` is "reserve" (pre-1976), "preArb" (0-2 service years), or "arbitration" (3-5).
+  // around. `mode` is "reserve" -- pre-1976, the only era with no player free agency at all.
   function renderTeamControlledRenewal(decade, mode){
     const content = document.getElementById("careerContent");
     const teamId = career.teamId, teamName = teamNameAt(teamId, career.year);
     const effOverall = computeEffOverall(career.age, decade);
     const tier = performanceTier(effOverall);
-    const last = career.seasonLog[career.seasonLog.length-1];
     const cur = career.contract.apy || veteranAPY(decade, "minimum");
     // Career-derived seeded stream, not the global Math.random -- keeps this branch from shifting
     // every downstream seeded test's RNG.
     const rand = createSeededRandom(hashSeed("renewal:" + (career.name||"") + ":" + career.year + ":" + mode));
 
     // Pre-1976 a poor club could just cut an aging regular loose -- one of the few ways off a team.
-    if(mode==="reserve" && career.age>=36 && career.teamStrength<45 && rand()<0.42){
+    if(career.age>=36 && career.teamStrength<45 && rand()<0.42){
       renderReserveClauseRelease(decade, teamName);
       return;
     }
 
-    let apy, blurb, tierLabel;
-    if(mode==="reserve"){
-      // The reserve clause kept salaries well below what an open market would bear -- cap the renewal
-      // at a "good regular" number no matter how well he played, and keep it team-favorable.
-      const ceiling = veteranAPY(decade, tier==="elite" ? "good" : tier);
-      apy = Math.round(clamp(Math.max(cur*(1.0+rand()*0.14), ceiling*0.7), cur*0.9, ceiling));
-      tierLabel = "reserve clause";
-      blurb = `There's no such thing as free agency in ${career.year}. The ${teamName} hold his rights under the reserve clause and mail him a contract for next season. He can sign it or sit out — and nobody sits out.`;
-    } else if(mode==="preArb"){
-      apy = Math.round(Math.max(cur*(1.02+rand()*0.12), veteranAPY(decade,"minimum")*(1.0+rand()*0.25)));
-      tierLabel = "pre-arbitration";
-      blurb = `He isn't eligible for arbitration yet, let alone free agency. The ${teamName} renew him for ${career.year+1} at a number they set — a small bump over the minimum, take it or leave it.`;
-    } else {
-      // Arbitration: a genuine, performance-driven raise, but still capped below the open market and
-      // still with only one team. ~40-65% of a comparable free agent's rate, scaled by last year's bat.
-      const opsPlus = last && last.opsPlus!=null ? last.opsPlus : 100;
-      const perfMult = clamp(0.5 + (opsPlus-100)*0.006, 0.32, 1.05);
-      const market = veteranAPY(decade, tier);
-      apy = Math.round(clamp(Math.max(cur*1.15, market*(0.45+0.05*playerServiceYears())*perfMult), cur*1.05, market*0.9));
-      tierLabel = "arbitration";
-      blurb = `Not a free agent for another year or two. He files for salary arbitration; the ${teamName} file their own number, and the panel settles on ${fmtMoney(apy)} for ${career.year+1}. Still no other suitors allowed.`;
-    }
+    // The reserve clause kept salaries well below what an open market would bear -- cap the renewal
+    // at a "good regular" number no matter how well he played, and keep it team-favorable.
+    const ceiling = veteranAPY(decade, tier==="elite" ? "good" : tier);
+    const apy = Math.round(clamp(Math.max(cur*(1.0+rand()*0.14), ceiling*0.7), cur*0.9, ceiling));
+    const tierLabel = "reserve clause";
+    const blurb = `There's no such thing as free agency in ${career.year}. The ${teamName} hold his rights under the reserve clause and mail him a contract for next season. He can sign it or sit out — and nobody sits out.`;
 
     career.contract = { apy, years: 1, tier: tierLabel };
     career.transactions.push(`${career.year}: Renewed by the ${teamName} — ${fmtMoney(apy)} (${tierLabel}).`);
@@ -9032,7 +9003,7 @@ import {
 
     content.innerHTML = eraWrap(decade, `
         <div class="ev-eyebrow">${career.year} · Contract</div>
-        <h3>${mode==="reserve" ? "Renewed under the reserve clause." : mode==="arbitration" ? "Arbitration settles it." : "Renewed for the minimum-plus."}</h3>
+        <h3>Renewed under the reserve clause.</h3>
         <p>${blurb}</p>
         <div class="fa-offer-terms tabular" style="margin:0.6rem 0;">${fmtMoney(apy)}/yr · 1 yr · ${tierLabel}</div>
         <div class="event-choices"><button class="choice-btn" id="renewAck"><div class="cb-title">Report to camp</div></button></div>

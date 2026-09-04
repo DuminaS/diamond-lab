@@ -312,12 +312,12 @@ Post-deploy pass after playing the build. Plan: `~/.claude/plans/breezy-roaming-
    career table show it. Gold Glove keys off `career.position`, so a move to DH ends eligibility.
    Seeded stream — no RNG drift.
 6. **Era-accurate contract control** — no player free agency before 1976: an expired deal is a
-   reserve-clause renewal (`renderTeamControlledRenewal`, team-set 1-year capped below market),
-   with a small chance an aging player on a bad club is released instead. Post-1976, a player on a
-   post-rookie short deal who hasn't banked 6 service years goes to pre-arbitration or salary
-   arbitration — still one team, no market. The 6-year rookie deal already models the full control
-   window, so a normal career still hits true free agency when it expires. FA specs re-decaded to
-   post-1976.
+   reserve-clause renewal (`renderTeamControlledRenewal`, team-set 1-year capped below an open
+   market), with a small chance an aging player on a bad club is released instead. From 1976 on the
+   6-year rookie deal already models the modern club-control window (service time + arbitration), so
+   an expired deal is genuine free agency and `renderFAOffers` handles it unchanged. FA specs
+   re-decaded to post-1976 (their forced-early-expiry shortcut would otherwise land in the reserve
+   era and correctly see no open market).
 7. **Silver Slugger / Gold Glove by position** — `season.awardPos` maps an award label to a
    position key, set at the grant site for the player and each rival. Internal `season.awards`
    entries stay canonical so every `.includes()` / achievement-rule check is untouched; the
@@ -334,5 +334,7 @@ Post-deploy pass after playing the build. Plan: `~/.claude/plans/breezy-roaming-
 
 New specs: `box-score-line-score-and-lineups` (extended for starting pitchers),
 `rookie-callup-shortens-debut-season`, `aging-player-shifts-down-the-defensive-spectrum`,
-`era-contract-rules-reserve-clause-and-arbitration`, `team-win-totals-stay-in-a-realistic-band`.
-`admin-calculator-calls-production-math` + 4 FA specs updated.
+`pre-1976-contract-expiry-is-a-reserve-clause-renewal`, `team-win-totals-stay-in-a-realistic-band`.
+`admin-calculator-calls-production-math` + 4 FA specs updated; `standings-and-history-preserve-wlt`
+and `rival-season-table-has-team-column` hardened against an earlier career washout.
+**67 regression tests / 58 balance green.**

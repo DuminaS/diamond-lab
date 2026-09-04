@@ -1,7 +1,7 @@
 // Phase 13c: era-accurate contract control. Player free agency did not exist before 1976 -- a
-// pre-1976 player whose deal is up is renewed by his club under the reserve clause, no market,
-// no negotiation. (Post-1976 the 6-year rookie deal already models the service-time window, and
-// a player on a later short deal who hasn't banked 6 years goes to arbitration, not the market.)
+// pre-1976 player whose deal is up is renewed by his club under the reserve clause: no market,
+// no negotiation, the team sets the number. (Post-1976 the 6-year rookie deal already models the
+// modern club-control window, so an expired deal from 1976 on is genuine free agency.)
 import { test, expect } from "@playwright/test";
 import { startCareer, readActiveCareer, writeActiveCareer } from "../helpers/careerFlow.mjs";
 import { installSeededRandom } from "../helpers/seededRandom.mjs";
