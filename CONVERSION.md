@@ -247,4 +247,41 @@ ANT→Pitch Recognition(mtl) · DEC→Plate Approach(mtl) · CLU→Clutch(mtl) �
 - Admin → Stat Calculator tab labels still football-ish (`Comp%`, `Y/A`, `TD%`) — admin-only.
 - Full seeded tuning sweep of the first-pass Phase 3 stat coefficients (project norm; the numbers
   produce coherent baseball output but haven't had the diagnostic-driven sweep).
-- Best-of-5/7 playoff series — rounds are still single games.
+
+### Phase 13a — Baseball faithfulness: the visible layer  ✅
+Post-deploy pass after playing the build. Plan: `~/.claude/plans/breezy-roaming-map.md`.
+- **A — no more "QB" in the UI.** Schedule cards dropped the per-team hitter line; team pages and
+  the Team tab replaced the QB1/QB2/QB3 depth chart with a real batting order; the era tooltips,
+  succession/trade flavor, "Their QB", the Achievements caption, and the Past-Seasons header all
+  reworded.
+- **B — player mobility + team history.** `rollVeteranFreeAgency` (1976+): established regulars
+  get a small per-season chance to change clubs (swap or one-way with `backfillStarter`). Rival
+  profile season tables gained a Team column; a "suited up for N franchises" fun fact.
+- **C — `buildTeamLineup` / `buildLineupTableHTML`.** A deterministic (seeded by team+year) 9-man
+  everyday lineup: the tracked hitter in his real position/slot, 8 fabricated teammates, DH by
+  league+year (AL 1973 / NL 2022), pre-DH pitcher bats ninth.
+- **D — full box scores.** `simulateRegularSeasonGames` persists real per-inning runs
+  (`innings.my`/`innings.opp`); `buildBracketBoxScoreModalHTML` rewritten to a real R-by-inning
+  line score + a 9-man batting box for both teams (`buildGameBattingBox` reconciles R/RBI to the
+  final score; the player's real line drops into his row).
+- New specs: `team-page-shows-batting-order`, `box-score-line-score-and-lineups`,
+  `rival-season-table-has-team-column`. 59 regression / 58 balance green.
+
+### Phase 13b — Series mechanics (NOT started)
+- Playoffs as best-of-N (era-accurate: WS 7; LCS 5 then 7; DS 5; WC 1 then 3; pre-1969 WS only).
+  Player's own series reveals **game by game**; the Key Moment can fire in a pivotal game.
+  Wraps `simulateMatch` + `advanceToNextPlayoffRound`/`confirmPlayoffRound`/`animatePlayoffQuarters`;
+  checkpoints per game. Bracket shows "NYY def. BOS 4–2".
+- Real regular-season **series** structure: 162 games grouped into ~52 series of 2–4 vs one
+  opponent; "Week 34" → "Series 12 · vs Yankees". Touches `scheduleGamesIntoWeeks`, standings,
+  `buildWeekMatchups`, the schedule tab.
+
+### Phase 13c — Broader faithfulness audit (catalogue)
+1. Standings: GB (games back), drop the ties column for modern eras, wild-card race.
+2. Drop the hitter's personal W-L (a football holdover) — keep only team record in his games.
+3. Name the opposing starting pitcher on game cards / box scores.
+4. Rookie call-up: a rookie's first season starts partway through (~90–120 games).
+5. Position changes with age (SS→3B→1B/DH, CF→corner) — affects Gold Glove.
+6. Era-accurate contract rules (reserve clause pre-1976, arbitration years, luxury tax).
+7. Silver Slugger / Gold Glove explicitly by position; Hank Aaron / Comeback Player flavor.
+8. Admin → Stat Calculator tab still shows the football intermediate math (admin-only).
