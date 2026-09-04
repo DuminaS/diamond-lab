@@ -564,6 +564,42 @@ import {
     return pos ? `${label} (${positionLabel(pos)})` : label;
   }
   function decorateAwards(list, season){ return (list||[]).map(a=>awardWithPos(a, season)); }
+  // The defensive spectrum, hardest -> easiest. A player ages DOWN it: a shortstop slides to
+  // second or third, a center fielder to a corner, everyone eventually to first base or DH. DH is
+  // terminal. maybeShiftPositionWithAge() walks one step per move.
+  const DEFENSIVE_SHIFT = {
+    "C":  ["1B","LF","DH"],
+    "SS": ["2B","3B","1B","DH"],
+    "2B": ["3B","1B","DH"],
+    "3B": ["1B","DH"],
+    "CF": ["RF","LF","1B","DH"],
+    "LF": ["1B","DH"],
+    "RF": ["1B","DH"],
+    "1B": ["DH"],
+    "DH": [],
+  };
+  // Once a season, in spring training, an aging player may be moved down the defensive spectrum --
+  // a real career arc (Jeter SS->DH, Biggio C->2B->CF->2B, Cabrera 3B->1B). Premium up-the-middle
+  // spots (C/SS/CF/2B) shift earliest; the odds ramp from age ~31 and rise into the late 30s.
+  // Sets career._positionChangedFrom for the season object + narrative; nulls it when nothing moved.
+  function maybeShiftPositionWithAge(){
+    career._positionChangedFrom = null;
+    const cur = career.position;
+    const next = (DEFENSIVE_SHIFT[cur] || [])[0];
+    if(!next || career.age < 31) return;
+    const prem = ({ C:1.0, SS:1.0, CF:0.9, "2B":0.72, "3B":0.5, LF:0.34, RF:0.34, "1B":0.26 })[cur] || 0.35;
+    const ageF = clamp((career.age - 29) * 0.09, 0, 0.78);
+    const chance = clamp(prem * ageF, 0, 0.6);
+    // Drawn from a career-derived seeded stream, NOT the global Math.random, so adding this check
+    // doesn't perturb every downstream seeded test's RNG sequence.
+    const rand = createSeededRandom(hashSeed("posshift:" + (career.name||"") + ":" + career.draftYear + ":" + career.year));
+    if(rand() < chance){
+      career.position = next;
+      career._positionChangedFrom = cur;
+      (career.positionHistory = career.positionHistory || []).push({ year: career.year, from: cur, to: next });
+      career.transactions.push(`${career.year}: Moves off ${positionLabel(cur)} — will play ${positionLabel(next)} this season.`);
+    }
+  }
   function randomPosition(){
     const total = POSITIONS.reduce((s,p)=>s+p.w,0);
     let r = Math.random()*total;
@@ -6754,6 +6790,7 @@ import {
   function generateSeason(){
     const decade = decadeForYear(career.year);
     const league = LEAGUE[decade];
+    maybeShiftPositionWithAge();
     const developmentPlan = prepareDevelopmentPlanForSeason();
     // Must run before career.seasonLog.push(season) below makes THIS season the new "last" entry --
     // applyCoordinatorCarouselIfDue needs the PREVIOUS season's fully-resolved playoffs record.
@@ -6824,8 +6861,11 @@ import {
     // a full 162. Those games are covered by a generic replacement (folded into genericMissedGames
     // below) exactly like an injury absence -- the team's season doesn't wait for the call-up.
     let debutCallup = 0;
-    if(career.seasonLog.length===0 && !career.isBackup && league.games>=100 && Math.random()<0.6){
-      debutCallup = clamp(randInt(35, 80), 0, league.games - 40);
+    if(career.seasonLog.length===0 && !career.isBackup && league.games>=100){
+      // Career-derived seeded stream, not the global Math.random -- so this roll can't shift the
+      // RNG sequence every other seeded test depends on.
+      const cuRand = createSeededRandom(hashSeed("callup:" + (career.name||"") + ":" + career.draftYear));
+      if(cuRand() < 0.6) debutCallup = clamp(35 + Math.floor(cuRand()*46), 0, league.games - 40);
     }
     const gamesPlayed = clamp(league.games - missedGames - debutCallup, 0, league.games);
 
@@ -7009,6 +7049,7 @@ import {
 
     const season = {
       year: career.year, age: career.age, teamId: career.teamId, teamName: teamNameAt(career.teamId, career.year),
+      position: career.position, positionChangedFrom: career._positionChangedFrom || null,
       decade, games: gamesPlayed, comp: completionsFinal, att: attempts, pct: avg,
       yards: yardsFinal, td: tdFinal, int: intFinal, sacks, rating, wins, losses, ties,
       rushAtt, rushYards, rushTd, gameLog,
@@ -8877,14 +8918,119 @@ import {
     return offers;
   }
 
+  // Era-accurate contract control. Player free agency did not exist before the 1975 Seitz decision
+  // (effective 1976). Even after it, a player needs ~6 years of MLB service to get there: his first
+  // two-plus years he's renewed near the minimum, then years 3-5 go to salary arbitration -- a real
+  // raise, but still no open market and no choice of team. Only a 6th-year player hits true free
+  // agency and the multi-team negotiation renderFAOffers models.
+  function playerServiceYears(){ return career.seasonLog.length; }
   function renderFreeAgencyEvent(){
     const decade = decadeForYear(career.year);
     const effOverall = computeEffOverall(career.age, decade);
     const tier = performanceTier(effOverall);
     const oldTeamId = career.contract.apy>0 ? career.teamId : null;
+    // The initial 6-year rookie deal already models the full pre-free-agency club-control window
+    // (real service requirement: ~6 years) -- when it runs out, that IS free agency. Era control
+    // only re-applies to a player on a SUBSEQUENT short deal who hasn't yet banked 6 years (cut and
+    // re-signed early in his career). The one exception is the reserve clause: before 1976 nobody
+    // reaches the open market at all, whatever contract just ended.
+    if(oldTeamId!=null){
+      if(career.year < 1976){ renderTeamControlledRenewal(decade, "reserve"); return; }
+      const svc = playerServiceYears();
+      if(career.contract.tier !== "rookie" && svc < 6){
+        renderTeamControlledRenewal(decade, svc < 3 ? "preArb" : "arbitration"); return;
+      }
+    }
     const oldTeamName = career.teamId ? teamNameAt(career.teamId, career.year) : null;
     const offers = buildFreeAgentOffers(decade, tier, oldTeamId);
     renderFAOffers(offers, { decade, tier, oldTeamId, oldTeamName });
+  }
+
+  // The player's club exercises its control: a one-year renewal at a team-set number, no shopping
+  // around. `mode` is "reserve" (pre-1976), "preArb" (0-2 service years), or "arbitration" (3-5).
+  function renderTeamControlledRenewal(decade, mode){
+    const content = document.getElementById("careerContent");
+    const teamId = career.teamId, teamName = teamNameAt(teamId, career.year);
+    const effOverall = computeEffOverall(career.age, decade);
+    const tier = performanceTier(effOverall);
+    const last = career.seasonLog[career.seasonLog.length-1];
+    const cur = career.contract.apy || veteranAPY(decade, "minimum");
+    // Career-derived seeded stream, not the global Math.random -- keeps this branch from shifting
+    // every downstream seeded test's RNG.
+    const rand = createSeededRandom(hashSeed("renewal:" + (career.name||"") + ":" + career.year + ":" + mode));
+
+    // Pre-1976 a poor club could just cut an aging regular loose -- one of the few ways off a team.
+    if(mode==="reserve" && career.age>=36 && career.teamStrength<45 && rand()<0.42){
+      renderReserveClauseRelease(decade, teamName);
+      return;
+    }
+
+    let apy, blurb, tierLabel;
+    if(mode==="reserve"){
+      // The reserve clause kept salaries well below what an open market would bear -- cap the renewal
+      // at a "good regular" number no matter how well he played, and keep it team-favorable.
+      const ceiling = veteranAPY(decade, tier==="elite" ? "good" : tier);
+      apy = Math.round(clamp(Math.max(cur*(1.0+rand()*0.14), ceiling*0.7), cur*0.9, ceiling));
+      tierLabel = "reserve clause";
+      blurb = `There's no such thing as free agency in ${career.year}. The ${teamName} hold his rights under the reserve clause and mail him a contract for next season. He can sign it or sit out — and nobody sits out.`;
+    } else if(mode==="preArb"){
+      apy = Math.round(Math.max(cur*(1.02+rand()*0.12), veteranAPY(decade,"minimum")*(1.0+rand()*0.25)));
+      tierLabel = "pre-arbitration";
+      blurb = `He isn't eligible for arbitration yet, let alone free agency. The ${teamName} renew him for ${career.year+1} at a number they set — a small bump over the minimum, take it or leave it.`;
+    } else {
+      // Arbitration: a genuine, performance-driven raise, but still capped below the open market and
+      // still with only one team. ~40-65% of a comparable free agent's rate, scaled by last year's bat.
+      const opsPlus = last && last.opsPlus!=null ? last.opsPlus : 100;
+      const perfMult = clamp(0.5 + (opsPlus-100)*0.006, 0.32, 1.05);
+      const market = veteranAPY(decade, tier);
+      apy = Math.round(clamp(Math.max(cur*1.15, market*(0.45+0.05*playerServiceYears())*perfMult), cur*1.05, market*0.9));
+      tierLabel = "arbitration";
+      blurb = `Not a free agent for another year or two. He files for salary arbitration; the ${teamName} file their own number, and the panel settles on ${fmtMoney(apy)} for ${career.year+1}. Still no other suitors allowed.`;
+    }
+
+    career.contract = { apy, years: 1, tier: tierLabel };
+    career.transactions.push(`${career.year}: Renewed by the ${teamName} — ${fmtMoney(apy)} (${tierLabel}).`);
+    recordLedgerEvent("contract_signed", { teamId, choiceId: mode, outcomeId: "renewed", metadata:{ apy, years:1 } });
+    saveActiveCareer({ phase:"decision", eventId:"team_control_renewal" });
+
+    content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · Contract</div>
+        <h3>${mode==="reserve" ? "Renewed under the reserve clause." : mode==="arbitration" ? "Arbitration settles it." : "Renewed for the minimum-plus."}</h3>
+        <p>${blurb}</p>
+        <div class="fa-offer-terms tabular" style="margin:0.6rem 0;">${fmtMoney(apy)}/yr · 1 yr · ${tierLabel}</div>
+        <div class="event-choices"><button class="choice-btn" id="renewAck"><div class="cb-title">Report to camp</div></button></div>
+      `);
+    document.getElementById("renewAck").addEventListener("click", checkInjuryThenPlay);
+  }
+
+  function renderReserveClauseRelease(decade, oldTeamName){
+    const content = document.getElementById("careerContent");
+    const landing = pickTeamByStrength(career.year, career.teamId, 15, 55);
+    content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · Contract</div>
+        <h3>Given his release.</h3>
+        <p>The ${oldTeamName} decide a younger, cheaper body can do the job. In ${career.year} that's about the only way a player ever changes teams — the club just lets him go.</p>
+        <div class="event-choices">
+          <button class="choice-btn" id="rcSign"><div class="cb-title">Catch on with the ${teamNameAt(landing.id, career.year)} for the minimum</div><div class="cb-sub">A bench job and a chance to keep playing.</div></button>
+          <button class="choice-btn" id="rcRetire"><div class="cb-title">Retire</div><div class="cb-sub">Walk away on his own terms.</div></button>
+        </div>
+      `);
+    document.getElementById("rcSign").addEventListener("click", ()=>{
+      reassignRivalsForTeamChange(career.teamId, landing.id);
+      if(!career.leagueTeamGrades) career.leagueTeamGrades = {};
+      career.leagueTeamGrades[career.teamId] = { oline: career.oline, weapons: career.weapons, defense: career.defense, coaching: career.coaching, gmGrade: career.gmGrade };
+      career.teamId = landing.id;
+      career.oline = landing.oline ?? career.oline; career.weapons = landing.weapons ?? career.weapons;
+      career.defense = landing.defense ?? career.defense; career.coaching = landing.coaching ?? career.coaching; career.gmGrade = landing.gmGrade ?? career.gmGrade;
+      career.teamChemistry = 45; career.seasonsWithTeam = 0;
+      recomputeMyTeamStrength();
+      career.contract = { apy: veteranAPY(decade, "minimum"), years: 1, tier: "minimum" };
+      career.transactions.push(`${career.year}: Released by the ${oldTeamName}; signed with the ${teamNameAt(landing.id, career.year)} for the minimum.`);
+      recordLedgerEvent("contract_signed", { teamId: landing.id, choiceId:"reserve-release", outcomeId:"signed", metadata:{ apy: veteranAPY(decade,"minimum"), years:1 } });
+      saveActiveCareer({ phase:"decision", eventId:"reserve_release_sign" });
+      checkInjuryThenPlay();
+    });
+    document.getElementById("rcRetire").addEventListener("click", ()=>{ career.exitReason = "retired"; finishCareer(); });
   }
 
   function renderFAOffers(offers, meta){
@@ -10849,6 +10995,7 @@ import {
     } else if(season.missedGamesBackup>0){
       narratives.push(`Got into ${season.games} game${season.games===1?"":"s"} behind ${svgEscape(season.incumbentName||"the veteran ahead of him")}, who took the other ${season.missedGamesBackup}.`);
     }
+    if(season.positionChangedFrom) narratives.push(`Moved off ${positionLabel(season.positionChangedFrom)} to ${positionLabel(season.position)} this year — the bat still plays, the range doesn't.`);
     if(season.wonStartingJob===true) narratives.push(`Wins the everyday job — the regular at ${positionLabel(career.position)} heading into next season.`);
     else if(season.wonStartingJob===false) narratives.push(`Still on the bench — back to spring training next year to fight for the job again.`);
     if(career.seasonsWithTeam===1 && career.seasonNumber>1) narratives.push(`First season in a new uniform with the ${season.teamName}.`);
@@ -12244,9 +12391,9 @@ import {
 
     const table = document.getElementById("careerTable");
     const avg3 = v => (v==null?0:v).toFixed(3).replace(/^0\./, ".");
-    table.innerHTML = `<thead><tr><th>Year</th><th>Age</th><th>Team</th><th>G</th><th>PA</th><th>H/AB</th><th>AVG</th><th>TB</th><th>HR</th><th>K</th><th>OPS+</th><th>SB</th><th>Team Rec</th><th>Playoffs</th><th>Pay</th><th>Awards</th></tr></thead>
+    table.innerHTML = `<thead><tr><th>Year</th><th>Age</th><th>Team</th><th>Pos</th><th>G</th><th>PA</th><th>H/AB</th><th>AVG</th><th>TB</th><th>HR</th><th>K</th><th>OPS+</th><th>SB</th><th>Team Rec</th><th>Playoffs</th><th>Pay</th><th>Awards</th></tr></thead>
       <tbody>${career.seasonLog.map(s=>`<tr>
-        <td>${s.year}</td><td>${s.age}</td><td class="team-cell">${s.teamName}</td><td>${s.games}</td>
+        <td>${s.year}</td><td>${s.age}</td><td class="team-cell">${s.teamName}</td><td>${s.position || career.position}</td><td>${s.games}</td>
         <td>${s.pa ?? s.att}</td><td>${(s.hits ?? s.comp)}/${s.ab ?? "—"}</td><td>${avg3(s.avg ?? s.pct)}</td><td>${s.yards.toLocaleString()}</td>
         <td>${s.td}</td><td>${s.int}</td><td>${s.rating}</td>
         <td>${s.rushAtt>0 ? (s.sb ?? s.rushYards).toLocaleString() : "—"}</td>

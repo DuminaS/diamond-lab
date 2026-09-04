@@ -47,7 +47,7 @@ async function reachFreeAgency(page, seed, decadeIndex) {
 
 test("team-friendly contract discounts pay and raises cap pressure", async ({ page }) => {
   test.setTimeout(180_000);
-  const reached = await reachFreeAgency(page, 13579, 1);
+  const reached = await reachFreeAgency(page, 13579, 3);
   test.skip(!reached, "seed never reached a real free-agency offer screen within budget");
 
   const offer = await page.evaluate(() => {
@@ -74,7 +74,7 @@ test("team-friendly contract discounts pay and raises cap pressure", async ({ pa
 
 test("record-setting contract raises pay and hurts cap pressure", async ({ page }) => {
   test.setTimeout(180_000);
-  const reached = await reachFreeAgency(page, 24681, 2);
+  const reached = await reachFreeAgency(page, 24681, 3);
   test.skip(!reached, "seed never reached a real free-agency offer screen within budget");
 
   const before = await readActiveCareer(page);
