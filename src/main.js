@@ -553,6 +553,17 @@ import {
     { key:"DH", label:"Designated Hitter", w:8, defWeight:0.0 },
   ];
   function positionLabel(key){ const p = POSITIONS.find(x=>x.key===key); return p ? p.label : (key||"—"); }
+  // Silver Slugger and Gold Glove are per-position awards in real baseball (one of each per league
+  // per position). The sim models a single hitter per club so it can't run a true by-position vote,
+  // but it can name the position the winner actually played: season.awardPos maps an award label to
+  // a position key, set where the award is granted. Internal season.awards entries stay canonical
+  // ("Silver Slugger" / "Gold Glove") so every .includes()/achievement-rule check is untouched --
+  // only the user-facing label gets the "(Shortstop)" suffix.
+  function awardWithPos(label, season){
+    const pos = season && season.awardPos && season.awardPos[label];
+    return pos ? `${label} (${positionLabel(pos)})` : label;
+  }
+  function decorateAwards(list, season){ return (list||[]).map(a=>awardWithPos(a, season)); }
   function randomPosition(){
     const total = POSITIONS.reduce((s,p)=>s+p.w,0);
     let r = Math.random()*total;
@@ -4569,7 +4580,7 @@ import {
         <td class="tabular">${s.hr!=null?s.hr:s.td}</td><td class="tabular">${s.rbi||0}</td>
         <td class="tabular">${s.runs||0}</td><td class="tabular">${s.sb||0}</td>
         <td class="tabular">${s.opsPlus!=null?s.opsPlus:Math.round(s.rating||0)}</td>
-        <td>${(s.awards||[]).join(", ")||"—"}</td></tr>`).join("");
+        <td>${decorateAwards(s.awards, s).join(", ")||"—"}</td></tr>`).join("");
     const seasonsTableHtml = seasonsRows ? `<div class="table-wrap" style="margin-top:0.8rem;">
         <table class="career-table">
           <thead><tr><th>Year</th><th>Age</th><th>Team</th><th>AVG</th><th>HR</th><th>RBI</th><th>R</th><th>SB</th><th>OPS+</th><th>Awards</th></tr></thead>
@@ -5447,7 +5458,8 @@ import {
   }
   function resolveSeasonAllProAndProBowl(season, year){
     const rows = [{ isMine:true, teamId: career.teamId, conf: conferenceOf(career.teamId, year),
-      awards: season.awards, proBowlScore: season.proBowlScore, proBowlEligible: season.proBowlEligible,
+      awards: season.awards, season, pos: career.position,
+      proBowlScore: season.proBowlScore, proBowlEligible: season.proBowlEligible,
       allProScore: season.allProScore, allProEligible: season.allProEligible, totals: career.totals }];
     // Wave 7 (task #7): same fix as resolveSeasonMVP above -- iterate the full qbsById registry so
     // a bench QB's real, played season is never excluded from Pro Bowl/All-Pro consideration just
@@ -5456,7 +5468,8 @@ import {
       const s = (r.seasons||[]).find(x=>x.year===year);
       if(!s) return;
       rows.push({ isMine:false, teamId: r.teamId, conf: conferenceOf(r.teamId, year),
-        awards: s.awards, proBowlScore: s.proBowlScore, proBowlEligible: s.proBowlEligible,
+        awards: s.awards, season: s, pos: rivalPosition(r),
+        proBowlScore: s.proBowlScore, proBowlEligible: s.proBowlEligible,
         allProScore: s.allProScore, allProEligible: s.allProEligible, totals: r.totals });
     });
 
@@ -5493,6 +5506,9 @@ import {
     [["Silver Slugger", firstTeam], ["All-MLB Second Team", secondTeam]].forEach(([label, r])=>{
       if(!r) return;
       r.awards.push(label);
+      if(label==="Silver Slugger" && r.season && r.pos){
+        (r.season.awardPos = r.season.awardPos || {})["Silver Slugger"] = r.pos;
+      }
       r.totals.allPros++;
       if(!seated.has(r)){ r.awards.push("All-Star"); r.totals.proBowls++; seated.add(r); }
     });
@@ -5561,6 +5577,7 @@ import {
     const chance = clamp((defScore - 58) * 0.012, 0, 0.34);
     if(Math.random() < chance){
       season.awards.push("Gold Glove");
+      (season.awardPos = season.awardPos || {})["Gold Glove"] = career.position;
       career.transactions.push(`${season.year}: Wins a Gold Glove at ${positionLabel(career.position)}.`);
       recordLedgerEvent("award_won", { teamId: season.teamId, outcomeId: "Gold Glove" });
     }
@@ -10371,7 +10388,7 @@ import {
     const log = career.seasonLog;
     const rows = log.slice().reverse().map(s=>`
         <tr><td>${s.year}</td><td class="team-cell">${s.teamName}</td><td>${(s.avg||0).toFixed(3).replace(/^0/,"")}</td><td>${s.hr||s.td||0}</td>
-        <td>${s.rbi||0}</td><td>${s.opsPlus||s.rating||0}</td><td>${s.awards.join(", ")||"—"}</td></tr>`).join("");
+        <td>${s.rbi||0}</td><td>${s.opsPlus||s.rating||0}</td><td>${decorateAwards(s.awards, s).join(", ")||"—"}</td></tr>`).join("");
     return `
       <div class="sparkline-wrap">
         <div id="trendsSparklineHolder"></div>
@@ -10755,7 +10772,7 @@ import {
 
   function renderSeasonCard(season, animate){
     const content = document.getElementById("careerContent");
-    const badges = season.awards.map(a=>`<span class="badge ${/Champion$/.test(a)||a==="MVP"?"gold":"good"}">${a}</span>`).join("");
+    const badges = season.awards.map(a=>`<span class="badge ${/Champion$/.test(a)||a==="MVP"?"gold":"good"}">${awardWithPos(a, season)}</span>`).join("");
     const brokenRecords = checkSeasonRecords(season);
     const recBy = {}; brokenRecords.forEach(r=> recBy[r.key]=r);
     const simBests = checkSimHistoricalBest(season);
@@ -11672,7 +11689,7 @@ import {
     const badgesPanel = document.getElementById("tabpanel-badges");
     if(badgesPanel) badgesPanel.innerHTML = buildAchievementsTabHTML();
     const badgeRow = document.getElementById("badgeRow");
-    if(badgeRow) badgeRow.innerHTML = season.awards.map(a=>`<span class="badge ${/Champion$/.test(a)||a==="MVP"?"gold":"good"}">${a}</span>`).join("");
+    if(badgeRow) badgeRow.innerHTML = season.awards.map(a=>`<span class="badge ${/Champion$/.test(a)||a==="MVP"?"gold":"good"}">${awardWithPos(a, season)}</span>`).join("");
     refreshFrontOfficeWidget();
     const trendsPanel = document.getElementById("tabpanel-trends");
     if(trendsPanel){ trendsPanel.innerHTML = buildTrendsTabHTML(); renderTrendsSparkline(); }
@@ -11955,7 +11972,7 @@ import {
         : `A ${career.slot.label.toLowerCase()} selection in ${career.draftYear} out of ${safeCollege}, ${safeName} climbed the farm system with modest expectations and a chip on his shoulder.`;
     paras.push(originLine);
 
-    const peakLine = `The season people still cite is <b>${peak.year}</b>: ${peak.td} home runs, ${peak.rbi!=null?peak.rbi+' RBI, ':''}a ${(peak.avg!=null?peak.avg:0).toFixed(3).replace(/^0/,'')} average and a ${Math.round(peak.rating)} OPS+ for the ${peak.teamName}${peak.awards.length?` \u2014 the year he ${/MVP/.test(peak.awards.join(' '))?'ran away with the MVP':'earned '+peak.awards.slice(0,2).join(' and ')}`:''}. It's the year that told the league who he really was.`;
+    const peakLine = `The season people still cite is <b>${peak.year}</b>: ${peak.td} home runs, ${peak.rbi!=null?peak.rbi+' RBI, ':''}a ${(peak.avg!=null?peak.avg:0).toFixed(3).replace(/^0/,'')} average and a ${Math.round(peak.rating)} OPS+ for the ${peak.teamName}${peak.awards.length?` \u2014 the year he ${/MVP/.test(peak.awards.join(' '))?'ran away with the MVP':'earned '+decorateAwards(peak.awards.slice(0,2), peak).join(' and ')}`:''}. It's the year that told the league who he really was.`;
     paras.push(peakLine);
 
     if(t.rings>0){
@@ -12175,7 +12192,7 @@ import {
         <td>${s.rushAtt>0 ? (s.sb ?? s.rushYards).toLocaleString() : "—"}</td>
         <td>${recordLine(s.teamWins, s.teamLosses, s.teamTies||0)}</td>
         <td>${s.playoffs.made ? "Seed #"+s.playoffs.seed+(s.playoffs.wonRing?" — Champs":"") : "Missed"}</td>
-        <td>${fmtMoney(s.contractApy)}</td><td>${s.awards.join(", ")||"—"}</td>
+        <td>${fmtMoney(s.contractApy)}</td><td>${decorateAwards(s.awards, s).join(", ")||"—"}</td>
       </tr>`).join("")}</tbody>`;
 
     showScreen("careerSummary");
