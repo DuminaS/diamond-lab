@@ -9653,9 +9653,10 @@ import {
   // lets the "other" conference converge toward a center Super Bowl from the opposite direction of
   // Short, fixed-width column headers -- "Conference Championship" at full length is wide enough to
   // overflow a single grid column. roundDisplayLabel (used elsewhere -- box score modal titles,
-  // etc.) is untouched; this is purely a bracket-header shortening.
-  function shortRoundLabel(label){
-    if(label==="Conference Championship") return "CONF. CHAMPIONSHIP";
+  // etc.) is untouched; this is purely a bracket-header shortening. `conf` ("AFC"/"NFC" = AL/NL)
+  // names the actual league championship series (ALCS/NLCS), not a generic "Conference Championship".
+  function shortRoundLabel(label, conf){
+    if(label==="Conference Championship") return `${confShort(conf)} CHAMPIONSHIP SERIES`;
     return String(label).toUpperCase();
   }
   // Round 29 rewrite: replaces the SVG-based renderer (renderPlayoffTreeSVG -> renderFullPlayoffTreeSVG)
@@ -9737,7 +9738,7 @@ import {
       ? matchups.map((m,matchIdx)=>bracketCardHtml(m, cardState, conf, roundIdx, matchIdx, myTeamId)).join("")
       : Array.from({length: expectedCount}, (_,matchIdx)=>bracketCardHtml(null, "pending-unknown", conf, roundIdx, matchIdx, myTeamId)).join("");
     const label = display.labels[roundIdx];
-    return `<div class="bracket-col"><div class="bracket-col-label">${label?svgEscape(shortRoundLabel(label)):""}</div><div class="bracket-col-cards">${cardsHtml}</div></div>`;
+    return `<div class="bracket-col"><div class="bracket-col-label">${label?svgEscape(shortRoundLabel(label, conf)):""}</div><div class="bracket-col-cards">${cardsHtml}</div></div>`;
   }
   function bracketSuperBowlColumnHtml(afcDisplay, nfcDisplay, pb, myTeamId){
     const afcChampId = afcDisplay.championKnown ? afcDisplay.championId : null;
@@ -9756,7 +9757,7 @@ import {
       match = null; state = "pending-unknown";
     }
     const cardHtml = bracketCardHtml(match, state, "SB", 0, 0, myTeamId);
-    return `<div class="bracket-col bracket-col-sb"><div class="bracket-col-label">🏆 SUPER BOWL</div><div class="bracket-col-cards">${cardHtml}</div></div>`;
+    return `<div class="bracket-col bracket-col-sb"><div class="bracket-col-label">🏆 WORLD SERIES</div><div class="bracket-col-cards">${cardHtml}</div></div>`;
   }
   // The whole bracket: AFC's own columns (Wild Card at the far left, running toward the center),
   // one Super Bowl column dead center, then NFC's columns MIRRORED (its Conference Championship
