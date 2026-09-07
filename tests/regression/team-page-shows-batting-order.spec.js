@@ -20,7 +20,7 @@ test("team page + Team tab show a 9-man batting order, not a QB depth chart", as
   expect(teamTab).toContain("Projected Lineup");
 
   const lineup = await page.evaluate(() => {
-    const t = [...document.querySelectorAll("#careerContent table")].find(x => (x.querySelector("thead")?.textContent || "").includes("Pos"));
+    const t = [...document.querySelectorAll("#careerContent table")].find(x => { const h = x.querySelector("thead")?.textContent || ""; return h.includes("Pos") && h.includes("Grade"); });
     if (!t) return null;
     return [...t.querySelectorAll("tbody tr")].map(r => {
       const c = [...r.querySelectorAll("td")].map(x => x.textContent.trim());
@@ -42,7 +42,7 @@ test("team page + Team tab show a 9-man batting order, not a QB depth chart", as
   await page.evaluate(() => document.querySelector('.dash-tab[data-tab="team"]')?.click());
   await page.waitForTimeout(150);
   const again = await page.evaluate(() => {
-    const t = [...document.querySelectorAll("#careerContent table")].find(x => (x.querySelector("thead")?.textContent || "").includes("Pos"));
+    const t = [...document.querySelectorAll("#careerContent table")].find(x => { const h = x.querySelector("thead")?.textContent || ""; return h.includes("Pos") && h.includes("Grade"); });
     return [...t.querySelectorAll("tbody tr")].map(r => {
       const c = [...r.querySelectorAll("td")].map(x => x.textContent.trim());
       return { slot: c[0], pos: c[1], player: c[2] };

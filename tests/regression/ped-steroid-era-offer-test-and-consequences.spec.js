@@ -48,8 +48,6 @@ test("the PED offer renders a real choice and accepting starts the program", asy
     if (clicked === "ped") {
       await page.evaluate(() => document.getElementById("pedYes").click());
       await page.waitForTimeout(150);
-      await page.evaluate(() => document.getElementById("pedGoAck")?.click());
-      await page.waitForTimeout(150);
       accepted = true;
       break;
     }
@@ -57,13 +55,24 @@ test("the PED offer renders a real choice and accepting starts the program", asy
   }
 
   expect(accepted, "the PED offer should render a #pedYes choice in the wild-west 90s").toBe(true);
-  const s = await readActiveCareer(page);
-  expect(s.career._pedUsing).toBe(true);
-  expect(s.career._pedSeasonsUsed).toBeGreaterThanOrEqual(1);
+  {
+    const s = await readActiveCareer(page);
+    expect(s.career._pedUsing, "accepting flips the using flag immediately").toBe(true);
+  }
 
-  await advanceOneSeason(page);
+  // finish the rest of this offseason + play the season (applyOrRefreshPedBoost tallies it)
+  for (let step = 0; step < 60; step++) {
+    if (await page.evaluate(() => !!document.querySelector("#careerContent .season-card"))) break;
+    await page.evaluate(() => {
+      const c = document.getElementById("careerContent");
+      const b = c && c.querySelector("#continueBtn, #playOnBtn, [data-development-plan], button[id$='Ack'], .choice-btn:not(#pedNo), .fa-accept, [id^='pqSimSeries-']:not([disabled]), [id^='pqSimEnd-']:not([disabled])");
+      if (b && !b.disabled) b.click();
+    });
+    await page.waitForTimeout(120);
+  }
   const s2 = await readActiveCareer(page);
   if (s2) {
+    expect(s2.career._pedSeasonsUsed, "a season on the program is counted").toBeGreaterThanOrEqual(1);
     expect(s2.career.seasonLog.some(x => x._pedSeason), "a season played while using is flagged").toBeTruthy();
   }
 });

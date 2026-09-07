@@ -7641,10 +7641,13 @@ import {
   // Re-applied every season (from generateSeason) so the boost persists exactly while _pedUsing is
   // true and decays out the season after use stops -- the pedBoost tag keeps it separate from every
   // other tempBoost source.
+  // Called exactly once per season from generateSeason. Refreshes the boost while using (lets it
+  // decay a season after use stops) and tallies each season actually spent on the program.
   function applyOrRefreshPedBoost(){
     career.tempBoosts = (career.tempBoosts || []).filter(b => !b.pedBoost);
     if(career._pedUsing){
       PED_BOOST.forEach(b => career.tempBoosts.push({ key:b.key, delta:b.delta, seasonsLeft:1, pedBoost:true }));
+      career._pedSeasonsUsed = (career._pedSeasonsUsed||0) + 1;
     }
   }
   // Called FIRST in lifeEventCheck, every offseason. Returns true if it rendered an interstitial
@@ -7703,9 +7706,9 @@ import {
       `, { tone:"bad" });
     document.getElementById("pedYes").addEventListener("click", ()=>{
       career._pedUsing = true;
-      career._pedSeasonsUsed = (career._pedSeasonsUsed||0) + 1;
+      // _pedSeasonsUsed and the tool boost are both applied once per season by
+      // applyOrRefreshPedBoost() at the top of generateSeason() -- nothing to do here but flip the flag.
       career._pedStartYear = career._pedStartYear || career.year;
-      applyOrRefreshPedBoost();
       recordLedgerEvent("ped_started", { metadata:{ year:career.year, regime } });
       career.lifeEventLog.push({ year:career.year, title:"Started using PEDs", severity:"secret", hidden:true });
       saveActiveCareer({ phase:"decision", eventId:"ped_started" });
@@ -8412,8 +8415,10 @@ import {
     if(rarePool.length && Math.random() < 0.006){ renderInfractionEvent(pick(rarePool)); return; }
     // Mishaps -- the spectacularly-avoidable offseason injury -- roll a bit more often than the
     // scandal easter eggs (they're embarrassing, not career-defining) but still rare: ~1-in-80.
+    // The gate comes from a career-seeded stream so adding it doesn't shift every seeded test's RNG.
     const mishapPool = mishapEventsFor();
-    if(mishapPool.length && Math.random() < 0.0125){ renderMishapEvent(pick(mishapPool)); return; }
+    const mishapRand = createSeededRandom(hashSeed("mishap:" + (career.name||"") + ":" + career.draftYear + ":" + career.year));
+    if(mishapPool.length && mishapRand() < 0.0125){ renderMishapEvent(pick(mishapPool)); return; }
     const dec = eraEffective(career.age, decade).DEC;
     const infractionChance = clamp(0.02 + Math.max(0,(62-dec))*0.0026, 0.01, 0.13);
     const infractionPool = infractionEventsFor();
