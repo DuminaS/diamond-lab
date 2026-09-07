@@ -11058,6 +11058,133 @@ import {
       </div>`;
   }
 
+  /* ----- Analytics tab: the deep box, one level past the season card. Everything here is derived
+     from the real per-season batting line the engine already stores (pa/ab/h/2b/3b/hr/bb/hbp/sf/
+     k/sb/cs) -- no new simulation, just the sabermetric transforms a modern front office would run.
+     wOBA / wRC+ / bWAR are approximations (linear-weight constants, no park factors, a positional-
+     adjustment-plus-replacement batting WAR rather than a full fielding WAR) -- labelled "est."
+     wherever that matters. League baselines come straight from the existing LEAGUE[decade] table. */
+  const WAR_POS_ADJ = { C:9, SS:7, "2B":3, "3B":2, CF:2.5, LF:-7, RF:-7, "1B":-9.5, DH:-15 };
+  function analyticsForSeason(s){
+    const decade = s.decade || decadeForYear(s.year);
+    const lg = LEAGUE[decade] || LEAGUE["2000s"];
+    const lgwOBA = clamp(0.55*lg.obp + 0.30*lg.slg + 0.02, 0.28, 0.36);
+    const lgR_PA = lgwOBA * 0.37;
+    const wOBAScale = 1.2, runsPerWin = 10;
+
+    const pa = Math.max(0, s.pa ?? s.att ?? 0);
+    const h  = Math.max(0, s.hits ?? s.comp ?? 0);
+    const hr = Math.max(0, s.hr ?? s.td ?? 0);
+    const k  = Math.max(0, s.k ?? s.int ?? 0);
+    const bb = Math.max(0, s.bb ?? Math.round(pa*0.085));
+    const hbp = Math.max(0, s.hbp ?? Math.round(pa*0.009));
+    const sf = Math.max(0, s.sf ?? Math.round(pa*0.006));
+    const d2 = Math.max(0, s.doubles ?? 0);
+    const t3 = Math.max(0, s.triples ?? 0);
+    const sb = Math.max(0, s.sb ?? 0), cs = Math.max(0, s.cs ?? 0);
+    const ab = Math.max(1, s.ab ?? (pa - bb - hbp - sf));
+    const s1 = Math.max(0, h - d2 - t3 - hr);
+    const tb = s1 + 2*d2 + 3*t3 + 4*hr;
+    const avg = h/ab, slg = tb/ab, iso = slg - avg;
+    const obpDen = ab + bb + hbp + sf;
+    const obp = obpDen>0 ? (h + bb + hbp)/obpDen : 0;
+
+    const wOBAnum = 0.69*bb + 0.72*hbp + 0.89*s1 + 1.27*d2 + 1.62*t3 + 2.10*hr;
+    const wOBA = obpDen>0 ? wOBAnum/obpDen : 0;
+    const wRAA = pa>0 ? ((wOBA - lgwOBA)/wOBAScale) * pa : 0;         // batting runs above average
+    const wRCplus = pa>0 ? Math.round(((wRAA/pa) + lgR_PA) / lgR_PA * 100) : 100;
+    const babipDen = ab - k - hr + sf;
+    const babip = babipDen>0 ? (h - hr)/babipDen : 0;
+    const bbPct = pa>0 ? bb/pa : 0, kPct = pa>0 ? k/pa : 0;
+    const bsr = 0.2*sb - 0.42*cs;                                     // baserunning runs (wSB-ish)
+    const posVal = WAR_POS_ADJ[s.position ?? career.position] ?? 0;
+    const posAdj = posVal * pa/600;
+    const repl = 20 * pa/600;
+    const bWAR = (wRAA + bsr + posAdj + repl) / runsPerWin;
+    const psn = (hr+sb)>0 ? (2*hr*sb)/(hr+sb) : 0;                    // power-speed number
+    const sbRate = (sb+cs)>0 ? sb/(sb+cs) : 0;
+    const secA = ab>0 ? (bb + (tb - h) + (sb - cs))/ab : 0;          // secondary average
+
+    return { pa, ab, wOBA, wRAA, wRCplus, iso, babip, bbPct, kPct, bsr, bWAR, psn, sbRate, secA, obp, slg, avg,
+      opsPlus: s.opsPlus ?? Math.round(s.rating || 100) };
+  }
+  function fmt3(v){ return (v||0).toFixed(3).replace(/^(-?)0\./, "$1."); }
+  function buildAnalyticsTabHTML(){
+    const log = (career.seasonLog||[]).filter(s=>(s.pa ?? s.att ?? 0) > 0);
+    if(!log.length) return `<p style="color:var(--ink-muted);">No batting data yet — check back after your rookie season.</p>`;
+    const per = log.map(s=>({ s, a: analyticsForSeason(s) }));
+
+    // Career aggregates: re-run the same math on the summed line so rate stats are PA-weighted, not
+    // an average-of-averages.
+    const T = career.totals;
+    const careerLine = {
+      year: career.year, decade: decadeForYear(career.year), position: career.position,
+      pa: T.att||0, ab: T.ab||0, hits: T.comp||0, hr: T.td||0, k: T.int||0, bb: T.bb||0,
+      hbp: T.hbp||0, sf: T.sf||0, doubles: T.doubles||0, triples: T.triples||0, sb: T.sb||0, cs: T.cs||0,
+      opsPlus: passerRating(T.comp, T.att, T.yards, T.td, T.int, T.bb),
+    };
+    const C = analyticsForSeason(careerLine);
+    const careerWAR = per.reduce((sum,p)=>sum + p.a.bWAR, 0);
+    const careerBsR = per.reduce((sum,p)=>sum + p.a.bsr, 0);
+    const careerWRAA = per.reduce((sum,p)=>sum + p.a.wRAA, 0);
+    const peakWAR = per.reduce((b,p)=> p.a.bWAR>b.a.bWAR ? p : b, per[0]);
+    const goldGloves = (career.seasonLog||[]).filter(s=>(s.awards||[]).includes("Gold Glove")).length;
+    const positionsPlayed = [...new Set((career.seasonLog||[]).map(s=>s.position).filter(Boolean))];
+
+    const card = (label, value, sub) => `<div class="an-card"><div class="an-card-label">${label}</div><div class="an-card-value tabular">${value}</div>${sub?`<div class="an-card-sub">${sub}</div>`:""}</div>`;
+
+    const cards = [
+      card("Career bWAR <span class='an-est'>est.</span>", careerWAR.toFixed(1), `Peak ${peakWAR.a.bWAR.toFixed(1)} in ${peakWAR.s.year}`),
+      card("Career wOBA", fmt3(C.wOBA), `Batting runs ${careerWRAA>=0?"+":""}${Math.round(careerWRAA)}`),
+      card("wRC+ <span class='an-est'>est.</span>", C.wRCplus, "100 = league average, era-adjusted"),
+      card("ISO", fmt3(C.iso), "Isolated power (SLG − AVG)"),
+      card("BABIP", fmt3(C.babip), "Ball-in-play average"),
+      card("BB% / K%", `${(C.bbPct*100).toFixed(1)} / ${(C.kPct*100).toFixed(1)}`, `BB/K ${C.kPct>0?(C.bbPct/C.kPct).toFixed(2):"∞"}`),
+      card("SB success", (C.sbRate*100).toFixed(0)+"%", `${career.totals.sb||0} SB · ${career.totals.cs||0} CS · BsR ${careerBsR>=0?"+":""}${careerBsR.toFixed(1)}`),
+      card("Power-Speed #", C.psn.toFixed(1), `Secondary avg ${fmt3(C.secA)}`),
+    ].join("");
+
+    const rows = per.slice().reverse().map(({s,a})=>`
+      <tr>
+        <td>${s.year}</td><td class="tabular">${s.age}</td><td class="team-cell">${svgEscape(s.teamName || teamNameAt(s.teamId, s.year))}</td>
+        <td class="tabular">${s.position || "—"}</td>
+        <td class="tabular">${a.pa}</td>
+        <td class="tabular">${fmt3(a.wOBA)}</td>
+        <td class="tabular">${a.wRCplus}</td>
+        <td class="tabular">${fmt3(a.iso)}</td>
+        <td class="tabular">${fmt3(a.babip)}</td>
+        <td class="tabular">${(a.bbPct*100).toFixed(1)}</td>
+        <td class="tabular">${(a.kPct*100).toFixed(1)}</td>
+        <td class="tabular">${a.bsr>=0?"+":""}${a.bsr.toFixed(1)}</td>
+        <td class="tabular"><b>${a.bWAR.toFixed(1)}</b></td>
+      </tr>`).join("");
+
+    return `
+      <div class="an-cards">${cards}</div>
+      <div class="an-field-line">
+        <b>Defense:</b> ${positionsPlayed.length ? svgEscape(positionsPlayed.map(p=>positionLabel(p)).join(", ")) : "—"}
+        ${goldGloves>0 ? ` · <b>${goldGloves}</b> Gold Glove${goldGloves===1?"":"s"}` : " · no Gold Gloves"}
+        <span class="an-field-note">— the sim scores the season at the team-grade level, so bWAR here is a batting-plus-baserunning-plus-positional estimate, not a full fielding WAR.</span>
+      </div>
+      <div class="table-wrap" style="margin-top:0.9rem;">
+        <table class="career-table an-table">
+          <thead><tr>
+            <th>Year</th><th class="tabular">Age</th><th>Team</th><th class="tabular">Pos</th><th class="tabular">PA</th>
+            <th class="tabular">wOBA</th><th class="tabular">wRC+</th><th class="tabular">ISO</th><th class="tabular">BABIP</th>
+            <th class="tabular">BB%</th><th class="tabular">K%</th><th class="tabular">BsR</th><th class="tabular">bWAR</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="calc-refnote" style="margin-top:0.7rem;">
+        <b>wOBA</b> weights each way of reaching base by its real run value (a walk 0.69, a homer 2.10) instead of treating them all alike.
+        <b>wRC+</b> puts that on a scale where 100 is exactly league average for the era and 150 is 50% better.
+        <b>BABIP</b> is how often a ball he put in play fell for a hit — league is around .300, and a number far from it tends to regress.
+        <b>BsR</b> credits stolen bases and debits times caught (≈ +0.2 / −0.42 runs each).
+        <b>bWAR</b> (estimate) sums batting runs above average, baserunning, a positional adjustment for ${positionLabel(career.position)}, and replacement level, over ${"~"}10 runs per win.
+      </div>`;
+  }
+
   // ----- Coaching Scheme tab: shows the CURRENT team's real, named scheme and exactly which
   // attributes it favors or hurts, using the same SCHEMES multiplier table schemeEffective()
   // actually plays by -- so what the player sees here can never contradict what's happening to
@@ -11536,6 +11663,7 @@ import {
               <button type="button" class="dash-tab" data-tab="league">League</button>
               <button type="button" class="dash-tab" data-tab="awards">Awards</button>
               <button type="button" class="dash-tab" data-tab="trends">Career Trends</button>
+              <button type="button" class="dash-tab" data-tab="analytics">Analytics</button>
               <button type="button" class="dash-tab" data-tab="attributes">Attributes</button>
               <button type="button" class="dash-tab" data-tab="scheme">Approach</button>
               <button type="button" class="dash-tab" data-tab="team">Team</button>
@@ -11574,6 +11702,7 @@ import {
           <div class="dash-tabpanel" id="tabpanel-league">${buildLeagueTabHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-awards">${buildAwardCeremonyHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-trends">${buildTrendsTabHTML()}</div>
+          <div class="dash-tabpanel" id="tabpanel-analytics">${buildAnalyticsTabHTML()}</div>
           <div class="dash-tabpanel" id="tabpanel-attributes">${buildAttributesTabHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-scheme">${buildSchemeTabHTML()}</div>
           <div class="dash-tabpanel" id="tabpanel-team">${buildTeamTabHTML()}</div>
@@ -12353,6 +12482,8 @@ import {
     refreshFrontOfficeWidget();
     const trendsPanel = document.getElementById("tabpanel-trends");
     if(trendsPanel){ trendsPanel.innerHTML = buildTrendsTabHTML(); renderTrendsSparkline(); }
+    const analyticsPanel = document.getElementById("tabpanel-analytics");
+    if(analyticsPanel){ analyticsPanel.innerHTML = buildAnalyticsTabHTML(); }
     const logPanel = document.getElementById("tabpanel-log");
     if(logPanel) logPanel.innerHTML = buildEventLogFeedHTML();
     updateHeaderCareerTicker();

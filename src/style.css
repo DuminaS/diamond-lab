@@ -709,6 +709,20 @@
   .calc-gate.pass{ color: var(--good); }
   .calc-gate.fail{ color: var(--danger); }
   .calc-refnote{ font-size: 0.8rem; color: var(--ink-muted); margin-bottom: 1rem; max-width: 72ch; }
+
+  /* ---------- Analytics tab ---------- */
+  .an-cards{ display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.7rem; }
+  .an-card{ background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 0.7rem 0.8rem; }
+  .an-card-label{ font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-muted); }
+  .an-card-value{ font-family: var(--display); font-size: 1.5rem; font-weight: 800; color: var(--gold); margin-top: 0.15rem; line-height:1.1; }
+  .an-card-sub{ font-size: 0.7rem; color: var(--ink-muted); margin-top: 0.2rem; }
+  .an-est{ font-family: var(--mono); font-size: 0.85em; color: var(--ink-muted); text-transform: none; letter-spacing: 0; }
+  .an-field-line{ font-size: 0.82rem; color: var(--ink); margin-top: 0.9rem; }
+  .an-field-line b{ color: var(--ink); }
+  .an-field-note{ color: var(--ink-muted); }
+  table.an-table{ white-space: nowrap; }
+  table.an-table th, table.an-table td{ padding: 0.3rem 0.45rem; }
+  .an-table .calc-refnote b{ color: var(--ink); }
   table.calc-ref-table{ border-collapse: collapse; width:100%; font-size: 0.76rem; margin-bottom: 0.4rem; }
   table.calc-ref-table th, table.calc-ref-table td{ padding: 0.35rem 0.55rem; border-bottom: 1px solid var(--line); font-family: var(--mono); text-align:right; }
   table.calc-ref-table th:first-child, table.calc-ref-table td:first-child{ text-align:left; font-family: var(--body); }
