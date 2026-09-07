@@ -419,3 +419,18 @@ read as a rookie's). The award ceremony lays Silver Slugger + Gold Glove out by 
 New spec: `awards-are-resolved-by-position`. `box-score-line-score-and-lineups` re-seeded and
 `fa-offers-match-persistent-team-profile` hardened (a locker-room event in the departing offseason
 legitimately moves the team's frozen grades). **74 regression / 58 balance green.**
+
+**15c — the lineup drives team offense.** New `lineupOffenseGrade(teamId, year)` -- a heart-of-the-
+order-weighted blend of a team's nine bats' effective overalls -- and `recomputeLineupGrades(year)`,
+run at every season's end (after the four authored components drift): the **"Lineup" grade (the
+`weapons` component) of every team is re-derived from its real roster**, blended 65/35 toward the
+roster so a bad free-agency loss shows up immediately but grades still move smoothly. That flows
+through the existing Lineup-grade -> `teamStrength` -> `simulateGameScore` wiring, so a team that
+loses its cleanup bat tangibly scores fewer runs and the player's own production reflects the eight
+bats around him. Rotation / Defense & Bullpen / Coaching / Front Office keep drifting on their own
+(no individual pitchers/staff modelled). No `Math.random()` consumed -- only grade *values* move.
+New spec: `lineup-drives-the-team-offense-grade` (league-wide correlation r>0.55, best-lineup third
+out-grades worst-lineup third by 8+). `analytics-tab` re-seeded. **75 regression / 58 balance green.**
+
+Known for 15e: lineup entity age skews old (mean ~33, max ~41) -- successor/intake ages should
+skew younger (real regulars mean ~28).

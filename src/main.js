@@ -7587,6 +7587,9 @@ import {
     const teamRebuildPull = Math.round(rebuildPull(safeNum(career.teamStrength,60))*volMult);
     const myNudge = Math.round(teamNoise) - teamDeclinePull + teamRebuildPull;
     adjustTeamStrength(career.teamId, myNudge, 2);
+    // Phase 15c: after the four authored components have drifted, re-derive the Lineup grade of
+    // every team from its actual nine bats -- the tangible, roster-driven half of team quality.
+    recomputeLineupGrades(career.year);
     applyCapPressureToRoster();
 
     // ----- Wear and tear economy: a persistent, career-long meter (not a per-injury dice roll) --
@@ -10691,6 +10694,41 @@ import {
       order[8] = { slot:9, pos:"P", name: fabName(), ovr:20, isTracked:false, isUser:false, rivalId:null, isPitcher:true };
     }
     return { order: order.filter(Boolean), pitcherBats, teamGrade };
+  }
+  // Phase 15c: a team's offensive quality as a readout of its ACTUAL nine bats -- a heart-of-the-
+  // order-weighted blend of every hitter's effective overall (the pitcher's slot barely counts).
+  // This is what makes losing a cleanup bat to free agency tangibly cost runs.
+  const BATTING_SLOT_WEIGHT = { 1:1.0, 2:1.05, 3:1.25, 4:1.3, 5:1.2, 6:1.0, 7:0.9, 8:0.78, 9:0.55 };
+  function lineupOffenseGrade(teamId, year){
+    const lineup = buildTeamLineup(teamId, year);
+    if(!lineup || !lineup.order.length) return null;
+    let num = 0, den = 0;
+    lineup.order.forEach(h=>{
+      const w = (BATTING_SLOT_WEIGHT[h.slot] || 1) * (h.isPitcher ? 0.35 : 1);
+      num += (h.ovr || 50) * w; den += w;
+    });
+    return den>0 ? clamp(Math.round(num/den), 20, 99) : null;
+  }
+  // Re-derives the "Lineup" component (the `weapons` grade) of every team from its real roster,
+  // blended 65/35 toward the roster so a bad free-agency loss shows up immediately but year-to-year
+  // grades still move smoothly. The other four components (Rotation/Defense & Bullpen/Coaching/Front
+  // Office) keep drifting on their own -- the sim doesn't model individual pitchers or staff.
+  function recomputeLineupGrades(year){
+    ensureLeagueLineups();
+    TEAMS.filter(t=>t.start<=year).forEach(t=>{
+      const g = lineupOffenseGrade(t.id, year);
+      if(g==null) return;
+      if(t.id===career.teamId){
+        career.weapons = clamp(Math.round(safeNum(career.weapons,60)*0.35 + g*0.65), 20, 99);
+        recomputeMyTeamStrength();
+      } else {
+        const lg = career.leagueTeamGrades && career.leagueTeamGrades[t.id];
+        if(lg){
+          lg.weapons = clamp(Math.round(safeNum(lg.weapons,60)*0.35 + g*0.65), 20, 99);
+          career.leagueStrength[t.id] = clamp(Math.round(computeTeamOverall(lg)), 20, 96);
+        }
+      }
+    });
   }
   // Shared "Projected Lineup" table for the team page and the player's own Team tab -- replaces the
   // old QB1/QB2/QB3 depth chart. A tracked hitter links to his own profile.
