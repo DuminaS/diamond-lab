@@ -843,6 +843,9 @@
   .award-list li{ font-size: 0.82rem; padding: 0.4rem 0.6rem; background: var(--surface); border: 1px solid var(--line); border-radius: 5px; }
   .award-list li.me{ border-color: var(--good); font-weight: 700; }
   .award-list-section.empty p{ color: var(--ink-muted); font-size: 0.85rem; font-style: italic; }
+  .award-league{ margin-bottom: 0.7rem; }
+  .award-league-name{ font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-muted); margin-bottom: 0.3rem; }
+  .award-league .award-list li b{ display:inline-block; min-width: 5.5rem; color: var(--ink-muted); font-weight: 600; }
 
   /* ---------- V7: character creation ---------- */
   .identity-panel{ display:flex; flex-direction:column; gap: 0.9rem; margin: 1rem 0 1.75rem; }

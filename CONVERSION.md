@@ -405,3 +405,17 @@ below the pre-15 baseline. New spec: `full-lineups-are-tracked-characters`. **72
 Still to come: 15b awards genuinely by position (Silver Slugger / Gold Glove one per position per
 league, All-Star rosters with position reps) · 15c team offensive grade derived from the real
 lineup, driving run scoring · 15d free agency at roster scale · 15e tests + docs + merge.
+
+**15b — awards genuinely by position.** With the ~250-deep field in place, `resolveSeasonAllProAndProBowl`
+now grants **Silver Slugger one winner per position per league** (9 AL + 9 NL; DH added AL-1980 /
+NL-2022) off the offensive score, and **All-Star rosters** with one honoree per fielding position per
+league then best-of-the-rest up to an era roster size (~11 position players in the 1960s to ~20
+today). New `resolveGoldGlovesByPosition` replaces the old player-only Gold Glove roll: **one per
+fielding position per league** from a fielding score (a stored per-entity `glove` rating + Arm/Speed
+tools for the player), the player compared against the field, deterministic (a drift-guard preserves
+the one `Math.random()` the old roll consumed so no seeded career shifts). "All-MLB Second Team" is
+now a real 2019+ award. ROY gates on `draftYear`/`age` (a trimmed veteran's season history can't be
+read as a rookie's). The award ceremony lays Silver Slugger + Gold Glove out by league and position.
+New spec: `awards-are-resolved-by-position`. `box-score-line-score-and-lineups` re-seeded and
+`fa-offers-match-persistent-team-profile` hardened (a locker-room event in the departing offseason
+legitimately moves the team's frozen grades). **74 regression / 58 balance green.**

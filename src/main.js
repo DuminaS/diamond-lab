@@ -5562,65 +5562,81 @@ import {
   // is, in practice, always also a Pro Bowler -- if the comparative Pro Bowl vote above didn't
   // already seat them, they're added on top of their conference's count (same as a real ballot
   // occasionally runs an extra honoree in).
-  function proBowlSlotsForYear(year){
-    return year<1990 ? { perConf:2, maxPerConf:3 } : { perConf:3, maxPerConf:3 };
+  // Position-player All-Star roster size PER LEAGUE (pitchers not modelled). The real roster grew
+  // from ~14 position players (1960s) toward ~20 (modern) -- these are the position-player slots.
+  function allStarRosterSizeForYear(year){
+    return year<1970 ? 11 : year<1990 ? 13 : year<2010 ? 17 : 20;
+  }
+  const FIELD_POSITIONS = ["C","1B","2B","3B","SS","LF","CF","RF"];
+  function positionsForSilverSlugger(conf, year){
+    // DH gets a Silver Slugger in the AL from 1980, the NL from 2022.
+    const dh = (conf==="AFC" && year>=1980) || year>=2022;
+    return FIELD_POSITIONS.concat(dh ? ["DH"] : []);
   }
   function resolveSeasonAllProAndProBowl(season, year){
     const rows = [{ isMine:true, teamId: career.teamId, conf: conferenceOf(career.teamId, year),
       awards: season.awards, season, pos: career.position,
       proBowlScore: season.proBowlScore, proBowlEligible: season.proBowlEligible,
       allProScore: season.allProScore, allProEligible: season.allProEligible, totals: career.totals }];
-    // Wave 7 (task #7): same fix as resolveSeasonMVP above -- iterate the full qbsById registry so
-    // a bench QB's real, played season is never excluded from Pro Bowl/All-Pro consideration just
-    // because career.leagueRivals only ever tracks each team's current starter.
+    // Phase 15: the full ~250-deep field -- every registry entity with a real season line, not just
+    // one franchise face per team. A team whose t.start is after this year is still guarded out.
     Object.values(career.qbsById||{}).forEach(r=>{
       const s = (r.seasons||[]).find(x=>x.year===year);
       if(!s) return;
+      const t = TEAMS.find(x=>x.id===r.teamId);
+      if(t && t.start>year) return;
       rows.push({ isMine:false, teamId: r.teamId, conf: conferenceOf(r.teamId, year),
-        awards: s.awards, season: s, pos: rivalPosition(r),
+        awards: s.awards, season: s, pos: r.position || rivalPosition(r),
         proBowlScore: s.proBowlScore, proBowlEligible: s.proBowlEligible,
         allProScore: s.allProScore, allProEligible: s.allProEligible, totals: r.totals });
     });
 
-    const slots = proBowlSlotsForYear(year);
     const seated = new Set();
-    // Wave 7 (MASTER_REMEDIATION_SPEC.md task #6): the confirmed defect -- the standard slots used
-    // to take the top `perConf` rows by score with NO proBowlEligible filter at all (only the bonus
-    // slot ever checked eligibility), so a QB who fails the real playing-time bar (a short, hot
-    // streak) could still win a standard Pro Bowl slot outright. Standard slots now come from the
-    // ELIGIBLE pool only; the explicit fallback (required by the same task) fills any slot the
-    // eligible pool can't cover from the ineligible pool by score, so a conference is never left
-    // with an empty seat just because too few QBs met the playing-time bar this season -- a real
-    // Pro Bowl roster is always full. The bonus slot stays eligible-only, same as before.
+    const seat = r => { if(!seated.has(r)){ r.awards.push("All-Star"); r.totals.proBowls++; seated.add(r); } };
+
+    // ----- All-Star rosters: one per fielding position per league, then best of the rest -----
+    const rosterTarget = allStarRosterSizeForYear(year);
     ["AFC","NFC"].forEach(conf=>{
-      const pool = rows.filter(r=>r.conf===conf);
-      if(!pool.length) return;
-      const rankedEligible = pool.filter(r=>r.proBowlEligible).sort((a,b)=> b.proBowlScore-a.proBowlScore);
-      const selected = rankedEligible.slice(0, slots.perConf);
-      if(selected.length<slots.perConf){
-        const rankedIneligible = pool.filter(r=>!r.proBowlEligible).sort((a,b)=> b.proBowlScore-a.proBowlScore);
-        selected.push(...rankedIneligible.slice(0, slots.perConf-selected.length));
-      }
-      if(slots.maxPerConf>slots.perConf){
-        const bonus = rankedEligible[slots.perConf];
-        if(bonus) selected.push(bonus);
-      }
-      selected.forEach(r=>{ r.awards.push("All-Star"); r.totals.proBowls++; seated.add(r); });
+      const eligible = rows.filter(r=>r.conf===conf && r.proBowlEligible);
+      const source = eligible.length ? eligible : rows.filter(r=>r.conf===conf);
+      if(!source.length) return;
+      const seatedHere = new Set();
+      positionsForSilverSlugger(conf, year).forEach(pos=>{
+        const at = source.filter(r=>r.pos===pos).sort((a,b)=> b.proBowlScore-a.proBowlScore);
+        if(at[0] && !seatedHere.has(at[0])){ seat(at[0]); seatedHere.add(at[0]); }
+      });
+      source.slice().sort((a,b)=> b.proBowlScore-a.proBowlScore).forEach(r=>{
+        if(seatedHere.size>=rosterTarget || seatedHere.has(r)) return;
+        seat(r); seatedHere.add(r);
+      });
     });
 
-    const eligiblePool = rows.filter(r=>r.allProEligible);
-    const field = (eligiblePool.length ? eligiblePool : rows).slice().sort((a,b)=> b.allProScore-a.allProScore);
-    const firstTeam = field[0];
-    const secondTeam = field.find(r=>r!==firstTeam);
-    [["Silver Slugger", firstTeam], ["All-MLB Second Team", secondTeam]].forEach(([label, r])=>{
-      if(!r) return;
-      r.awards.push(label);
-      if(label==="Silver Slugger" && r.season && r.pos){
-        (r.season.awardPos = r.season.awardPos || {})["Silver Slugger"] = r.pos;
-      }
-      r.totals.allPros++;
-      if(!seated.has(r)){ r.awards.push("All-Star"); r.totals.proBowls++; seated.add(r); }
+    // ----- Silver Slugger: one winner per position per league -----
+    ["AFC","NFC"].forEach(conf=>{
+      positionsForSilverSlugger(conf, year).forEach(pos=>{
+        const at = rows.filter(r=>r.conf===conf && r.pos===pos);
+        if(at.length<2) return; // no real field at this spot in this league this year
+        const elig = at.filter(r=>r.allProEligible);
+        const w = (elig.length ? elig : at).sort((a,b)=> b.allProScore-a.allProScore)[0];
+        if(!w || w.awards.includes("Silver Slugger")) return;
+        w.awards.push("Silver Slugger");
+        (w.season.awardPos = w.season.awardPos || {})["Silver Slugger"] = pos;
+        w.totals.allPros++;
+        seat(w);
+      });
     });
+
+    // ----- All-MLB Team (a real award only from 2019): the Second Team is the best offensive
+    // season league-wide that didn't take its position's Silver Slugger. -----
+    if(year>=2019){
+      const notSS = rows.filter(r=> !r.awards.includes("Silver Slugger") && (r.allProEligible || !rows.some(x=>x.allProEligible)));
+      const second = notSS.slice().sort((a,b)=> b.allProScore-a.allProScore)[0];
+      if(second && !second.awards.includes("All-MLB Second Team")){
+        second.awards.push("All-MLB Second Team");
+        second.totals.allPros++;
+        seat(second);
+      }
+    }
 
     const myRow = rows[0];
     return { proBowl: myRow.awards.includes("All-Star"),
@@ -5661,8 +5677,11 @@ import {
     Object.values(career.qbsById||{}).forEach(r=>{
       const s = (r.seasons||[]).find(x=>x.year===year);
       if(!s || (s.pa||0) < 200) return;
-      const firstYear = Math.min(...r.seasons.filter(x=>(x.games||0)>0).map(x=>x.year));
-      if(firstYear === year) rookieRows.push({ awards: s.awards, opsPlus: s.opsPlus||0 });
+      // Phase 15: a supporting-cast bat's older season rows are trimmed, so "earliest row" can't tell
+      // a real rookie from a trimmed veteran. Gate on draftYear/age -- a rookie is in his draft year
+      // (or the one after) and 24 or younger.
+      if((r.draftYear==null || year - r.draftYear > 1) || (r.age!=null && r.age > 24)) return;
+      rookieRows.push({ awards: s.awards, opsPlus: s.opsPlus||0 });
     });
     if(rookieRows.length){
       const best = Math.max(...rookieRows.map(r=>r.opsPlus));
@@ -5709,24 +5728,54 @@ import {
     }
   }
 
-  // Gold Glove: a player-only self-check (the sim doesn't model rival fielding). Chance scales
-  // with the fielding-relevant tools for the player's position -- Arm Strength always, plus Speed
-  // for the up-the-middle spots -- gated on a real full-ish season. A DH can't win one.
-  function maybeAwardGoldGlove(season){
-    if(season.awards.includes("Gold Glove")) return;
-    const posDef = (POSITIONS.find(p=>p.key===career.position) || { defWeight:0.5 });
-    if(posDef.defWeight <= 0) return; // DH
-    if((season.pa||0) < 380) return;
+  // Gold Glove: one winner per fielding position per league (a DH can't win one), decided by a
+  // fielding score across the whole league -- a stored per-entity `glove` rating for a rival, and
+  // the era-adjusted fielding tools (Arm always, plus Speed up the middle) for the player. Gated on
+  // a real full-ish season. Deterministic (no roll) -- the whole award block is isolated so this
+  // never shifts the main RNG stream.
+  function entityFieldingScore(e){
+    return clamp((e.glove ?? 50) + (rivalEffTalent(e)-65)*0.12, 20, 99);
+  }
+  function playerFieldingScore(season){
+    const posDef = POSITIONS.find(p=>p.key===career.position);
+    if(!posDef || posDef.defWeight<=0) return 0;
     const eff = eraEffective(season.age, season.decade);
     const upTheMiddle = ["C","2B","SS","CF"].includes(career.position);
     const defScore = eff.ARM*posDef.defWeight + (upTheMiddle ? (eff.MOB-50)*0.35 : 0) + (eff.IMP-50)*0.15;
-    const chance = clamp((defScore - 58) * 0.012, 0, 0.34);
-    if(Math.random() < chance){
-      season.awards.push("Gold Glove");
-      (season.awardPos = season.awardPos || {})["Gold Glove"] = career.position;
-      career.transactions.push(`${season.year}: Wins a Gold Glove at ${positionLabel(career.position)}.`);
-      recordLedgerEvent("award_won", { teamId: season.teamId, outcomeId: "Gold Glove" });
+    return clamp(38 + defScore*0.72, 20, 99);
+  }
+  function resolveGoldGlovesByPosition(season, year){
+    const rows = [];
+    const myPosDef = POSITIONS.find(p=>p.key===career.position);
+    if(myPosDef && myPosDef.defWeight>0 && (season.pa||0)>=350){
+      rows.push({ isMine:true, conf: conferenceOf(career.teamId, year), pos: career.position,
+        score: playerFieldingScore(season), season, teamId: career.teamId });
     }
+    Object.values(career.qbsById||{}).forEach(r=>{
+      const s = (r.seasons||[]).find(x=>x.year===year);
+      if(!s || (s.games||0) < 110 || !r.position) return;
+      const pd = POSITIONS.find(p=>p.key===r.position);
+      if(!pd || pd.defWeight<=0) return; // DH / pitcher
+      const t = TEAMS.find(x=>x.id===r.teamId);
+      if(t && t.start>year) return;
+      rows.push({ isMine:false, conf: conferenceOf(r.teamId, year), pos: r.position,
+        score: entityFieldingScore(r), season: s, teamId: r.teamId });
+    });
+    ["AFC","NFC"].forEach(conf=>{
+      FIELD_POSITIONS.forEach(pos=>{
+        const at = rows.filter(x=>x.conf===conf && x.pos===pos);
+        if(at.length<2) return;
+        const w = at.sort((a,b)=> b.score-a.score)[0];
+        if(!w.season.awards) w.season.awards = [];
+        if(w.season.awards.includes("Gold Glove")) return;
+        w.season.awards.push("Gold Glove");
+        (w.season.awardPos = w.season.awardPos || {})["Gold Glove"] = pos;
+        if(w.isMine){
+          career.transactions.push(`${year}: Wins a Gold Glove at ${positionLabel(pos)}.`);
+          recordLedgerEvent("award_won", { teamId: w.teamId, outcomeId: "Gold Glove" });
+        }
+      });
+    });
   }
 
   /* ----- Modern-day NFL record tracking -- a Playtester request: flag it with a badge/star when
@@ -7496,7 +7545,11 @@ import {
     const mvp = resolveSeasonMVP(season, career.year);
     const { proBowl, allPro } = resolveSeasonAllProAndProBowl(season, career.year);
     resolveSeasonStatTitlesAndROY(season, career.year);
-    maybeAwardGoldGlove(season);
+    // Drift guard: maybeAwardGoldGlove used to consume exactly one Math.random() here for an
+    // eligible fielder before Gold Gloves became a deterministic by-position resolution (Phase
+    // 15b). Preserving that one draw keeps every existing seeded career byte-identical.
+    { const _pd = POSITIONS.find(p=>p.key===career.position); if(_pd && _pd.defWeight>0 && (season.pa||0)>=380) Math.random(); }
+    resolveGoldGlovesByPosition(season, career.year);
     // Balance Wave 6: NOW (not right after the push above) season.awards actually reflects whatever
     // resolveSeasonMVP/resolveSeasonAllProAndProBowl just decided -- log it to the event ledger too
     // so chain achievements can express "an MVP season eventually followed a scandal" as an ordered
@@ -11068,6 +11121,7 @@ import {
     const mvpCandidates = rows.filter(r=>r.awards.includes("MVP")); // already rating-sorted
     const allStars = rows.filter(r=>r.awards.includes("All-Star"));
     const silverSluggers = rows.filter(r=>r.awards.includes("Silver Slugger"));
+    const goldGloves = rows.filter(r=>r.awards.includes("Gold Glove"));
     const allMlbSecond = rows.filter(r=>r.awards.includes("All-MLB Second Team"));
     const roy = rows.filter(r=>r.awards.includes("Rookie of the Year"));
     const hankAaron = rows.filter(r=>r.awards.includes("Hank Aaron Award"));
@@ -11075,6 +11129,21 @@ import {
 
     const statLine = r => `${r.td} HR · ${r.rbi!=null?r.rbi+" RBI · ":""}${(r.pct||0).toFixed(3).replace(/^0/,"")} AVG · ${Math.round(r.rating)} OPS+`;
     const rowLine = r => `${svgEscape(r.name)}${r.mine?" (you)":""} — ${svgEscape(teamNameAt(r.teamId, year))} — ${statLine(r)}`;
+    // A per-position award (Silver Slugger / Gold Glove) laid out one league at a time, one line
+    // per fielding position -- the way real award coverage reads.
+    const positionAwardSection = (title, label, list) => {
+      if(!list.length) return `<div class="award-list-section empty"><h4>${title}</h4><p>Nobody made the cut league-wide this year.</p></div>`;
+      const seasonRowFor = r => (r.mine ? season : (career.qbsById[r.id]||{}).seasons?.find(s=>s.year===year)) || {};
+      const posOf = r => (seasonRowFor(r).awardPos||{})[label] || r.position || "?";
+      const leagues = [["AL","AFC"],["NL","NFC"]].map(([lg,conf])=>{
+        const lines = FIELD_POSITIONS.concat(["DH"]).map(pos=>{
+          const w = list.find(r=> conferenceOf(r.teamId, year)===conf && posOf(r)===pos);
+          return w ? `<li class="${w.mine?"me":""}"><b>${svgEscape(positionLabel(pos))}</b> — ${svgEscape(w.name)}${w.mine?" (you)":""} <span style="color:var(--ink-muted);">${svgEscape(teamNameAt(w.teamId, year))}</span></li>` : "";
+        }).filter(Boolean).join("");
+        return lines ? `<div class="award-league"><div class="award-league-name">${lg}</div><ul class="award-list">${lines}</ul></div>` : "";
+      }).join("");
+      return `<div class="award-list-section"><h4>${title} <span class="award-count">${list.length}</span></h4>${leagues}</div>`;
+    };
 
     const mvpHtml = mvpCandidates.length ? `
       <div class="award-hero">
@@ -11107,8 +11176,9 @@ import {
         ${roy.length ? listSection("Rookie of the Year", roy) : ""}
         ${hankAaron.length ? listSection("Hank Aaron Award", hankAaron) : ""}
         ${comeback.length ? listSection("Comeback Player of the Year", comeback) : ""}
-        ${listSection("Silver Slugger", silverSluggers)}
-        ${listSection("All-MLB Second Team", allMlbSecond)}
+        ${positionAwardSection("Silver Slugger", "Silver Slugger", silverSluggers)}
+        ${positionAwardSection("Gold Glove", "Gold Glove", goldGloves)}
+        ${allMlbSecond.length ? listSection("All-MLB Second Team", allMlbSecond) : ""}
         ${listSection("All-Star", allStars)}
       </div>`;
   }
@@ -13815,7 +13885,7 @@ Scales how much of the build's edge OVER neutral actually shows up this season -
         `winsAboveExpectation = clamp(winPct − expectedWinPct, −0.5, 0.5) = clamp(${d.winProb.toFixed(2)} − ${d.expectedWinPct.toFixed(2)}, ...) = ${d.winsAboveExpectation.toFixed(2)}`,
         `score = ratingEdge×0.6 + max(0, HR−16)×0.45 + winsAboveExpectation×10`,
         `      = ${d.ratingEdge.toFixed(1)}×0.6 + max(0, ${d.expTd}−16)×0.45 + ${d.winsAboveExpectation.toFixed(2)}×10 = ${d.proBowlScore.toFixed(2)}`,
-        `The All-Star team is no longer an independent per-hitter roll -- the top scorers in each league make it (2/league through the 1980s, 3/league from the 1990s on, with an extra qualifying 3rd spot possible pre-1990), decided once every other league hitter's season is locked in.`,
+        `The All-Star team is a real roster resolved once every other hitter's season is locked in: one honoree per fielding position per league, then the best of the rest up to the era's roster size (~11 position players in the 1960s to ~20 today).`,
       ],
       gateLine(d.expAttempts>200, `PA > 200 (${d.expAttempts})`) +
       gateLine(true, `played ≥ 65% of games (this preview assumes a full healthy season)`) +
