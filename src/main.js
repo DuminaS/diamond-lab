@@ -6071,13 +6071,14 @@ import {
   }
   function spawnLineupHitter(teamId, decade, year, pos, teamGrade, idTag){
     const glovey = ["C","SS","2B","CF"].includes(pos);
-    const age = randInt(22, 34);
+    // A real everyday hitter population skews young -- most regulars are 24-30, a few graybeards.
+    const age = clamp(21 + Math.floor((Math.random()+Math.random())/2*13), 21, 37);
     const talent = clamp(Math.round(teamGrade + randInt(-16, 14) + (glovey ? -3 : 2)), 18, 97);
     const e = {
       id: "hit_"+teamId+"_"+pos+"_"+idTag,
       name: randomFullName(), teamId, currentTeamId: teamId,
       talent, age, position: pos, lineupSlot: 5, glove: rollGloveForPosition(pos, talent),
-      retireAge: clamp(age + randInt(3, 12), 30, 43),
+      retireAge: clamp(age + randInt(3, 12), 31, 40),
       draftYear: year - (age - 22),
       seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
       retired: false, status: "active", rosterRole: null, role: "lineup",
@@ -6189,6 +6190,78 @@ import {
     Math.random = createSeededRandom(seed >>> 0);
     try { return fn(); }
     finally { Math.random = saved; }
+  }
+  // Phase 15d: free agency at roster scale. Each offseason a fraction of the league's non-QB1
+  // lineup bats hit the market (age-weighted -- an older bat churns more); an old or worn-out one
+  // just retires, the rest look for a team whose starter at their position is meaningfully worse
+  // and swap in, sending that starter to the vacated slot or into retirement. Capped at a realistic
+  // trickle per year. RNG-isolated so the reshuffle never shifts the main stream; the roster
+  // changes flow into next season through recomputeLineupGrades (later this same generateSeason).
+  function rollLineupFreeAgency(year){
+    if(!career.teamLineups) return;
+    const decade = decadeForYear(year);
+    withIsolatedRandom(hashSeed("lineupfa:" + (career.name||"") + ":" + (career.draftYear||0) + ":" + year), ()=>{
+    const MAX_MOVES = 10;
+    const freshAt = (teamId, pos, tag) => spawnLineupHitter(teamId, decade, year, pos,
+      clamp((career.leagueStrength[teamId] ?? 60) + randInt(-10, 10), 18, 97), tag).id;
+    const isQb1 = (teamId, id) => career.teamQbDepth && career.teamQbDepth[teamId] && career.teamQbDepth[teamId].QB1 === id;
+    const posOccupantIdx = (teamId, pos) => (career.teamLineups[teamId]||[]).findIndex(oid=>{
+      const oe = career.qbsById[oid];
+      return oe && oe.position === pos && !isQb1(teamId, oid) && oid !== USER_QB_ID;
+    });
+    // 1. the market -- churn starts at ~31 and rises with age; a genuine star (a team keeps its
+    // franchise bat) and a young player still on his rookie deal rarely come available.
+    const market = [];
+    Object.keys(career.teamLineups).forEach(teamId=>{
+      (career.teamLineups[teamId]||[]).forEach((id, idx)=>{
+        if(id===USER_QB_ID || isQb1(teamId, id)) return;
+        const e = career.qbsById[id];
+        if(!e || e.retired) return;
+        let chance = clamp(0.03 + Math.max(0, (e.age||28) - 30) * 0.022, 0.03, 0.22);
+        if(rivalEffTalent(e) >= 78) chance *= 0.35;             // teams don't let their stars walk
+        if((e.age||28) <= 25) chance *= 0.4;                    // still cost-controlled
+        if(Math.random() < chance) market.push({ e, teamId, idx });
+      });
+    });
+    // 2. resolve
+    let moves = 0;
+    market.forEach(({ e, teamId, idx })=>{
+      if(career.teamLineups[teamId][idx] !== e.id) return; // slot already changed hands this pass
+      const myTal = rivalEffTalent(e);
+      if(e.age >= (e.retireAge || 38) - 1 || myTal < 40){
+        retireQuarterback(e.id, "age");
+        career.teamLineups[teamId][idx] = freshAt(teamId, e.position, "farepl"+year+"_"+idx);
+        return;
+      }
+      if(moves >= MAX_MOVES) return;
+      const suitors = Object.keys(career.teamLineups).filter(dt=>{
+        if(dt===teamId || dt===career.teamId) return false;
+        const oi = posOccupantIdx(dt, e.position);
+        if(oi<0) return false;
+        const oe = career.qbsById[career.teamLineups[dt][oi]];
+        return oe && rivalEffTalent(oe) < myTal - 4;
+      });
+      if(!suitors.length) return;
+      const destTeam = suitors[Math.floor(Math.random() * suitors.length)];
+      const destArr = career.teamLineups[destTeam];
+      const occIdx = posOccupantIdx(destTeam, e.position);
+      const displaced = destArr[occIdx];
+      const de = career.qbsById[displaced];
+      destArr[occIdx] = e.id; e.teamId = destTeam; e.currentTeamId = destTeam;
+      if(de && (de.age >= (de.retireAge || 38) - 1 || rivalEffTalent(de) < 42)){
+        retireQuarterback(displaced, "displaced");
+        career.teamLineups[teamId][idx] = freshAt(teamId, e.position, "fadep"+year+"_"+idx);
+      } else if(de){
+        de.teamId = teamId; de.currentTeamId = teamId;
+        career.teamLineups[teamId][idx] = displaced;
+      } else {
+        career.teamLineups[teamId][idx] = freshAt(teamId, e.position, "fadep"+year+"_"+idx);
+      }
+      moves++;
+      career.leagueNewsLog.push({ year, teamId: destTeam, title:"Free-Agent Bat Signs", delta:0,
+        flavor:`${e.name} (${positionLabel(e.position)}) signs with ${teamNameAt(destTeam, year)}, leaving ${teamNameAt(teamId, year)}.` });
+    });
+    });
   }
   // Runs every season from generateSeason: real season lines for the seven/eight non-QB1 lineup
   // hitters on every team, per-slot retirement + succession, and the storage trim.
@@ -7533,6 +7606,7 @@ import {
     }
     simulateDepthChartSeasons(decade, league, career.year);
     rollVeteranFreeAgency(decade, career.year);
+    rollLineupFreeAgency(career.year);
     TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateSuccession(t.id, decade, career.year));
     // Phase 2 of the QB-entity redesign: real bench mobility (trade/waive) and free-agent-pool
     // resolution (retirement hazard + teams signing off the pool), both once per team per season,

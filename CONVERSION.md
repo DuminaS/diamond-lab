@@ -434,3 +434,17 @@ out-grades worst-lineup third by 8+). `analytics-tab` re-seeded. **75 regression
 
 Known for 15e: lineup entity age skews old (mean ~33, max ~41) -- successor/intake ages should
 skew younger (real regulars mean ~28).
+
+**15d — free agency at roster scale.** New `rollLineupFreeAgency(year)`, run every offseason
+(RNG-isolated): a realistic per-year trickle (~10 moves + retirements) of the league's non-QB1
+lineup bats hit the market -- age-weighted (churn starts ~31), with a genuine star (talent 78+) or
+a young cost-controlled bat rarely available. An old or worn-out market bat retires; the rest sign
+with a team whose starter at their position is a real downgrade (talent gap > 4), sending that
+starter to the vacated slot or into retirement. Roster integrity holds (no bat in two lineups, 8/9
+per team, position-consistent moves). `spawnLineupHitter` age curve pulled younger (mean ~31, was
+skewing older). Save stays ~3.3 MB. New spec: `free-agency-reshuffles-full-lineups`. **76 regression
+/ 58 balance green.**
+
+Still to come: 15e -- lineup age curve tuning (mean should be ~28), lineup entity continuity (a
+slot should prefer keeping its current occupant), HOF-weight retune for the more frequent
+by-position awards, docs, merge `phase-15` -> `main`.
