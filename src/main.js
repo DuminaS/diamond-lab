@@ -1987,7 +1987,10 @@ import {
   // Wave 2A: bumped to schemaVersion 2 -- the canonical qbsById/teamQbDepth/freeAgentQbIds/
   // retiredQbIds registry (Section 5's target schema). See syncQbRegistryFromLegacy for what
   // building it actually involves.
-  const SAVE_SCHEMA_VERSION = 3;
+  // Phase 15: bumped to 4 -- career.teamLineups (the full 9-man batting order per team). A schema-3
+  // save has no teamLineups; ensureLeagueLineups() builds them lazily on the first resumed season
+  // rather than during migration (the roster helpers need the live `career`).
+  const SAVE_SCHEMA_VERSION = 4;
   const SOLO_ACTIVE_CAREER_KEY = "diamondlab.activeCareer";
   // Multiplayer Parallel Universe Mode (MULTIPLAYER_MODE_SPEC.md section 12.3): solo play always
   // uses the plain key above, completely untouched -- a multiplayer session (Create/Join Private
@@ -3258,6 +3261,12 @@ import {
       career.isBackup = true;
       career.transactions.push(`${draftYear}: Breaks camp as a bench bat behind ${incumbent.name}.`);
     }
+
+    // Phase 15: fill out every team's full batting order (the seven/eight bats around each
+    // franchise face). Must run after the QB1s and the player's own team slot are settled.
+    // Isolated PRNG: ~250 entities' worth of rolls here would otherwise shift the main stream for
+    // every seeded career from draft night on.
+    withIsolatedRandom(hashSeed("lineupinit:" + (career.name||"") + ":" + (career.draftYear||0)), buildLeagueLineups);
 
     showScreen("draftnight");
     document.getElementById("draftNightActions").style.visibility = "hidden";
@@ -4691,7 +4700,7 @@ import {
       <div class="rival-card">
         <div class="rival-eyebrow"><button type="button" class="rival-link" data-team-id="${rival.teamId}">${svgEscape(teamNameAt(rival.teamId, career.year))}</button>${rival.retired?" · Retired":""}</div>
         <h3 id="rivalProfileHeading">${svgEscape(rival.name)}</h3>
-        <div class="rival-meta">Age ${rival.age} · Drafted ${rival.draftYear} · Overall <b>${overall}</b> (${svgEscape(g.flavor)})</div>
+        <div class="rival-meta">${rival.position?svgEscape(positionLabel(rival.position))+" · ":""}Age ${rival.age} · Drafted ${rival.draftYear} · Overall <b>${overall}</b> (${svgEscape(g.flavor)})</div>
         ${contractLine}
         ${availabilityLine}
         <div class="rival-stats-grid">
@@ -5952,6 +5961,7 @@ import {
       if(rivalForTeam(t.id)) return;
       const nr = spawnFreshRival(t.id, decade, year, "new"+year);
       assignQuarterbackToRoster(nr.id, t.id, "QB1");
+      if(career.teamLineups) ensureTeamLineup(t.id);
     });
   }
   // Called at every site where the PLAYER changes teams (trade, waiver pickup, free-agent sign,
@@ -5985,6 +5995,256 @@ import {
     if(oldTeamId && oldTeamId!==newTeamId && !rivalForTeam(oldTeamId)){
       const nr = spawnFreshRival(oldTeamId, decade, career.year, "repl"+career.year);
       assignQuarterbackToRoster(nr.id, oldTeamId, "QB1");
+    }
+    reassignLineupsForTeamChange(oldTeamId, newTeamId);
+  }
+
+  /* ================= Full 9-man rosters (Phase 15) =================
+     Every batting-order slot on every team is a real registry entity, not a fabrication. The
+     franchise face (teamQbDepth[teamId].QB1) is ONE of the nine; the other seven/eight are lineup
+     entities registered in qbsById with a .position, .lineupSlot and .glove. They get a real
+     season line from simulatePlayerSeasonStats every year and compete for every award.
+     career.teamLineups[teamId] holds the eight/nine ids covering each fielding position (the
+     player's own team stores USER_QB_ID in his slot). Storage is bounded: a non-_notable entity
+     keeps only a rolling window of recent seasons + lifetime totals + careerHighs, and a stale
+     non-notable retiree is pruned from the registry entirely. */
+  const LINEUP_HISTORY_WINDOW = 1;  // recent-season rows kept for a non-_notable supporting-cast bat
+  const RETIREE_PRUNE_AGE = 1;      // seasons past his last game before a non-notable retiree is dropped
+  const SUPPORTING_CAST_BUDGET = 150; // hard cap on non-notable non-rostered registry entities
+  function rollGloveForPosition(pos, talent){
+    const base = { C:0.62, SS:0.62, "2B":0.56, CF:0.58, "3B":0.5, RF:0.44, LF:0.4, "1B":0.36, DH:0.2 }[pos] ?? 0.45;
+    return clamp(Math.round(45 + base*40 + (talent-65)*0.25 + randInt(-8,8)), 20, 99);
+  }
+  function lineupPositionsFor(teamId, year){
+    const conf = conferenceOf(teamId, year);
+    const useDH = year >= 2022 || (conf === "AFC" && year >= 1973);
+    return { positions: ["C","1B","2B","3B","SS","LF","CF","RF"].concat(useDH ? ["DH"] : []), useDH };
+  }
+  function spawnLineupHitter(teamId, decade, year, pos, teamGrade, idTag){
+    const glovey = ["C","SS","2B","CF"].includes(pos);
+    const age = randInt(22, 34);
+    const talent = clamp(Math.round(teamGrade + randInt(-16, 14) + (glovey ? -3 : 2)), 18, 97);
+    const e = {
+      id: "hit_"+teamId+"_"+pos+"_"+idTag,
+      name: randomFullName(), teamId, currentTeamId: teamId,
+      talent, age, position: pos, lineupSlot: 5, glove: rollGloveForPosition(pos, talent),
+      retireAge: clamp(age + randInt(3, 12), 30, 43),
+      draftYear: year - (age - 22),
+      seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0 },
+      retired: false, status: "active", rosterRole: null, role: "lineup",
+      contract: rollRivalContract(decade, talent), entrenchedYears: rollEntrenchedYears(talent),
+    };
+    return registerQuarterback(e);
+  }
+  // The eight/nine ids covering each fielding position for one team. The QB1 franchise face takes
+  // his own position; the rest are fresh entities. Stored ordered C..RF(..DH); batting order is
+  // derived at read time from talent.
+  function buildTeamLineupRoster(teamId, decade, year){
+    const teamGrade = Math.round(teamId===career.teamId ? career.teamStrength : (career.leagueStrength[teamId] ?? 60));
+    const { positions } = lineupPositionsFor(teamId, year);
+    // A backup player is not in his own team's starting lineup yet -- treat it like any other team
+    // (the incumbent QB1 fills the slot) until he wins the job (promotePlayerIntoLineup).
+    const isMine = teamId===career.teamId && !career.isBackup;
+    const ids = [];
+    const taken = new Set();
+    if(isMine){
+      const myPos = POSITIONS.some(p=>p.key===career.position) ? career.position : "1B";
+      ids.push(USER_QB_ID); taken.add(positions.includes(myPos) ? myPos : "1B");
+    } else {
+      const qb1 = rivalForTeam(teamId);
+      if(qb1){
+        if(!qb1.position || !positions.includes(qb1.position)){
+          qb1.position = positions.find(p=>!taken.has(p)) || "1B";
+        }
+        if(qb1.glove==null) qb1.glove = rollGloveForPosition(qb1.position, qb1.talent);
+        if(qb1.lineupSlot==null) qb1.lineupSlot = 4;
+        qb1.role = "lineup";
+        ids.push(qb1.id); taken.add(qb1.position);
+      }
+    }
+    positions.filter(p=>!taken.has(p)).forEach((pos,i)=>{
+      ids.push(spawnLineupHitter(teamId, decade, year, pos, teamGrade, year+"_"+i).id);
+    });
+    return ids;
+  }
+  function buildLeagueLineups(){
+    career.teamLineups = {};
+    const decade = decadeForYear(career.year);
+    TEAMS.filter(t=>t.start<=career.year).forEach(t=>{
+      career.teamLineups[t.id] = buildTeamLineupRoster(t.id, decade, career.year);
+    });
+    (career.leagueRivals||[]).forEach(r=>{ r._notable = true; });
+  }
+  // Lazy build for a save from before Phase 15 (schema < 4): the roster helpers reference the live
+  // `career`, so lineups are built on first use once the save is resumed, not during migration.
+  // Isolated so a resumed old save doesn't consume main-stream RNG at an unpredictable point.
+  function ensureLeagueLineups(){
+    if(career && (!career.teamLineups || !Object.keys(career.teamLineups).length)){
+      withIsolatedRandom(hashSeed("lineupinit:" + (career.name||"") + ":" + (career.draftYear||0)), buildLeagueLineups);
+    }
+  }
+  // Which registry ids are a team's real starting hitters this year (skips USER_QB_ID, retired or
+  // missing entries). Order is the stored roster order (by fielding position), not batting order.
+  function teamLineupIds(teamId){
+    return (career.teamLineups && career.teamLineups[teamId]) || [];
+  }
+  function teamLineupEntities(teamId){
+    return teamLineupIds(teamId).map(id=> id===USER_QB_ID ? null : (career.qbsById && career.qbsById[id]))
+      .filter(e=> e && !e.retired);
+  }
+  // Player traded / signed elsewhere: give his old team a real hitter at his vacated position and
+  // slot USER_QB_ID into the new team's lineup, displacing whoever played there.
+  function reassignLineupsForTeamChange(oldTeamId, newTeamId){
+    if(!career.teamLineups) return;
+    withIsolatedRandom(hashSeed("lineupmove:" + (career.name||"") + ":" + career.year + ":" + oldTeamId + ":" + newTeamId), ()=>{
+    const decade = decadeForYear(career.year);
+    const yr = career.year;
+    if(oldTeamId && oldTeamId!==newTeamId){
+      const arr = career.teamLineups[oldTeamId] || [];
+      const i = arr.indexOf(USER_QB_ID);
+      if(i>=0){
+        const { positions } = lineupPositionsFor(oldTeamId, yr);
+        const usedPos = new Set(arr.filter(x=>x!==USER_QB_ID).map(id=> (career.qbsById[id]||{}).position).filter(Boolean));
+        const pos = positions.find(p=>!usedPos.has(p)) || (POSITIONS.some(p=>p.key===career.position)?career.position:"1B");
+        arr[i] = spawnLineupHitter(oldTeamId, decade, yr, pos, Math.round(career.leagueStrength[oldTeamId] ?? 60), "vac"+yr).id;
+      }
+    }
+    if(newTeamId){
+      const arr = career.teamLineups[newTeamId] || (career.teamLineups[newTeamId] = buildTeamLineupRoster(newTeamId, decade, yr));
+      if(!arr.includes(USER_QB_ID)){
+        const myPos = POSITIONS.some(p=>p.key===career.position) ? career.position : "1B";
+        let slot = arr.findIndex(id=> (career.qbsById[id]||{}).position===myPos);
+        if(slot<0) slot = arr.length ? 0 : 0;
+        const displaced = arr[slot];
+        arr[slot] = USER_QB_ID;
+        if(displaced && displaced!==USER_QB_ID && career.qbsById[displaced]) enterFreeAgentPool(career.qbsById[displaced], "displaced");
+      }
+    }
+    });
+  }
+  // A new franchise, or a team found without a lineup on load, gets one built lazily.
+  function ensureTeamLineup(teamId){
+    if(!career.teamLineups) career.teamLineups = {};
+    if(!career.teamLineups[teamId] || !career.teamLineups[teamId].length){
+      withIsolatedRandom(hashSeed("lineupteam:" + (career.name||"") + ":" + teamId + ":" + career.year), ()=>{
+        career.teamLineups[teamId] = buildTeamLineupRoster(teamId, decadeForYear(career.year), career.year);
+      });
+    }
+  }
+  // Runs simulation work against a fresh deterministic PRNG so its ~200 stat-line rolls per season
+  // never shift the main (global) Math.random stream every other seeded test depends on. Restores
+  // whatever was installed before (the test harness's seeded generator, a multiplayer seed, or the
+  // real browser RNG) no matter how fn exits.
+  function withIsolatedRandom(seed, fn){
+    const saved = Math.random;
+    Math.random = createSeededRandom(seed >>> 0);
+    try { return fn(); }
+    finally { Math.random = saved; }
+  }
+  // Runs every season from generateSeason: real season lines for the seven/eight non-QB1 lineup
+  // hitters on every team, per-slot retirement + succession, and the storage trim.
+  function simulateLineupSeasons(decade, league, year){
+    ensureLeagueLineups();
+    if(!career.teamLineups) return;
+    withIsolatedRandom(hashSeed("lineupsim:" + (career.name||"") + ":" + (career.draftYear||0) + ":" + year), ()=>{
+    Object.keys(career.teamLineups).forEach(teamId=>{
+      const t = TEAMS.find(x=>x.id===teamId);
+      if(t && t.start>year) return;
+      const { positions } = lineupPositionsFor(teamId, year);
+      const qb1Id = career.teamQbDepth && career.teamQbDepth[teamId] && career.teamQbDepth[teamId].QB1;
+      let arr = career.teamLineups[teamId];
+      const teamGrade = Math.round(career.leagueStrength[teamId] ?? 60);
+      // Rebuild the roster to EXACTLY one slot per fielding position, keeping the current occupant
+      // where he's still valid and succeeding/spawning where he isn't. This can never grow the
+      // array past positions.length.
+      const byPos = {};
+      arr.forEach(id=>{
+        if(id===USER_QB_ID){ byPos[POSITIONS.some(p=>p.key===career.position)?career.position:"1B"] = USER_QB_ID; return; }
+        const e = career.qbsById[id];
+        if(e && !e.retired && e.age<=e.retireAge && e.position && !byPos[e.position]) byPos[e.position] = id;
+      });
+      arr = career.teamLineups[teamId] = positions.map((pos, idx)=>{
+        const cur = byPos[pos];
+        if(cur) return cur;
+        return spawnLineupHitter(teamId, decade, year, pos, clamp(teamGrade+randInt(-12,12),18,97), "fill"+year+"_"+idx).id;
+      });
+      // retire anyone who aged out but was still holding a slot a moment ago
+      Object.values(byPos).forEach(id=>{
+        if(id===USER_QB_ID) return;
+        const e = career.qbsById[id];
+        if(e && !e.retired && e.age>e.retireAge) retireQuarterback(id, "age");
+      });
+      arr.forEach(id=>{
+        if(id===USER_QB_ID || id===qb1Id) return;            // player + franchise face handled elsewhere
+        const e = career.qbsById[id];
+        if(!e || e.retired) return;
+        if((e.seasons||[]).find(s=>s.year===year)) return;    // guard: already simulated (shared entity)
+        const res = simulatePlayerSeasonStats(e, decade, league, year);
+        developEntityTalent(e, decade, res.performance);
+      });
+    });
+    trimSupportingCastHistory(year);
+    pruneStaleRetirees(year);
+    });
+  }
+  // The fields the award resolvers, the leaderboard, and a rival profile actually read off a
+  // supporting-cast bat's season row -- everything else (per-tool performance snapshot, legacy
+  // aliases, obp/slg/ops) is dropped for a non-_notable entity to keep the save small.
+  const SLIM_SEASON_KEYS = ["year","age","teamId","games","pa","ab","hits","doubles","triples","hr",
+    "bb","hbp","sf","k","sb","cs","rbi","runs","avg","opsPlus","rating","awards",
+    "proBowlScore","proBowlEligible","allProScore","allProEligible","mvpScore","mvpEligible",
+    "att","comp","yards","td","int","pct","position"];
+  function slimSeasonRow(s){
+    const out = {};
+    SLIM_SEASON_KEYS.forEach(k=>{ if(s[k]!==undefined) out[k] = s[k]; });
+    return out;
+  }
+  function trimSupportingCastHistory(year){
+    Object.values(career.qbsById||{}).forEach(e=>{
+      if(e._notable || !e.seasons || !e.seasons.length) return;
+      const hi = e.careerHighs || (e.careerHighs = { hr:0, rbi:0, avg:0, opsPlus:0, sb:0, year:null });
+      const drop = e.seasons.length>LINEUP_HISTORY_WINDOW ? e.seasons.slice(0, e.seasons.length-LINEUP_HISTORY_WINDOW) : [];
+      drop.forEach(s=>{
+        const ops = s.opsPlus!=null ? s.opsPlus : (s.rating||0);
+        if((s.hr||s.td||0) > hi.hr) hi.hr = s.hr||s.td||0;
+        if((s.rbi||0) > hi.rbi) hi.rbi = s.rbi||0;
+        if((s.avg||0) > hi.avg) hi.avg = s.avg||0;
+        if((s.sb||0) > hi.sb) hi.sb = s.sb||0;
+        if(ops > hi.opsPlus){ hi.opsPlus = ops; hi.year = s.year; }
+      });
+      e.seasons = e.seasons.slice(-LINEUP_HISTORY_WINDOW).map(slimSeasonRow);
+    });
+  }
+  function pruneStaleRetirees(year){
+    const rostered = new Set();
+    Object.values(career.teamLineups||{}).forEach(arr=> arr.forEach(id=>rostered.add(id)));
+    Object.values(career.teamQbDepth||{}).forEach(s=>{ if(s.QB1) rostered.add(s.QB1); if(s.QB2) rostered.add(s.QB2); if(s.QB3) rostered.add(s.QB3); });
+    Object.keys(career.rivalries||{}).forEach(id=>rostered.add(id));
+    (career.leagueDepthCharts && Object.values(career.leagueDepthCharts).forEach(c=>{ if(c.qb2) rostered.add(c.qb2.id); if(c.qb3) rostered.add(c.qb3.id); }));
+    const drop = id=>{
+      delete career.qbsById[id];
+      career.retiredQbIds = (career.retiredQbIds||[]).filter(x=>x!==id);
+      career.freeAgentQbIds = (career.freeAgentQbIds||[]).filter(x=>x!==id);
+      career.freeAgentPool = (career.freeAgentPool||[]).filter(p=>p.id!==id);
+    };
+    const lastYearOf = e => (e.seasons||[]).length ? e.seasons[e.seasons.length-1].year : (e.draftYear||year);
+    // Never prune anything the free-agent-pool machinery is still tracking -- doing so would change
+    // how many entries resolveFreeAgentPool iterates, shifting the main RNG stream.
+    const faTracked = new Set([...(career.freeAgentQbIds||[]), ...((career.freeAgentPool||[]).map(p=>p.id))]);
+    const candidates = [];
+    Object.keys(career.qbsById||{}).forEach(id=>{
+      const e = career.qbsById[id];
+      if(!e || e._notable || rostered.has(id) || faTracked.has(id)) return;
+      if(!e.retired) return;
+      const last = lastYearOf(e);
+      if(year - last >= RETIREE_PRUNE_AGE) drop(id);
+      else candidates.push({ id, last });
+    });
+    // Hard cap: if the supporting cast still overflows the budget, drop the least-recently-active.
+    const nonNotable = Object.keys(career.qbsById||{}).filter(id=> !career.qbsById[id]._notable && !rostered.has(id)).length;
+    if(nonNotable > SUPPORTING_CAST_BUDGET){
+      candidates.sort((a,b)=> a.last-b.last);
+      candidates.slice(0, nonNotable - SUPPORTING_CAST_BUDGET).forEach(c=> drop(c.id));
     }
   }
   // Shared per-player season-stat math -- originally inline in simulateRivalSeasons, extracted so
@@ -6833,8 +7093,28 @@ import {
           enterFreeAgentPool(incumbent, "lost-job-to-user");
         }
       }
+      // Phase 15: slot the player into his own team's batting order in place of the ex-incumbent.
+      promotePlayerIntoLineup(incumbent ? incumbent.id : null);
     }
     return wonJob;
+  }
+  // The player just became his team's everyday starter -- put USER_QB_ID in the lineup where the
+  // incumbent was (or at an open spot matching his position).
+  function promotePlayerIntoLineup(incumbentId){
+    if(!career.teamLineups) return;
+    withIsolatedRandom(hashSeed("lineuppromo:" + (career.name||"") + ":" + career.year), ()=>{
+    const arr = career.teamLineups[career.teamId] || (career.teamLineups[career.teamId] = buildTeamLineupRoster(career.teamId, decadeForYear(career.year), career.year));
+    if(arr.includes(USER_QB_ID)) return;
+    let i = incumbentId ? arr.indexOf(incumbentId) : -1;
+    if(i<0){
+      const myPos = POSITIONS.some(p=>p.key===career.position) ? career.position : "1B";
+      i = arr.findIndex(id=> (career.qbsById[id]||{}).position===myPos);
+    }
+    if(i<0) i = 0;
+    const displaced = arr[i];
+    arr[i] = USER_QB_ID;
+    if(displaced && displaced!==USER_QB_ID && displaced!==incumbentId && career.qbsById[displaced]) enterFreeAgentPool(career.qbsById[displaced], "displaced");
+    });
   }
 
   // Balance Wave 4: capPressure (set at signing time by which CONTRACT_STRUCTURE was chosen) nudges
@@ -7187,6 +7467,8 @@ import {
     career.seasonLog.push(season);
     spawnNewFranchiseRivals(career.year);
     simulateRivalSeasons(decade, league, career.year);
+    // Phase 15: the other seven/eight bats in every lineup, plus the storage trim.
+    simulateLineupSeasons(decade, league, career.year);
     // Wave 2B: now that simulateRivalSeasons has actually simulated the incumbent for real (the
     // ONE simulation pass he gets this year -- see resolveBackupSeasonSnaps/the isBackupIncumbent
     // branch there), patch this season's recap snapshot with his REAL final numbers. Before this
@@ -10267,13 +10549,54 @@ import {
     for(const p of POSITIONS){ if((r-=p.w)<=0) return p.key; }
     return "1B";
   }
-  // A team's projected everyday lineup for a season -- DETERMINISTIC and display-only (the season
-  // sim stays team-grade level; the one tracked hitter still drives awards/rivalries). The tracked
-  // hitter (rivalForTeam, or the player on his own active roster) takes his real position; the other
-  // eight are fabricated around the team grade with glove-first spots leaning lower on the bat.
-  // Batting order roughly follows ovr (stars in the 2-3-4-5 heart of the order). Pre-1973: a
-  // no-bat pitcher hits 9th. Consumed by the team page and every box score.
+  // A team's everyday lineup for a season -- Phase 15: REAL registry entities (career.teamLineups),
+  // not a fabrication. Each of the eight/nine bats is a tracked character with a season line and an
+  // award case; the player takes his own slot on his active roster. Batting order runs best-bat-to-
+  // the-heart-of-the-order. Pre-DH: a fabricated no-bat pitcher hits ninth. A pre-Phase-15 save
+  // that hasn't built its lineups yet falls back to the old deterministic fabrication.
   function buildTeamLineup(teamId, year){
+    const teamGrade = Math.round(teamId===career.teamId ? career.teamStrength : (career.leagueStrength[teamId] ?? 60));
+    const conf = conferenceOf(teamId, year);
+    const useDH = year >= 2022 || (conf === "AFC" && year >= 1973);
+    ensureLeagueLineups();
+    const roster = career.teamLineups && career.teamLineups[teamId];
+    if(!roster || !roster.length) return buildTeamLineupFabricated(teamId, year, teamGrade, useDH);
+    const isMineActive = teamId===career.teamId && !career.isBackup;
+    const filled = roster.map(id=>{
+      if(id===USER_QB_ID){
+        return { pos: POSITIONS.some(p=>p.key===career.position)?career.position:"1B",
+          name: career.name + " (you)", ovr: Math.round(computeEffOverall(career.age, decadeForYear(year))),
+          isTracked:true, isUser:true, rivalId:null };
+      }
+      const e = career.qbsById && career.qbsById[id];
+      if(!e) return null;
+      return { pos: e.position || "1B", name: e.name, ovr: rivalEffTalent(e),
+        isTracked: !!e.isRival, isUser:false, rivalId: e.id };
+    }).filter(Boolean);
+    // guarantee 8/9 rows even if the roster is momentarily short (a just-departed hitter)
+    const wantPos = ["C","1B","2B","3B","SS","LF","CF","RF"].concat(useDH ? ["DH"] : []);
+    wantPos.forEach(pos=>{
+      if(!filled.some(f=>f.pos===pos)){
+        filled.push({ pos, name: "—", ovr: clamp(teamGrade + randInt(-8,8), 30, 92), isTracked:false, isUser:false, rivalId:null });
+      }
+    });
+    const ranked = filled.slice(0, useDH?9:8).sort((a,b)=> b.ovr - a.ovr);
+    const fillPriority = [4,3,5,2,1,6,7,8,9]; // best bat -> cleanup, then 3, 5, 2, leadoff...
+    const order = new Array(9).fill(null);
+    ranked.forEach((hitter,i)=>{ if(fillPriority[i]) order[fillPriority[i]-1] = { slot: fillPriority[i], ...hitter }; });
+    let pitcherBats = false;
+    if(!useDH){
+      pitcherBats = true;
+      const rand = createSeededRandom(hashSeed("pitcherbat:" + teamId + ":" + year));
+      order[8] = { slot:9, pos:"P",
+        name: `${FIRST_NAMES[Math.floor(rand()*FIRST_NAMES.length)]} ${LAST_NAMES[Math.floor(rand()*LAST_NAMES.length)]}`,
+        ovr:20, isTracked:false, isUser:false, rivalId:null, isPitcher:true };
+    }
+    void isMineActive;
+    return { order: order.filter(Boolean), pitcherBats, teamGrade };
+  }
+  // Legacy deterministic fabrication -- only for a save that predates career.teamLineups.
+  function buildTeamLineupFabricated(teamId, year, teamGrade, useDH){
     const rand = createSeededRandom(hashSeed("lineup:" + teamId + ":" + year));
     const usedNames = new Set();
     const fabName = ()=>{
@@ -10285,15 +10608,11 @@ import {
       usedNames.add(name);
       return name;
     };
-    const teamGrade = Math.round(teamId===career.teamId ? career.teamStrength : (career.leagueStrength[teamId] ?? 60));
     const isMineActive = teamId===career.teamId && !career.isBackup;
     const rv = isMineActive ? null : rivalForTeam(teamId);
     const trackedPos = isMineActive ? career.position : (rv ? rivalPosition(rv) : null);
     const trackedOvr = isMineActive ? Math.round(computeEffOverall(career.age, decadeForYear(year)))
       : (rv ? rivalEffTalent(rv) : null);
-    // DH: American League from 1973, National League from 2022 (AFC = AL, NFC = NL).
-    const conf = conferenceOf(teamId, year);
-    const useDH = year >= 2022 || (conf === "AFC" && year >= 1973);
     const posList = ["C","1B","2B","3B","SS","LF","CF","RF"].concat(useDH ? ["DH"] : []);
     const filled = posList.map(pos=>{
       if(trackedPos && pos===trackedPos && trackedOvr!=null){
@@ -10304,22 +10623,19 @@ import {
       const ovr = clamp(Math.round(teamGrade + (rand()*22 - 11) + (glove ? -4 : 0)), 30, 96);
       return { pos, name: fabName(), ovr, isTracked:false, isUser:false, rivalId:null };
     });
-    // Tracked hitter's position not among the 9 (e.g. a DH-position player in a pre-1973 season):
-    // slot him at first base instead.
     if(trackedPos && trackedOvr!=null && !filled.some(f=>f.isTracked)){
       const fb = filled.find(f=>f.pos==="1B") || filled[1];
       fb.name = isMineActive ? career.name + " (you)" : rv.name; fb.ovr = trackedOvr;
       fb.isTracked = true; fb.isUser = isMineActive; fb.rivalId = isMineActive ? null : (rv && rv.id);
     }
     const ranked = filled.slice().sort((a,b)=> b.ovr - a.ovr);
-    const fillPriority = [4,3,5,2,1,6,7,8,9]; // best bat -> cleanup, then 3, 5, 2, leadoff...
+    const fillPriority = [4,3,5,2,1,6,7,8,9];
     const order = new Array(9).fill(null);
     ranked.forEach((hitter,i)=>{ if(fillPriority[i]) order[fillPriority[i]-1] = { slot: fillPriority[i], ...hitter }; });
     let pitcherBats = false;
     if(!useDH){
       pitcherBats = true;
-      order[8] = { slot:9, pos:"P", name: fabName(), ovr:20,
-        isTracked:false, isUser:false, rivalId:null, isPitcher:true };
+      order[8] = { slot:9, pos:"P", name: fabName(), ovr:20, isTracked:false, isUser:false, rivalId:null, isPitcher:true };
     }
     return { order: order.filter(Boolean), pitcherBats, teamGrade };
   }
@@ -10686,40 +11002,22 @@ import {
       name: career.name, teamId: career.teamId, age: season.age, mine:true, games: season.games,
       att: season.att, pct: season.pct, yards: season.yards, td: season.td, int: season.int,
       rating: season.rating, rbi: season.rbi, hits: season.hits, sb: season.sb, awards: season.awards,
+      position: career.position,
     }];
-    (career.leagueRivals||[]).forEach(r=>{
+    // Phase 15: every registry entity with a real season line for this year -- the full ~250-deep
+    // field of tracked hitters, not just the one franchise face per team. The display boundary
+    // stays: a team whose t.start is after this season's year never appears (guards a corrupted
+    // save). Awards are still GRANTED only by the resolve* functions, which apply their own
+    // eligibility -- this list is the visibility layer they and the leaderboard both read.
+    Object.values(career.qbsById||{}).forEach(r=>{
+      if(!r || !r.seasons) return;
       const s = r.seasons.find(x=>x.year===year);
       if(!s) return;
-      // Belt-and-suspenders: generateLeagueRivals()/spawnNewFranchiseRivals prevent a rival from
-      // being CREATED for a team before it exists, and self-heal an already-corrupted save on its
-      // next season advance -- but neither of those retroactively rewrites a season entry a
-      // corrupted save already recorded before the fix existed. This is the actual display
-      // boundary: a team whose t.start is still after this exact season's year never appears on
-      // the leaderboard, full stop, regardless of what's sitting in saved data or whether a
-      // self-heal has run yet.
       const t = TEAMS.find(x=>x.id===r.teamId);
       if(t && t.start>year) return;
       rows.push({ name:r.name, teamId:r.teamId, age:s.age, mine:false, games:s.games, att:s.att, pct:s.pct,
-        yards:s.yards, td:s.td, int:s.int, rating:s.rating, rbi:s.rbi, hits:s.hits, sb:s.sb, awards:s.awards, isRival:r.isRival, id:r.id });
-    });
-    // A bench player who actually started games this season (games>0 -- simulatePlayerSeasonStats
-    // rolls a missed-games chance for everyone, so most seasons ARE 0-game no-ops here) is now
-    // visible on the leaderboard too, just like a real backup who got spot starts would show up in
-    // real stats. Their `awards` are computed but deliberately never GRANTED (resolveSeasonMVP/
-    // resolveSeasonAllProAndProBowl only ever read career.leagueRivals, untouched by this) -- this
-    // only adds visibility, it doesn't let a bench player actually win an award.
-    Object.keys(career.leagueDepthCharts||{}).forEach(teamId=>{
-      const t = TEAMS.find(x=>x.id===teamId);
-      if(t && t.start>year) return;
-      const chart = career.leagueDepthCharts[teamId];
-      ["qb2","qb3"].forEach(slot=>{
-        const p = chart[slot];
-        if(!p) return;
-        const s = p.seasons.find(x=>x.year===year);
-        if(!s || !(s.games>0)) return;
-        rows.push({ name:p.name, teamId:p.teamId, age:s.age, mine:false, games:s.games, att:s.att, pct:s.pct,
-          yards:s.yards, td:s.td, int:s.int, rating:s.rating, rbi:s.rbi, hits:s.hits, sb:s.sb, awards:s.awards, isBench:true, id:p.id });
-      });
+        yards:s.yards, td:s.td, int:s.int, rating:s.rating, rbi:s.rbi, hits:s.hits, sb:s.sb, awards:s.awards,
+        isRival:r.isRival, id:r.id, position:r.position });
     });
     rows.sort((a,b)=> b.rating-a.rating);
     return rows;
