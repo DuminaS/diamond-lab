@@ -338,3 +338,41 @@ New specs: `box-score-line-score-and-lineups` (extended for starting pitchers),
 `admin-calculator-calls-production-math` + 4 FA specs updated; `standings-and-history-preserve-wlt`
 and `rival-season-table-has-team-column` hardened against an earlier career washout.
 **67 regression tests / 58 balance green.**
+
+### Phase 14 — steroid era, more dark humor, playoff labels, advanced analytics
+1. **World Series / Championship Series labels** — the per-round card titles and box-score modal
+   already went through `roundDisplayLabel`; the *flat league-wide Playoff Tree* bracket bypassed
+   it. Fixed: the center column reads "WORLD SERIES", and `shortRoundLabel(label, conf)` takes the
+   conference so a championship-series column reads "AL / NL CHAMPIONSHIP SERIES". Also
+   "Banned from the NFL." → "Banned from Baseball." in `resolveInfraction`.
+2. **The steroid era** — a player-driven PED system (not a random infraction):
+   `renderPedOfferEvent` (a real choice — a physical/power `PED_BOOST` refreshed every season via
+   `applyOrRefreshPedBoost`), `pedOfferChanceForYear` (0 pre-1985, spikes to 0.22 through the
+   1988–2003 wild west, soft landing 2004–06, rare-but-severe after the 2007 Mitchell Report),
+   `pedTestRegimeForYear` ("none" <2004, "soft" 2004–06 = a positive is *quietly buried*, "strict"
+   2007+ = real escalating suspensions), a retrospective `renderPedReportEvent`, and a HOF penalty
+   — `computeHofScore` takes a `pedStrikes` arg that both docks the score hard and caps the tier.
+   All gating rolls come from a career-seeded stream (no RNG drift); the test helper auto-declines.
+   6 PED achievements. `pedSystemCheck` runs first in `lifeEventCheck`, every offseason.
+3. **~26 new dark-humor events** — 8 baseball scandal `RARE_EVENTS` (corked bat, fake game-used
+   memorabilia federal case, bar brawl, mascot fight, midnight talk-radio rant, supercar through
+   the players'-lot gate, autograph-show no-show suit, unreported card-show cash) and a new
+   `MISHAP_EVENTS` pool (18: three motorcycle/dirt-bike variants, the sneeze disc, the overhead-bin
+   shoulder, the walk-off-pile ankle, the cowboy-boot knee, the hot-tub concussion, the plastic-
+   guitar wrist, the Fourth-of-July fingertip, the chainsaw, the Christmas-lights ladder, the
+   charity-scramble golf cart, the cryo-chamber frostbite, the six-hour hotel elevator, the
+   wedding-salsa ACL, the pepper-grinder thumb, the cat bite). Mishaps route missed games through
+   the *injury* bucket (not "suspension"), a small local rep ding, an optional small career-ending
+   chance. 10 more dark-humor achievements. Admin event-pool viewer shows the new "Mishaps" pool.
+4. **Analytics dashboard tab** — a new "Analytics" tab (between Career Trends and Attributes):
+   `buildAnalyticsTabHTML` derives the deep box from the real per-season batting line the engine
+   already stores. Career cards (bWAR est., wOBA, wRC+, ISO, BABIP, BB%/K%, SB success%,
+   Power-Speed #), a per-season table (wOBA / wRC+ / ISO / BABIP / BB% / K% / BsR / bWAR), a defense
+   line (positions played + Gold Gloves), and a plain-language glossary. Standard linear weights;
+   wOBA/wRC+/bWAR labelled "est." (no park factors; bWAR = batting + baserunning + positional
+   adjustment + replacement, not a full fielding WAR). League baselines from `LEAGUE[decade]`.
+
+New specs: `ped-steroid-era-offer-test-and-consequences`, `analytics-tab-advanced-metrics`. The
+PED, mishap, and (from 13c) position-shift offseason gate rolls all come from career-seeded streams
+so they never shift the global RNG stream a seeded test depends on; the test helper auto-declines
+the PED offer. **70 regression tests / 58 balance green.**

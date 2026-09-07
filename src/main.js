@@ -1096,6 +1096,70 @@ import {
       blurb:"Lost to the same guy twice — once on the scoreboard, once at home.",
       hint:"Have your partner get caught up in a scandal with a bitter rival.",
       check: ()=> hadLifeEvent("two_time_loser") },
+    { key:"creamandclear", name:"The Cream and the Clear", icon:"snow",
+      blurb:"The bat had help, and for a while the help had numbers to show for it.",
+      hint:"Win an MVP, a Home Run title, or a Silver Slugger in a season you were using PEDs.",
+      check: ()=> !!career._pedSeasonsUsed && (career.seasonLog||[]).some(s=> s._pedSeason &&
+        ((s.awards||[]).includes("MVP") || (s.awards||[]).includes("Home Run Title") || (s.awards||[]).includes("Silver Slugger"))) },
+    { key:"gotawaywithit", name:"Got Away With It", icon:"lock",
+      blurb:"Used for years, never tested positive, and walked away before anyone was looking.",
+      hint:"Use PEDs for 3+ seasons, never get caught or named, and retire on your own terms.",
+      check: ()=> (career._pedSeasonsUsed||0)>=3 && !(career._pedCaught>0) && !career._pedNamedInReport && career.exitReason==="retired" },
+    { key:"cooperstowncloud", name:"Cooperstown, With an Asterisk", icon:"book",
+      blurb:"The numbers were a plaque. The strike on the record was the whole conversation.",
+      hint:"Retire with a 130+ career OPS+ and a PED strike (a positive test or a name in a report).",
+      check: ()=>{ const t=career.totals; const r=passerRating(t.comp,t.att,t.yards,t.td,t.int,t.bb);
+        return r>=130 && ((career._pedCaught||0)>0 || !!career._pedNamedInReport); } },
+    { key:"pedsecondact", name:"The Second Act", icon:"sunrise",
+      blurb:"Served the suspension, ate the headlines, and made himself an All-Star again anyway.",
+      hint:"Serve a PED suspension, then make an All-Star team in a later season.",
+      check: ()=>{
+        const suspYears = (career.lifeEventLog||[]).filter(e=>/PED suspension/i.test(e.title||"")).map(e=>e.year);
+        if(!suspYears.length) return false;
+        const suspYear = Math.min(...suspYears);
+        return (career.seasonLog||[]).some(s=> s.year>suspYear && (s.awards||[]).includes("All-Star")); } },
+
+    // ----- more dark-humor achievements: baseball scandals & spectacular offseason mishaps -----
+    { key:"corked", name:"Corked", icon:"bat",
+      blurb:"The bat came apart and the evidence rolled to the mound in front of 40,000 people.",
+      hint:"Get caught using a corked bat.",
+      check: ()=> hadLifeEvent("corked") },
+    { key:"gameused", name:"Certified Not Authentic", icon:"book",
+      blurb:"Sold a lot of \"game-used\" gear that never saw a game. The feds noticed.",
+      hint:"Catch a federal case for selling fake game-used memorabilia.",
+      check: ()=> hadLifeEvent("game_used") },
+    { key:"lastcall", name:"Last Call", icon:"flame",
+      blurb:"Cleared the benches. In a bar. Over a jukebox.",
+      hint:"Start a bar brawl on a road trip.",
+      check: ()=> hadLifeEvent("last_call") },
+    { key:"fowlplay", name:"Fowl Play", icon:"paw",
+      blurb:"The mascot learned a hard lesson about personal space, on camera, from nine angles.",
+      hint:"Get caught fighting the home mascot.",
+      check: ()=> hadLifeEvent("fowl_play") },
+    { key:"hottake", name:"Caller, You're On", icon:"bolt",
+      blurb:"Torched the manager, the GM, and a teammate live on the air, under a fake name that fooled nobody.",
+      hint:"Call in to sports radio to trash your own team.",
+      check: ()=> hadLifeEvent("hot_take") },
+    { key:"borntobemild", name:"Born to Be Mild", icon:"gauge",
+      blurb:"The standard player contract has a motorcycle clause for a reason. He is that reason.",
+      hint:"Get hurt in a motorcycle or dirt-bike accident.",
+      check: ()=> hadLifeEvent("born_to_be_mild") },
+    { key:"gesundheit", name:"Gesundheit", icon:"wing",
+      blurb:"Herniated a disc sneezing. It's the first line of his obituary and he knows it.",
+      hint:"Miss time after throwing your back out sneezing.",
+      check: ()=> hadLifeEvent("gesundheit") },
+    { key:"mobscene", name:"Mob Scene", icon:"star",
+      blurb:"Hit the walk-off. The pile hit back. Carted off his own highlight.",
+      hint:"Get injured in a walk-off celebration.",
+      check: ()=> hadLifeEvent("mob_scene") },
+    { key:"highscore", name:"High Score", icon:"gauge",
+      blurb:"Tendinitis. From the plastic guitar. The team banned the game.",
+      hint:"Get a wrist injury from a video game.",
+      check: ()=> hadLifeEvent("high_score") },
+    { key:"bubblewrap", name:"Bubble Wrap", icon:"shield",
+      blurb:"Motorcycles, hot tubs, ladders, cats — the trainer's room has a whole shelf for him.",
+      hint:"Rack up three or more spectacularly avoidable off-field mishaps in one career.",
+      check: ()=> (career.lifeEventLog||[]).filter(e=>e.severity==="mishap").length>=3 },
 
     // ----- team-specific declarative achievements (real MLB franchise lore) -----
     { key:"cubs108", name:"108 Years", icon:"sunrise",
@@ -6828,6 +6892,7 @@ import {
     const decade = decadeForYear(career.year);
     const league = LEAGUE[decade];
     maybeShiftPositionWithAge();
+    applyOrRefreshPedBoost();
     const developmentPlan = prepareDevelopmentPlanForSeason();
     // Must run before career.seasonLog.push(season) below makes THIS season the new "last" entry --
     // applyCoordinatorCarouselIfDue needs the PREVIOUS season's fully-resolved playoffs record.
@@ -7087,6 +7152,7 @@ import {
     const season = {
       year: career.year, age: career.age, teamId: career.teamId, teamName: teamNameAt(career.teamId, career.year),
       position: career.position, positionChangedFrom: career._positionChangedFrom || null,
+      _pedSeason: !!career._pedUsing,
       decade, games: gamesPlayed, comp: completionsFinal, att: attempts, pct: avg,
       yards: yardsFinal, td: tdFinal, int: intFinal, sacks, rating, wins, losses, ties,
       rushAtt, rushYards, rushTd, gameLog,
@@ -7376,10 +7442,381 @@ import {
     { id:"furniturebalcony", achievementId:"unraveling_on_camera", legendary:true, title:"Bizarre Public Meltdown Goes Viral",
       severity:"major", minYear:1990, suspensionGames:[4,10], repHit:[-20,-35], mitigable:true,
       flavor:()=>"Security footage of an unhinged, furniture-throwing meltdown at a hotel goes viral within hours. Teammates say he hasn't been himself for a while; the league says that's not their problem." },
+    // ----- baseball-specific scandal easter eggs (Phase 14) -----
+    { id:"corkedbat", achievementId:"corked", legendary:true, title:"His Bat Explodes and a Cylinder of Cork Rolls to the Mound",
+      severity:"moderate", suspensionGames:[6,10], repHit:[-14,-26], mitigable:false,
+      flavor:()=>"A routine broken-bat grounder ends with the barrel in three pieces and a neat plug of cork spinning in the infield dirt. He swears it was a batting-practice bat. Nobody buys it, and the league confiscates the rest of the rack." },
+    { id:"memorabiliafraud", achievementId:"game_used", legendary:true, title:"Federal Case: Selling \"Game-Used\" Gear That Wasn't",
+      severity:"career-multi", suspensionSeasons:[1,2], repHit:[-30,-45], mitigable:false,
+      flavor:()=>"Investigators find a garage operation stamping his signature onto bats and jerseys he never swung or wore, sold as authentic to collectors for years. It's mail fraud, it's a lot of counts, and it's no longer a baseball story." },
+    { id:"jukeboxbrawl", achievementId:"last_call", legendary:true, title:"Benches Clear — In a Bar, Over a Jukebox",
+      severity:"minor", suspensionGames:[1,3], repHit:[-6,-14], mitigable:true,
+      flavor:()=>"A road-trip dispute over what plays next escalates into a full bar brawl involving three teammates, a pool cue, and a broken jukebox. The bar presses charges. The manager is not amused at the 4 a.m. phone call." },
+    { id:"mascotfight", achievementId:"fowl_play", legendary:true, title:"Caught on Camera Body-Slamming the Home Mascot",
+      severity:"minor", suspensionGames:[1,2], repHit:[-5,-12], mitigable:true,
+      flavor:()=>"The mascot got a little too close during a slump. He responded by pulling the giant foam head off and putting the person inside it on the warning track. There is video from nine angles." },
+    { id:"talkradiorant", achievementId:"hot_take", legendary:true, title:"Calls Into Sports Radio at Midnight to Torch the Manager",
+      severity:"minor", suspensionGames:[0,2], repHit:[-6,-15], mitigable:true,
+      flavor:()=>"Under a fake name that fooled nobody, he spends eleven minutes on the air detailing the manager's lineup crimes, the GM's cheapness, and one teammate's conditioning. The clubhouse hears it on the drive in." },
+    { id:"gateram", achievementId:"valet_parking", legendary:true, title:"Drives a Rented Supercar Through the Player-Lot Gate",
+      severity:"minor", suspensionGames:[0,1], repHit:[-4,-10], mitigable:true,
+      flavor:()=>"He was late, the arm was down, and he decided the arm was optional. The car is totaled, the gate is in the outfield, and the rental company's lawyer has entered the chat." },
+    { id:"autographnoshow", achievementId:"the_no_show", legendary:true, title:"Sued for Taking the Appearance Fee and Never Showing Up",
+      severity:"minor", suspensionGames:[0,0], repHit:[-5,-12], mitigable:true,
+      flavor:()=>"A card-show promoter wired a five-figure appearance fee. He cashed it, slept in, and a room full of kids with unsigned baseballs went home. The lawsuit is public, itemized, and very quotable." },
+    { id:"cardshowcash", achievementId:"under_the_table", legendary:true, title:"Indicted for Years of Unreported Card-Show Cash",
+      severity:"career-multi", minYear:1988, suspensionSeasons:[1,1], repHit:[-22,-38], mitigable:true,
+      flavor:()=>"A decade of signing tables paid in envelopes, none of it on a return. The government has the promoters' books, the promoters have immunity, and he has a court date that conflicts with spring training." },
   ];
   function rareEventsFor(){
     const year = career.year;
     return RARE_EVENTS.filter(e=> (!e.minYear || year>=e.minYear) && (!e.maxYear || year<=e.maxYear));
+  }
+
+  // ----- Mishaps: the "he did WHAT in the offseason" injury easter eggs (Phase 14) -----
+  // Not scandals -- nobody gets suspended, the league isn't involved -- just a spectacularly
+  // avoidable way to lose playing time. Own tiny pipeline (renderMishapEvent/resolveMishap): missed
+  // games route through the INJURY bucket, the reputation ding is small and local (a front office
+  // that's annoyed, not a country that's disgusted), and it's mostly a story the beat writers love.
+  // `gamesMissed`/`repHit` are [lo,hi]; `careerRisk` on the worst ones is a small chance the injury
+  // just ends it. Every one is a fictionalized nod to a real, genuinely-happened baseball injury.
+  const MISHAP_EVENTS = [
+    { id:"motorcycle", achievementId:"born_to_be_mild", title:"Wrecks a Motorcycle He Swore to the Team He Didn't Own",
+      gamesMissed:[20,55], repHit:[-6,-14], careerRisk:0.06,
+      flavor:()=>"He laid the bike down on a wet on-ramp doing something the standard player contract explicitly forbids. Road rash, a cracked wrist, and a very uncomfortable meeting with the GM about the motorcycle nobody was supposed to know about." },
+    { id:"motorcycle2", achievementId:"born_to_be_mild", title:"Dirt-Bike Jump Goes Wrong at the Offseason Ranch",
+      gamesMissed:[15,45], repHit:[-5,-12], careerRisk:0.04,
+      flavor:()=>"There's video, because of course there's video. He clears the first two mounds clean and augers into the third. The doctors call it a 'high-energy mechanism.' The team calls it 'why do we even write these clauses.'" },
+    { id:"motorcycle3", achievementId:"born_to_be_mild", title:"Rear-Ended a Car on His Motorcycle Leaving the Ballpark",
+      gamesMissed:[10,30], repHit:[-4,-10],
+      flavor:()=>"Two blocks from the players' lot, in full view of a dozen fans still tailgating. He walked away, mostly, but the knee that hit the bumper isn't walking anywhere for six weeks." },
+    { id:"sneeze", achievementId:"gesundheit", title:"Throws His Back Out Sneezing",
+      gamesMissed:[8,20], repHit:[-2,-6],
+      flavor:()=>"A violent sneeze in the trainer's room, a pop everyone in the building heard, and a herniated disc. He is now the answer to a trivia question he will be asked at every autograph table for the rest of his life." },
+    { id:"suitcase", achievementId:"heavy_lifting", title:"Hurts His Shoulder Lifting a Suitcase Into the Overhead Bin",
+      gamesMissed:[10,28], repHit:[-2,-7],
+      flavor:()=>"Team charter, row 4, aisle seat. He reached up with the arm, the bag was heavier than it looked, and the labrum was not consulted. He missed two months over a carry-on he could have checked." },
+    { id:"walkoffleg", achievementId:"mob_scene", title:"Breaks His Ankle in the Walk-Off Celebration at Home Plate",
+      gamesMissed:[35,80], repHit:[-1,-4], careerRisk:0.05,
+      flavor:()=>"He hit the ball out. The team hit HIM at home plate. Somewhere in the pile his leg went one way and the rest of him went another, and the highlight cuts away right before the part where he's carted off his own walk-off." },
+    { id:"cowboyboots", achievementId:"these_boots", title:"Tears a Ligament Putting On a Cowboy Boot",
+      gamesMissed:[12,30], repHit:[-2,-6],
+      flavor:()=>"Getting dressed. That's the whole story. He pulled, the boot didn't give, his knee did, and the phrase 'non-contact footwear injury' is now in his permanent medical file." },
+    { id:"hottub", achievementId:"parboiled", title:"Slips Getting Out of the Hot Tub, Concusses Himself on the Deck",
+      gamesMissed:[7,21], repHit:[-2,-5],
+      flavor:()=>"A wet foot, a hard edge, and a solid ten seconds nobody can account for. He's in the concussion protocol over a spa his agent specifically told him to stop using unsupervised." },
+    { id:"videogamewrist", achievementId:"high_score", minYear:1998, title:"Wrist Inflammation From a Plastic-Guitar Video Game",
+      gamesMissed:[8,22], repHit:[-3,-8],
+      flavor:()=>"Marathon sessions on the toy guitar in the clubhouse, hammering the same solo for weeks. The team's hitting coach begged him to stop. Now it's tendinitis, and the game is banned from the facility." },
+    { id:"fireworks", achievementId:"independence_day", title:"Loses the Tip of a Finger to a Fourth of July Firework",
+      gamesMissed:[10,26], repHit:[-4,-10], careerRisk:0.03,
+      flavor:()=>"A mortar tube tipped over at the wrong second. It's a fingertip, not the whole finger, and the team's official statement uses the word 'minor' four times, but he's gripping the bat different for a while." },
+    { id:"chainsaw", achievementId:"timber", title:"Chainsaw Kickback While Clearing Trees at the Lake House",
+      gamesMissed:[18,45], repHit:[-3,-9], careerRisk:0.05,
+      flavor:()=>"He was being careful. He'd watched the videos. The bar caught a knot, the saw came back, and the forearm needed more stitches than anyone wants to hear about. The lake house has a landscaper now, by team mandate." },
+    { id:"ladder", achievementId:"griswold", title:"Falls Off a Ladder Hanging Christmas Lights",
+      gamesMissed:[14,38], repHit:[-2,-6], careerRisk:0.04,
+      flavor:()=>"December, second story, one hand on the gutter and one on a staple gun. The landing broke his fall and also his heel. He spent the holidays in a boot and the winter meetings as a punchline." },
+    { id:"golfcart", achievementId:"back_nine", title:"Flips a Golf Cart at the Team Charity Scramble",
+      gamesMissed:[6,18], repHit:[-3,-8],
+      flavor:()=>"Hole 14, a downhill cart path, and a decision to take it 'a little fast.' Two players and a sponsor's rep went out of the cart. He's the only one who got hurt, which is somehow worse." },
+    { id:"cryo", achievementId:"cold_open", minYear:2013, title:"Frostbite in the Cryotherapy Chamber",
+      gamesMissed:[8,20], repHit:[-3,-7],
+      flavor:()=>"He stayed in past the timer, in wet socks, because it 'felt good.' The tissue damage did not feel good. The chamber has a new lock, a new attendant, and a laminated sign with his (redacted) name on it." },
+    { id:"elevator", achievementId:"between_floors", title:"Stuck in a Hotel Elevator for Six Hours, Misses the Game",
+      gamesMissed:[0,1], repHit:[-2,-5],
+      flavor:()=>"Not injured — just gone. The elevator between the lobby and the mezzanine held him and a room-service cart hostage through first pitch. The lineup card had already been turned in without him." },
+    { id:"salsa", achievementId:"dance_dance", title:"Blows Out a Knee Salsa Dancing at a Wedding",
+      gamesMissed:[20,50], repHit:[-2,-6], careerRisk:0.05,
+      flavor:()=>"A dip, a spin, a plant foot that stayed planted while everything above it rotated. It was his cousin's wedding, he was showing off, and the ACL had seen enough." },
+    { id:"peppergrinder", achievementId:"seasoned_veteran", title:"Dislocates a Thumb on an Industrial Pepper Grinder",
+      gamesMissed:[6,15], repHit:[-2,-5],
+      flavor:()=>"Tableside service, a stubborn grinder, and a torque his thumb was not built for. He finished dinner. He did not finish the road trip." },
+    { id:"catnap", achievementId:"cat_scratch", title:"Infected Hand After His Cat Bites Him",
+      gamesMissed:[7,16], repHit:[-2,-5],
+      flavor:()=>"A minor bite, ignored for two days, that turned into a hand so swollen he couldn't make a fist. Cat bites carry a nasty bacteria, it turns out, and he learned that from an IV pole in a hospital bed." },
+  ];
+  function mishapEventsFor(){
+    const year = career.year;
+    return MISHAP_EVENTS.filter(e=> (!e.minYear || year>=e.minYear) && (!e.maxYear || year<=e.maxYear));
+  }
+  function renderMishapEvent(ev){
+    const content = document.getElementById("careerContent");
+    const decade = decadeForYear(career.year);
+    const gLo = ev.gamesMissed[0], gHi = ev.gamesMissed[1];
+    content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · Off the Field</div>
+        <h3>${ev.title}</h3>
+        <p>${ev.flavor()}</p>
+        <div class="rep-note">At stake: ${gHi>0?`up to ${gHi} game${gHi===1?"":"s"} missed`:"a missed game"} · reputation ${fmtDelta(ev.repHit[0])} to ${fmtDelta(ev.repHit[1])}${ev.careerRisk?" · a small chance it just ends it":""}.</div>
+        <div class="event-choices"><button class="choice-btn" id="mishapAck"><div class="cb-title">Face the music</div><div class="cb-sub">There's no fighting this one. It's just embarrassing.</div></button></div>
+      `, { tone:"bad" });
+    document.getElementById("mishapAck").addEventListener("click", ()=> resolveMishap(ev));
+  }
+  function resolveMishap(ev){
+    const content = document.getElementById("careerContent");
+    const games = randInt(ev.gamesMissed[0], ev.gamesMissed[1]);
+    const repHit = randInt(ev.repHit[0], ev.repHit[1]);
+    career.reputation = clamp(career.reputation + repHit, 0, 100);
+    career.fanSupport = clamp((career.fanSupport ?? 50) + Math.round(repHit*0.35), 0, 100);
+    career.leaguePopularity = clamp((career.leaguePopularity ?? 50) + Math.round(repHit*0.5), 0, 100);
+    career.lifeEventLog.push({ year:career.year, title:ev.title, severity:"mishap", achievementId: ev.achievementId||null });
+    recordLedgerEvent("mishap_event", { outcomeId: ev.achievementId||null, metadata:{ games } });
+    if(ev.careerRisk && Math.random() < ev.careerRisk){
+      career._careerEndingInjuryName = ev.title;
+      career.exitReason = "injury";
+      career.transactions.push(`${career.year}: ${ev.title} — career-ending.`);
+      content.innerHTML = eraWrap(decadeForYear(career.year), `
+        <div class="ev-eyebrow">${career.year} · Off the Field</div>
+        <h3>It Doesn't Heal Right.</h3>
+        <p>The doctors are honest with him: the joint isn't coming back, not to a big-league standard. A career, ended by ${ev.title.toLowerCase()}.</p>
+        <div class="event-choices"><button class="choice-btn" id="mishapEndAck"><div class="cb-title">See how it's remembered</div></button></div>
+      `, { tone:"bad" });
+      document.getElementById("mishapEndAck").addEventListener("click", finishCareer);
+      return;
+    }
+    career._injuryMissedGames = (career._injuryMissedGames||0) + games;
+    if(games >= 35) career._injuryPenalty = (career._injuryPenalty||0) + 5;
+    career.transactions.push(`${career.year}: ${ev.title} (${games} game${games===1?"":"s"} missed).`);
+    content.innerHTML = eraWrap(decadeForYear(career.year), `
+        <div class="ev-eyebrow">${career.year} · Off the Field</div>
+        <h3>${ev.title}${games>0?` — ${games} game${games===1?"":"s"} missed`:""}</h3>
+        <p>It heals. The story doesn't — this one follows him to every podcast booth he ever sits in.</p>
+        <div class="rep-note">Effect: Reputation ${fmtDelta(repHit)}${games>0?` · ${games} game${games===1?"":"s"} missed`:""}.</div>
+        <div class="event-choices"><button class="choice-btn" id="mishapDoneAck"><div class="cb-title">Continue</div></button></div>
+      `, { tone:"bad" });
+    document.getElementById("mishapDoneAck").addEventListener("click", secondaryLifeEventCheck);
+  }
+
+  /* ================= The Steroid Era: PEDs, testing, and getting caught =================
+     A deliberate, player-driven choice (not a random infraction): a hitter can be offered a chance
+     to start using a banned performance-enhancer for a real bump to the physical/power tools, at
+     the risk of a positive test. Every part of it is era-accurate:
+       - THE OFFER's odds track real history: nothing before the mid-80s, a spike through the
+         1988-2003 "wild west," a soft landing once real testing arrives in 2004, and a rare-but-
+         severe trickle after the 2007 Mitchell Report.
+       - THE TEST runs every offseason regardless of whether the player ever touched anything
+         (pedSystemCheck is called first in lifeEventCheck) -- but a clean test is a non-event and
+         resolves silently; it only surfaces when it catches a user.
+       - THE CONSEQUENCE is the whole point: before 2007 MLB looks the other way (a scare, a
+         headline, no suspension -- the player can keep going), and only from 2007 on does a
+         positive test cost real games, escalating hard for a repeat offender.
+       - THE RECKONING: a player who used in the pre-testing era but quit can still get named in a
+         retrospective report years later (2007+), a reputation hit with no suspension.
+     career._pedUsing / _pedSeasonsUsed / _pedCaught / _pedBlindEye / _pedNamedInReport track it;
+     hofVerdict() reads the strike count so Cooperstown voters hold it against him, same as real life. */
+  const PED_BOOST = [
+    { key:"DAC", delta:11 }, // Raw Power
+    { key:"REL", delta:7 },  // Bat Speed
+    { key:"ARM", delta:4 },  // Arm Strength
+    { key:"DUR", delta:5 },  // Durability -- recover faster, play through more
+    { key:"MOB", delta:2 },  // Speed -- a small early-cycle bump
+  ];
+  function pedOfferChanceForYear(year){
+    let base;
+    if(year < 1985) base = 0;
+    else if(year <= 1989) base = 0.025;
+    else if(year <= 1993) base = 0.07;
+    else if(year <= 2003) base = 0.15;   // the McGwire/Sosa/Bonds wild west -- clearly elevated
+    else if(year <= 2006) base = 0.06;   // testing exists, enforcement is soft
+    else if(year <= 2013) base = 0.028;  // post-Mitchell-Report crackdown
+    else base = 0.016;                   // Biogenesis era and after -- rare, severe
+    if(!base) return 0;
+    const last = career.seasonLog[career.seasonLog.length-1];
+    const opsPlus = last && last.opsPlus!=null ? last.opsPlus : 100;
+    // A struggling or aging hitter with a roster spot to protect is the classic case.
+    let mult = 1;
+    if(opsPlus < 95) mult *= 1.6;
+    if(career.age >= 32) mult *= 1.35;
+    if(career.contract && (career.contract.tier==="minimum" || career.contract.tier==="backup")) mult *= 1.4;
+    // A player who's already turned it down clearly isn't looking -- each refusal makes the next
+    // approach much less likely (and it's a quick two-button screen either way).
+    mult *= Math.pow(0.4, career._pedDeclines || 0);
+    return clamp(base * mult, 0, 0.42);
+  }
+  // "none" = no testing at all; "soft" = tested, but a positive is quietly buried; "strict" = a
+  // positive costs real games and escalates for a repeat offender.
+  function pedTestRegimeForYear(year){
+    if(year < 2004) return "none";
+    if(year <= 2006) return "soft";
+    return "strict";
+  }
+  // Re-applied every season (from generateSeason) so the boost persists exactly while _pedUsing is
+  // true and decays out the season after use stops -- the pedBoost tag keeps it separate from every
+  // other tempBoost source.
+  // Called exactly once per season from generateSeason. Refreshes the boost while using (lets it
+  // decay a season after use stops) and tallies each season actually spent on the program.
+  function applyOrRefreshPedBoost(){
+    career.tempBoosts = (career.tempBoosts || []).filter(b => !b.pedBoost);
+    if(career._pedUsing){
+      PED_BOOST.forEach(b => career.tempBoosts.push({ key:b.key, delta:b.delta, seasonsLeft:1, pedBoost:true }));
+      career._pedSeasonsUsed = (career._pedSeasonsUsed||0) + 1;
+    }
+  }
+  // Called FIRST in lifeEventCheck, every offseason. Returns true if it rendered an interstitial
+  // (and therefore owns the rest of the chain), false to fall through to the normal life-event roll.
+  // The GATING rolls come from a career-seeded stream, not the global Math.random, so adding this
+  // system doesn't shift every downstream seeded test's RNG sequence.
+  function pedSystemCheck(){
+    const year = career.year;
+    const rand = createSeededRandom(hashSeed("ped:" + (career.name||"") + ":" + career.draftYear + ":" + year));
+    // 1. The test -- runs regardless of whether the player has ever used. Silent unless it catches.
+    const regime = pedTestRegimeForYear(year);
+    if(career._pedUsing && regime !== "none"){
+      const tested = rand() < (regime === "strict" ? 0.6 : 0.42);
+      // Cycling off before a test / a masking agent -- a real evasion, so not every positive lands.
+      if(tested && rand() < 0.62){
+        renderPedCaughtEvent(regime);
+        return true;
+      }
+    }
+    // 2. The retrospective reckoning -- a past user, long since clean, named in a leaked report.
+    if(!career._pedUsing && (career._pedSeasonsUsed||0) > 0 && year >= 2007 && !career._pedNamedInReport && rand() < 0.05){
+      renderPedReportEvent();
+      return true;
+    }
+    // 3. The offer -- only if he isn't already using.
+    if(!career._pedUsing && rand() < pedOfferChanceForYear(year)){
+      renderPedOfferEvent();
+      return true;
+    }
+    return false;
+  }
+  function renderPedOfferEvent(){
+    const content = document.getElementById("careerContent");
+    const decade = decadeForYear(career.year);
+    const regime = pedTestRegimeForYear(career.year);
+    const source = pick([
+      "A strength coach with a briefcase and a reputation quietly pulls him aside.",
+      "A veteran teammate — bigger than he was two years ago — offers to make an introduction.",
+      "A trainer he met in the offseason has \"a program\" and a number to call.",
+      "His personal hitting guru mentions, carefully, that the guys putting up the huge numbers aren't doing it on protein shakes.",
+    ]);
+    const riskLine = regime === "none"
+      ? "There is no testing. Nobody is looking. The only risk is the one he carries himself."
+      : regime === "soft"
+        ? "There's testing now, technically — but a positive tends to disappear before it reaches the public. The league isn't ready to know."
+        : "Testing is real and the penalties are real. A positive costs games, money, and — if it ever happens twice — most of a career.";
+    content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · The Offer</div>
+        <h3>An Offer He Probably Shouldn't Take</h3>
+        <p>${source} The pitch is simple: more power, more bat speed, a body that bounces back between games. The numbers would follow.</p>
+        <div class="rep-note">${riskLine}</div>
+        <div class="event-choices">
+          <button class="choice-btn" id="pedYes"><div class="cb-title">Start the program</div><div class="cb-sub">Raw Power, Bat Speed, Arm, Durability all jump — for as long as he stays on it.</div></button>
+          <button class="choice-btn" id="pedNo"><div class="cb-title">Turn it down</div><div class="cb-sub">Do it clean, whatever that ends up meaning for the numbers.</div></button>
+        </div>
+      `, { tone:"bad" });
+    document.getElementById("pedYes").addEventListener("click", ()=>{
+      career._pedUsing = true;
+      // _pedSeasonsUsed and the tool boost are both applied once per season by
+      // applyOrRefreshPedBoost() at the top of generateSeason() -- nothing to do here but flip the flag.
+      career._pedStartYear = career._pedStartYear || career.year;
+      recordLedgerEvent("ped_started", { metadata:{ year:career.year, regime } });
+      career.lifeEventLog.push({ year:career.year, title:"Started using PEDs", severity:"secret", hidden:true });
+      saveActiveCareer({ phase:"decision", eventId:"ped_started" });
+      content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · The Offer</div>
+        <h3>He makes the call.</h3>
+        <p>Nobody announces this. He just shows up to camp a little bigger, and the ball starts carrying.</p>
+        <div class="event-choices"><button class="choice-btn" id="pedGoAck"><div class="cb-title">Continue</div></button></div>
+      `);
+      document.getElementById("pedGoAck").addEventListener("click", secondaryLifeEventCheck);
+    });
+    document.getElementById("pedNo").addEventListener("click", ()=>{
+      career._pedDeclines = (career._pedDeclines||0) + 1;
+      recordLedgerEvent("ped_declined", { metadata:{ year:career.year } });
+      content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · The Offer</div>
+        <h3>He passes.</h3>
+        <p>"I'll take my chances," he tells them, and that's the end of the conversation.</p>
+        <div class="event-choices"><button class="choice-btn" id="pedNoAck"><div class="cb-title">Continue</div></button></div>
+      `);
+      document.getElementById("pedNoAck").addEventListener("click", secondaryLifeEventCheck);
+    });
+  }
+  function renderPedCaughtEvent(regime){
+    const content = document.getElementById("careerContent");
+    const decade = decadeForYear(career.year);
+    const priorStrikes = career._pedCaught || 0;
+    if(regime === "soft"){
+      career._pedBlindEye = (career._pedBlindEye||0) + 1;
+      const repHit = -randInt(2, 6);
+      career.reputation = clamp(career.reputation + repHit, 0, 100);
+      career.leaguePopularity = clamp((career.leaguePopularity ?? 50) + Math.round(repHit*0.5), 0, 100);
+      recordLedgerEvent("ped_caught", { severity:"soft", metadata:{ year:career.year } });
+      career.lifeEventLog.push({ year:career.year, title:"Failed test buried by the league", severity:"minor" });
+      career.transactions.push(`${career.year}: A positive PED test — quietly handled, no suspension.`);
+      content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · The Test</div>
+        <h3>The Test Comes Back Dirty. Nothing Happens.</h3>
+        <p>A sample flags. A few people in the building know. A reporter half-knows. And then — nothing. The league isn't ready to blow this up yet, and neither is anyone else. He keeps playing, and he keeps using.</p>
+        <div class="rep-note">Effect: Reputation ${fmtDelta(repHit)} · no suspension · still on the program.</div>
+        <div class="event-choices"><button class="choice-btn" id="pedSoftAck"><div class="cb-title">Continue</div></button></div>
+      `, { tone:"bad" });
+      document.getElementById("pedSoftAck").addEventListener("click", secondaryLifeEventCheck);
+      return;
+    }
+    // strict: real suspension, escalating hard for a repeat offender
+    career._pedUsing = false;
+    career._pedCaught = priorStrikes + 1;
+    applyOrRefreshPedBoost();
+    let games, repHit, careerEnding = false;
+    if(priorStrikes === 0){ games = randInt(15, 30); repHit = -randInt(14, 24); }
+    else if(priorStrikes === 1){ games = randInt(60, 100); repHit = -randInt(24, 38); }
+    else { games = 162; repHit = -randInt(40, 55); careerEnding = Math.random() < 0.5; }
+    career.reputation = clamp(career.reputation + repHit, 0, 100);
+    career.fanSupport = clamp((career.fanSupport ?? 50) + Math.round(repHit*0.5), 0, 100);
+    career.leaguePopularity = clamp((career.leaguePopularity ?? 50) + Math.round(repHit*0.8), 0, 100);
+    career._suspensionMissedGames = (career._suspensionMissedGames||0) + Math.min(games, 150);
+    if(games >= 40) career._injuryPenalty = (career._injuryPenalty||0) + 8;
+    recordLedgerEvent("ped_caught", { severity:"strict", outcomeId: priorStrikes>=2 ? "third_strike" : null, metadata:{ year:career.year, games } });
+    career.lifeEventLog.push({ year:career.year, title:`PED suspension (${games >= 162 ? "full season" : games + " games"})`, severity: priorStrikes>=1 ? "major" : "moderate" });
+    career.transactions.push(`${career.year}: Suspended ${games >= 162 ? "the full season" : games + " games"} for a positive PED test.`);
+    const strikeText = priorStrikes === 0 ? "First positive test." : priorStrikes === 1 ? "Second positive test — the hammer comes down." : "Third strike.";
+    if(careerEnding){
+      career.banned = true;
+      career.exitReason = "banned";
+      career._bannedEventTitle = "Lifetime PED Ban";
+      career._bannedEventNote = "Three strikes. The commissioner's office issues a permanent ban, and this time there is no appeal that matters.";
+      content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · League Discipline</div>
+        <h3>Banned for Life.</h3>
+        <p>${career._bannedEventNote}</p>
+        <div class="rep-note">Effect: Reputation ${fmtDelta(repHit)} · career over.</div>
+        <div class="event-choices"><button class="choice-btn" id="pedBanAck"><div class="cb-title">See the final verdict</div></button></div>
+      `, { tone:"bad" });
+      document.getElementById("pedBanAck").addEventListener("click", finishCareer);
+      return;
+    }
+    content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · League Discipline</div>
+        <h3>Suspended ${games >= 162 ? "the Full Season" : games + " Games"} for PEDs</h3>
+        <p>${strikeText} The result leaks before the league can announce it, the statement is short, and the asterisk is permanent. He's off the program now — not that anyone will believe it.</p>
+        <div class="rep-note">Effect: Reputation ${fmtDelta(repHit)} · ${games >= 162 ? "full-season" : games + "-game"} suspension${games>=40?" · lingering performance hit":""}.</div>
+        <div class="event-choices"><button class="choice-btn" id="pedStrictAck"><div class="cb-title">Continue</div></button></div>
+      `, { tone:"bad" });
+    document.getElementById("pedStrictAck").addEventListener("click", secondaryLifeEventCheck);
+  }
+  function renderPedReportEvent(){
+    const content = document.getElementById("careerContent");
+    const decade = decadeForYear(career.year);
+    career._pedNamedInReport = true;
+    const repHit = -randInt(16, 30);
+    career.reputation = clamp(career.reputation + repHit, 0, 100);
+    career.fanSupport = clamp((career.fanSupport ?? 50) + Math.round(repHit*0.5), 0, 100);
+    career.leaguePopularity = clamp((career.leaguePopularity ?? 50) + Math.round(repHit*0.85), 0, 100);
+    recordLedgerEvent("ped_named_in_report", { metadata:{ year:career.year } });
+    career.lifeEventLog.push({ year:career.year, title:"Named in a retrospective PED report", severity:"major" });
+    career.transactions.push(`${career.year}: Named in a leaked report as a PED user during the pre-testing era.`);
+    content.innerHTML = eraWrap(decade, `
+        <div class="ev-eyebrow">${career.year} · The Reckoning</div>
+        <h3>His Name Is on the List</h3>
+        <p>Years after the fact, an investigation he thought he'd outrun puts his name in print alongside a positive sample from a season nobody was testing. There's no suspension to serve — it was legal-ish then, in the way that nothing really was — but the number on the back of his card just changed meaning forever.</p>
+        <div class="rep-note">Effect: Reputation ${fmtDelta(repHit)} · no suspension · the Hall of Fame case takes the hit.</div>
+        <div class="event-choices"><button class="choice-btn" id="pedReportAck"><div class="cb-title">Continue</div></button></div>
+      `, { tone:"bad" });
+    document.getElementById("pedReportAck").addEventListener("click", secondaryLifeEventCheck);
   }
 
   const POSITIVE_EVENTS = [
@@ -7962,6 +8399,10 @@ import {
 
   function lifeEventCheck(){
     if(career.seasonNumber<2){ waiverCheck(); return; }
+    // The steroid-era system runs first, every offseason: a background drug test (silent unless it
+    // catches a user), a retrospective report, and the offer itself. It only owns the chain if it
+    // actually renders something.
+    if(pedSystemCheck()) return;
     const decade = decadeForYear(career.year);
     // Relationship arc and general lifepath flavor get first priority, ahead of the rest of the
     // chain below -- they're pure narrative/reputation beats, never competing with an actual
@@ -7975,6 +8416,12 @@ import {
     // one and a handful of very long careers might see exactly one.
     const rarePool = rareEventsFor();
     if(rarePool.length && Math.random() < 0.006){ renderInfractionEvent(pick(rarePool)); return; }
+    // Mishaps -- the spectacularly-avoidable offseason injury -- roll a bit more often than the
+    // scandal easter eggs (they're embarrassing, not career-defining) but still rare: ~1-in-80.
+    // The gate comes from a career-seeded stream so adding it doesn't shift every seeded test's RNG.
+    const mishapPool = mishapEventsFor();
+    const mishapRand = createSeededRandom(hashSeed("mishap:" + (career.name||"") + ":" + career.draftYear + ":" + career.year));
+    if(mishapPool.length && mishapRand() < 0.0125){ renderMishapEvent(pick(mishapPool)); return; }
     const dec = eraEffective(career.age, decade).DEC;
     const infractionChance = clamp(0.02 + Math.max(0,(62-dec))*0.0026, 0.01, 0.13);
     const infractionPool = infractionEventsFor();
@@ -8071,7 +8518,7 @@ import {
       career._bannedEventNote = ev.finalFlavor || null;
       content.innerHTML = eraWrap(decadeForYear(career.year), `
         <div class="ev-eyebrow">${career.year} · League Discipline</div>
-        <h3>Banned from the NFL.</h3>
+        <h3>Banned from Baseball.</h3>
         <p>${ev.finalFlavor}</p>
         <div class="rep-note">Effect: Reputation ${fmtDelta(repHit)} · career over.</div>
         <div class="event-choices"><button class="choice-btn" id="banAck"><div class="cb-title">See the final verdict</div></button></div>
@@ -9653,9 +10100,10 @@ import {
   // lets the "other" conference converge toward a center Super Bowl from the opposite direction of
   // Short, fixed-width column headers -- "Conference Championship" at full length is wide enough to
   // overflow a single grid column. roundDisplayLabel (used elsewhere -- box score modal titles,
-  // etc.) is untouched; this is purely a bracket-header shortening.
-  function shortRoundLabel(label){
-    if(label==="Conference Championship") return "CONF. CHAMPIONSHIP";
+  // etc.) is untouched; this is purely a bracket-header shortening. `conf` ("AFC"/"NFC" = AL/NL)
+  // names the actual league championship series (ALCS/NLCS), not a generic "Conference Championship".
+  function shortRoundLabel(label, conf){
+    if(label==="Conference Championship") return `${confShort(conf)} CHAMPIONSHIP SERIES`;
     return String(label).toUpperCase();
   }
   // Round 29 rewrite: replaces the SVG-based renderer (renderPlayoffTreeSVG -> renderFullPlayoffTreeSVG)
@@ -9737,7 +10185,7 @@ import {
       ? matchups.map((m,matchIdx)=>bracketCardHtml(m, cardState, conf, roundIdx, matchIdx, myTeamId)).join("")
       : Array.from({length: expectedCount}, (_,matchIdx)=>bracketCardHtml(null, "pending-unknown", conf, roundIdx, matchIdx, myTeamId)).join("");
     const label = display.labels[roundIdx];
-    return `<div class="bracket-col"><div class="bracket-col-label">${label?svgEscape(shortRoundLabel(label)):""}</div><div class="bracket-col-cards">${cardsHtml}</div></div>`;
+    return `<div class="bracket-col"><div class="bracket-col-label">${label?svgEscape(shortRoundLabel(label, conf)):""}</div><div class="bracket-col-cards">${cardsHtml}</div></div>`;
   }
   function bracketSuperBowlColumnHtml(afcDisplay, nfcDisplay, pb, myTeamId){
     const afcChampId = afcDisplay.championKnown ? afcDisplay.championId : null;
@@ -9756,7 +10204,7 @@ import {
       match = null; state = "pending-unknown";
     }
     const cardHtml = bracketCardHtml(match, state, "SB", 0, 0, myTeamId);
-    return `<div class="bracket-col bracket-col-sb"><div class="bracket-col-label">🏆 SUPER BOWL</div><div class="bracket-col-cards">${cardHtml}</div></div>`;
+    return `<div class="bracket-col bracket-col-sb"><div class="bracket-col-label">🏆 WORLD SERIES</div><div class="bracket-col-cards">${cardHtml}</div></div>`;
   }
   // The whole bracket: AFC's own columns (Wild Card at the far left, running toward the center),
   // one Super Bowl column dead center, then NFC's columns MIRRORED (its Conference Championship
@@ -10435,9 +10883,10 @@ import {
       entries.push({ id:r.id, name:r.name, teamId:r.teamId, isMine:false, totals:r.totals, seasons:r.seasons, retired:!!r.retired, age:r.age, exitReason:r.exitReason||null });
     });
     return entries.filter(e=>e.totals.games>0).map(e=>{
-      const verdict = computeHofScore(e.totals, e.seasons, e.exitReason);
+      const peds = e.isMine ? pedStrikeCount() : 0;
+      const verdict = computeHofScore(e.totals, e.seasons, e.exitReason, peds);
       const rating = passerRating(e.totals.comp, e.totals.att, e.totals.yards, e.totals.td, e.totals.int);
-      const hofPct = hofChancePct(e.totals, e.seasons, e.exitReason, e.age, e.retired);
+      const hofPct = hofChancePct(e.totals, e.seasons, e.exitReason, e.age, e.retired, peds);
       return { ...e, score: verdict.score, hofTier: verdict.tier, rating, hofPct };
     }).sort((a,b)=> b.score-a.score);
   }
@@ -10614,6 +11063,133 @@ import {
           <thead><tr><th>Year</th><th>Team</th><th>AVG</th><th>HR</th><th>RBI</th><th>OPS+</th><th>Awards</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
+      </div>`;
+  }
+
+  /* ----- Analytics tab: the deep box, one level past the season card. Everything here is derived
+     from the real per-season batting line the engine already stores (pa/ab/h/2b/3b/hr/bb/hbp/sf/
+     k/sb/cs) -- no new simulation, just the sabermetric transforms a modern front office would run.
+     wOBA / wRC+ / bWAR are approximations (linear-weight constants, no park factors, a positional-
+     adjustment-plus-replacement batting WAR rather than a full fielding WAR) -- labelled "est."
+     wherever that matters. League baselines come straight from the existing LEAGUE[decade] table. */
+  const WAR_POS_ADJ = { C:9, SS:7, "2B":3, "3B":2, CF:2.5, LF:-7, RF:-7, "1B":-9.5, DH:-15 };
+  function analyticsForSeason(s){
+    const decade = s.decade || decadeForYear(s.year);
+    const lg = LEAGUE[decade] || LEAGUE["2000s"];
+    const lgwOBA = clamp(0.55*lg.obp + 0.30*lg.slg + 0.02, 0.28, 0.36);
+    const lgR_PA = lgwOBA * 0.37;
+    const wOBAScale = 1.2, runsPerWin = 10;
+
+    const pa = Math.max(0, s.pa ?? s.att ?? 0);
+    const h  = Math.max(0, s.hits ?? s.comp ?? 0);
+    const hr = Math.max(0, s.hr ?? s.td ?? 0);
+    const k  = Math.max(0, s.k ?? s.int ?? 0);
+    const bb = Math.max(0, s.bb ?? Math.round(pa*0.085));
+    const hbp = Math.max(0, s.hbp ?? Math.round(pa*0.009));
+    const sf = Math.max(0, s.sf ?? Math.round(pa*0.006));
+    const d2 = Math.max(0, s.doubles ?? 0);
+    const t3 = Math.max(0, s.triples ?? 0);
+    const sb = Math.max(0, s.sb ?? 0), cs = Math.max(0, s.cs ?? 0);
+    const ab = Math.max(1, s.ab ?? (pa - bb - hbp - sf));
+    const s1 = Math.max(0, h - d2 - t3 - hr);
+    const tb = s1 + 2*d2 + 3*t3 + 4*hr;
+    const avg = h/ab, slg = tb/ab, iso = slg - avg;
+    const obpDen = ab + bb + hbp + sf;
+    const obp = obpDen>0 ? (h + bb + hbp)/obpDen : 0;
+
+    const wOBAnum = 0.69*bb + 0.72*hbp + 0.89*s1 + 1.27*d2 + 1.62*t3 + 2.10*hr;
+    const wOBA = obpDen>0 ? wOBAnum/obpDen : 0;
+    const wRAA = pa>0 ? ((wOBA - lgwOBA)/wOBAScale) * pa : 0;         // batting runs above average
+    const wRCplus = pa>0 ? Math.round(((wRAA/pa) + lgR_PA) / lgR_PA * 100) : 100;
+    const babipDen = ab - k - hr + sf;
+    const babip = babipDen>0 ? (h - hr)/babipDen : 0;
+    const bbPct = pa>0 ? bb/pa : 0, kPct = pa>0 ? k/pa : 0;
+    const bsr = 0.2*sb - 0.42*cs;                                     // baserunning runs (wSB-ish)
+    const posVal = WAR_POS_ADJ[s.position ?? career.position] ?? 0;
+    const posAdj = posVal * pa/600;
+    const repl = 20 * pa/600;
+    const bWAR = (wRAA + bsr + posAdj + repl) / runsPerWin;
+    const psn = (hr+sb)>0 ? (2*hr*sb)/(hr+sb) : 0;                    // power-speed number
+    const sbRate = (sb+cs)>0 ? sb/(sb+cs) : 0;
+    const secA = ab>0 ? (bb + (tb - h) + (sb - cs))/ab : 0;          // secondary average
+
+    return { pa, ab, wOBA, wRAA, wRCplus, iso, babip, bbPct, kPct, bsr, bWAR, psn, sbRate, secA, obp, slg, avg,
+      opsPlus: s.opsPlus ?? Math.round(s.rating || 100) };
+  }
+  function fmt3(v){ return (v||0).toFixed(3).replace(/^(-?)0\./, "$1."); }
+  function buildAnalyticsTabHTML(){
+    const log = (career.seasonLog||[]).filter(s=>(s.pa ?? s.att ?? 0) > 0);
+    if(!log.length) return `<p style="color:var(--ink-muted);">No batting data yet — check back after your rookie season.</p>`;
+    const per = log.map(s=>({ s, a: analyticsForSeason(s) }));
+
+    // Career aggregates: re-run the same math on the summed line so rate stats are PA-weighted, not
+    // an average-of-averages.
+    const T = career.totals;
+    const careerLine = {
+      year: career.year, decade: decadeForYear(career.year), position: career.position,
+      pa: T.att||0, ab: T.ab||0, hits: T.comp||0, hr: T.td||0, k: T.int||0, bb: T.bb||0,
+      hbp: T.hbp||0, sf: T.sf||0, doubles: T.doubles||0, triples: T.triples||0, sb: T.sb||0, cs: T.cs||0,
+      opsPlus: passerRating(T.comp, T.att, T.yards, T.td, T.int, T.bb),
+    };
+    const C = analyticsForSeason(careerLine);
+    const careerWAR = per.reduce((sum,p)=>sum + p.a.bWAR, 0);
+    const careerBsR = per.reduce((sum,p)=>sum + p.a.bsr, 0);
+    const careerWRAA = per.reduce((sum,p)=>sum + p.a.wRAA, 0);
+    const peakWAR = per.reduce((b,p)=> p.a.bWAR>b.a.bWAR ? p : b, per[0]);
+    const goldGloves = (career.seasonLog||[]).filter(s=>(s.awards||[]).includes("Gold Glove")).length;
+    const positionsPlayed = [...new Set((career.seasonLog||[]).map(s=>s.position).filter(Boolean))];
+
+    const card = (label, value, sub) => `<div class="an-card"><div class="an-card-label">${label}</div><div class="an-card-value tabular">${value}</div>${sub?`<div class="an-card-sub">${sub}</div>`:""}</div>`;
+
+    const cards = [
+      card("Career bWAR <span class='an-est'>est.</span>", careerWAR.toFixed(1), `Peak ${peakWAR.a.bWAR.toFixed(1)} in ${peakWAR.s.year}`),
+      card("Career wOBA", fmt3(C.wOBA), `Batting runs ${careerWRAA>=0?"+":""}${Math.round(careerWRAA)}`),
+      card("wRC+ <span class='an-est'>est.</span>", C.wRCplus, "100 = league average, era-adjusted"),
+      card("ISO", fmt3(C.iso), "Isolated power (SLG − AVG)"),
+      card("BABIP", fmt3(C.babip), "Ball-in-play average"),
+      card("BB% / K%", `${(C.bbPct*100).toFixed(1)} / ${(C.kPct*100).toFixed(1)}`, `BB/K ${C.kPct>0?(C.bbPct/C.kPct).toFixed(2):"∞"}`),
+      card("SB success", (C.sbRate*100).toFixed(0)+"%", `${career.totals.sb||0} SB · ${career.totals.cs||0} CS · BsR ${careerBsR>=0?"+":""}${careerBsR.toFixed(1)}`),
+      card("Power-Speed #", C.psn.toFixed(1), `Secondary avg ${fmt3(C.secA)}`),
+    ].join("");
+
+    const rows = per.slice().reverse().map(({s,a})=>`
+      <tr>
+        <td>${s.year}</td><td class="tabular">${s.age}</td><td class="team-cell">${svgEscape(s.teamName || teamNameAt(s.teamId, s.year))}</td>
+        <td class="tabular">${s.position || "—"}</td>
+        <td class="tabular">${a.pa}</td>
+        <td class="tabular">${fmt3(a.wOBA)}</td>
+        <td class="tabular">${a.wRCplus}</td>
+        <td class="tabular">${fmt3(a.iso)}</td>
+        <td class="tabular">${fmt3(a.babip)}</td>
+        <td class="tabular">${(a.bbPct*100).toFixed(1)}</td>
+        <td class="tabular">${(a.kPct*100).toFixed(1)}</td>
+        <td class="tabular">${a.bsr>=0?"+":""}${a.bsr.toFixed(1)}</td>
+        <td class="tabular"><b>${a.bWAR.toFixed(1)}</b></td>
+      </tr>`).join("");
+
+    return `
+      <div class="an-cards">${cards}</div>
+      <div class="an-field-line">
+        <b>Defense:</b> ${positionsPlayed.length ? svgEscape(positionsPlayed.map(p=>positionLabel(p)).join(", ")) : "—"}
+        ${goldGloves>0 ? ` · <b>${goldGloves}</b> Gold Glove${goldGloves===1?"":"s"}` : " · no Gold Gloves"}
+        <span class="an-field-note">— the sim scores the season at the team-grade level, so bWAR here is a batting-plus-baserunning-plus-positional estimate, not a full fielding WAR.</span>
+      </div>
+      <div class="table-wrap" style="margin-top:0.9rem;">
+        <table class="career-table an-table">
+          <thead><tr>
+            <th>Year</th><th class="tabular">Age</th><th>Team</th><th class="tabular">Pos</th><th class="tabular">PA</th>
+            <th class="tabular">wOBA</th><th class="tabular">wRC+</th><th class="tabular">ISO</th><th class="tabular">BABIP</th>
+            <th class="tabular">BB%</th><th class="tabular">K%</th><th class="tabular">BsR</th><th class="tabular">bWAR</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="calc-refnote" style="margin-top:0.7rem;">
+        <b>wOBA</b> weights each way of reaching base by its real run value (a walk 0.69, a homer 2.10) instead of treating them all alike.
+        <b>wRC+</b> puts that on a scale where 100 is exactly league average for the era and 150 is 50% better.
+        <b>BABIP</b> is how often a ball he put in play fell for a hit — league is around .300, and a number far from it tends to regress.
+        <b>BsR</b> credits stolen bases and debits times caught (≈ +0.2 / −0.42 runs each).
+        <b>bWAR</b> (estimate) sums batting runs above average, baserunning, a positional adjustment for ${positionLabel(career.position)}, and replacement level, over ${"~"}10 runs per win.
       </div>`;
   }
 
@@ -11095,6 +11671,7 @@ import {
               <button type="button" class="dash-tab" data-tab="league">League</button>
               <button type="button" class="dash-tab" data-tab="awards">Awards</button>
               <button type="button" class="dash-tab" data-tab="trends">Career Trends</button>
+              <button type="button" class="dash-tab" data-tab="analytics">Analytics</button>
               <button type="button" class="dash-tab" data-tab="attributes">Attributes</button>
               <button type="button" class="dash-tab" data-tab="scheme">Approach</button>
               <button type="button" class="dash-tab" data-tab="team">Team</button>
@@ -11133,6 +11710,7 @@ import {
           <div class="dash-tabpanel" id="tabpanel-league">${buildLeagueTabHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-awards">${buildAwardCeremonyHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-trends">${buildTrendsTabHTML()}</div>
+          <div class="dash-tabpanel" id="tabpanel-analytics">${buildAnalyticsTabHTML()}</div>
           <div class="dash-tabpanel" id="tabpanel-attributes">${buildAttributesTabHTML(season)}</div>
           <div class="dash-tabpanel" id="tabpanel-scheme">${buildSchemeTabHTML()}</div>
           <div class="dash-tabpanel" id="tabpanel-team">${buildTeamTabHTML()}</div>
@@ -11912,6 +12490,8 @@ import {
     refreshFrontOfficeWidget();
     const trendsPanel = document.getElementById("tabpanel-trends");
     if(trendsPanel){ trendsPanel.innerHTML = buildTrendsTabHTML(); renderTrendsSparkline(); }
+    const analyticsPanel = document.getElementById("tabpanel-analytics");
+    if(analyticsPanel){ analyticsPanel.innerHTML = buildAnalyticsTabHTML(); }
     const logPanel = document.getElementById("tabpanel-log");
     if(logPanel) logPanel.innerHTML = buildEventLogFeedHTML();
     updateHeaderCareerTicker();
@@ -12091,7 +12671,11 @@ import {
   // (see the Round 12 note on this elsewhere) so this derives it via decadeForYear(s.year) when
   // `.decade` itself is absent, unlike the original which assumed `.decade` was always there
   // (always true for the player's own seasonLog, never true for a rival's).
-  function computeHofScore(totals, seasonLog, exitReason){
+  // `pedStrikes` (default 0): the number of PED marks against this career -- a positive test in the
+  // testing era, or a name in a retrospective report. Cooperstown voters hold it against a résumé
+  // hard, exactly like real life; each strike is a steep score penalty and, past the first, closes
+  // off the top tiers outright.
+  function computeHofScore(totals, seasonLog, exitReason, pedStrikes=0){
     const t = totals;
     const seasons = seasonLog.length;
     // Quality first: career rate (passer rating), then accolades, then a HARD-CAPPED nod to volume.
@@ -12114,7 +12698,8 @@ import {
     // Counting stats, hard-capped so a compiler can't outrank real peak value: career hits (comp),
     // home runs (td), RBI.
     const volumeScore = clamp(t.comp/350 + t.td*0.06 + (t.rbi||0)/260, 0, 35);
-    const score = qualityScore + accoladeScore + longevityScore + volumeScore;
+    const pedPenalty = pedStrikes > 0 ? (35 + (pedStrikes-1)*25) : 0;
+    const score = qualityScore + accoladeScore + longevityScore + volumeScore - pedPenalty;
 
     if(exitReason==="waived" && score<60) return {score, tier:"Out of the League", note:`Released after ${seasons} season${seasons===1?"":"s"} that never quite came together. The phone stopped ringing.`};
 
@@ -12134,7 +12719,14 @@ import {
       { min:12,  seasons:0,  minProBowls:0, tier:"Journeyman", note:"A real big-league career, bouncing between clubhouses and bench roles." },
       { min:-Infinity, seasons:0, minProBowls:0, tier:"Cup of Coffee", note:"The uniform barely got dirty, but you made it to the show." },
     ];
-    for(const tier of TIERS){
+    // A confirmed PED strike is very nearly disqualifying for the plaque itself -- the score
+    // penalty above usually handles it, but this makes the ceiling explicit: one strike caps the
+    // verdict at "Hall of Very Good," two or more at "Longtime Regular," no matter the numbers.
+    const pedTierCap = pedStrikes >= 2 ? "Longtime Regular" : pedStrikes === 1 ? "Hall of Very Good" : null;
+    const capIdx = pedTierCap ? TIERS.findIndex(x=>x.tier===pedTierCap) : -1;
+    for(let ti=0; ti<TIERS.length; ti++){
+      const tier = TIERS[ti];
+      if(capIdx >= 0 && ti < capIdx) continue;
       const accoladeGateMet = t.proBowls>=(tier.minProBowls||0) || (tier.minRingsRoute && t.rings>=tier.minRingsRoute);
       if(score>=tier.min && seasons>=tier.seasons && accoladeGateMet){
         // "Hall of Famer" only requires ONE Pro Bowl to gate into -- a career can clear the 100-point
@@ -12151,8 +12743,11 @@ import {
     }
     return { score, ...TIERS[TIERS.length-1] };
   }
+  function pedStrikeCount(){
+    return (career._pedCaught||0) + (career._pedNamedInReport?1:0);
+  }
   function hofVerdict(){
-    return computeHofScore(career.totals, career.seasonLog, career.exitReason);
+    return computeHofScore(career.totals, career.seasonLog, career.exitReason, pedStrikeCount());
   }
   // A single tier's base HOF-induction likelihood if this career ended exactly as-is today.
   const HOF_TIER_BASE_PCT = {
@@ -12164,8 +12759,8 @@ import {
   // computeHofScore would already assign if their career stopped today; an active, young player
   // with a real case already (score>40) gets a modest upward nudge for the seasons still ahead of
   // him, capped so it can never turn a thin résumé into a false lock on its own.
-  function hofChancePct(totals, seasonLog, exitReason, age, retired){
-    const verdict = computeHofScore(totals, seasonLog, exitReason);
+  function hofChancePct(totals, seasonLog, exitReason, age, retired, pedStrikes=0){
+    const verdict = computeHofScore(totals, seasonLog, exitReason, pedStrikes);
     let pct = HOF_TIER_BASE_PCT[verdict.tier] ?? 5;
     if(!retired && age!=null){
       const youthBoost = clamp((30-age)*1.2, 0, 18) * (verdict.score>40 ? 1 : 0.25);
@@ -12218,6 +12813,21 @@ import {
         const notable = survivedEvents.find(e=>e.legendary) || survivedEvents[survivedEvents.length-1];
         paras.push(`No retrospective is complete without <b>${notable.year}</b>: ${notable.title.toLowerCase()}. It follows him everywhere his stats do — the first line of every "wait, didn't he also..." conversation about this career.`);
       }
+    }
+
+    // The PED line -- a résumé this size with a confirmed strike on it is the single most-argued
+    // kind of Hall of Fame case there is, and the retrospective has to say so out loud.
+    const pedStrikes = pedStrikeCount();
+    if(pedStrikes > 0){
+      if(career._pedCaught > 0 && career._pedNamedInReport){
+        paras.push(`And then there's the other file. A positive test he served time for, and a name in a report he couldn't outrun. Whatever the numbers say, the plaque conversation always ends the same way.`);
+      } else if(career._pedCaught > 0){
+        paras.push(`The suspension is on the record, in the encyclopedia, in the first paragraph of every write-up. He tested positive, he served it, and the number on the back of the card has an asterisk shaped like it now.`);
+      } else {
+        paras.push(`His name surfaced years later in a report about the era nobody was testing. No games lost, no suspension served — just a permanent footnote, and a Hall of Fame case that now comes with a debate attached.`);
+      }
+    } else if((career._pedSeasonsUsed||0) > 0){
+      paras.push(`What the public never found out: for ${career._pedSeasonsUsed} season${career._pedSeasonsUsed===1?"":"s"}, the bat had help. He got out before the testing did, and the secret went with him.`);
     }
 
     // Every branch here has to be an ACTUAL reason the career stopped -- career.exitReason is set
@@ -12447,6 +13057,7 @@ import {
   const ADMIN_EVENT_POOLS = {
     infraction: { label:"Infractions", list: INFRACTION_EVENTS, kind:"infraction" },
     rare: { label:"Rare Easter Eggs", list: RARE_EVENTS, kind:"infraction" },
+    mishap: { label:"Mishaps", list: MISHAP_EVENTS, kind:"mishap" },
     positive: { label:"Positive", list: POSITIVE_EVENTS, kind:"positive" },
     org: { label:"Organization", list: ORG_EVENTS, kind:"org" },
     locker: { label:"Locker Room", list: LOCKER_ROOM_EVENTS, kind:"locker" },
@@ -12459,6 +13070,12 @@ import {
   const adminState = { tab:"players", search:"", decadeFilter:"all", sortKey:"name", sortDir:"asc", buildSnapshot:null };
 
   function adminEventRangeText(ev, kind){
+    if(kind==="mishap"){
+      const parts = [`${ev.gamesMissed[0]}-${ev.gamesMissed[1]} games`, `rep ${fmtDelta(ev.repHit[0])}..${fmtDelta(ev.repHit[1])}`];
+      if(ev.careerRisk) parts.push(`${Math.round(ev.careerRisk*100)}% career-ending`);
+      if(ev.minYear) parts.push(`since ${ev.minYear}`);
+      return parts.join(" · ");
+    }
     if(kind==="infraction"){
       const parts = [];
       parts.push(`sev: ${ev.severity}`);
@@ -12503,6 +13120,7 @@ import {
     closeAdminOverlay();
     showScreen("career");
     if(pool.kind==="infraction") renderInfractionEvent(ev);
+    else if(pool.kind==="mishap") renderMishapEvent(ev);
     else if(pool.kind==="positive") renderPositiveEvent(ev);
     else if(pool.kind==="locker") renderLockerRoomEvent(ev);
     else if(pool.kind==="rivalry"){
