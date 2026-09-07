@@ -364,5 +364,15 @@ and `rival-season-table-has-team-column` hardened against an earlier career wash
    wedding-salsa ACL, the pepper-grinder thumb, the cat bite). Mishaps route missed games through
    the *injury* bucket (not "suspension"), a small local rep ding, an optional small career-ending
    chance. 10 more dark-humor achievements. Admin event-pool viewer shows the new "Mishaps" pool.
-4. **Analytics dashboard tab** — a new "Analytics" tab: per-season advanced rate metrics + career
-   aggregates + an estimated batting WAR. (see below)
+4. **Analytics dashboard tab** — a new "Analytics" tab (between Career Trends and Attributes):
+   `buildAnalyticsTabHTML` derives the deep box from the real per-season batting line the engine
+   already stores. Career cards (bWAR est., wOBA, wRC+, ISO, BABIP, BB%/K%, SB success%,
+   Power-Speed #), a per-season table (wOBA / wRC+ / ISO / BABIP / BB% / K% / BsR / bWAR), a defense
+   line (positions played + Gold Gloves), and a plain-language glossary. Standard linear weights;
+   wOBA/wRC+/bWAR labelled "est." (no park factors; bWAR = batting + baserunning + positional
+   adjustment + replacement, not a full fielding WAR). League baselines from `LEAGUE[decade]`.
+
+New specs: `ped-steroid-era-offer-test-and-consequences`, `analytics-tab-advanced-metrics`. The
+PED, mishap, and (from 13c) position-shift offseason gate rolls all come from career-seeded streams
+so they never shift the global RNG stream a seeded test depends on; the test helper auto-declines
+the PED offer. **70 regression tests / 58 balance green.**

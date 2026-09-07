@@ -7615,12 +7615,12 @@ import {
   function pedOfferChanceForYear(year){
     let base;
     if(year < 1985) base = 0;
-    else if(year <= 1989) base = 0.03;
-    else if(year <= 1993) base = 0.11;
-    else if(year <= 2003) base = 0.22;   // the McGwire/Sosa/Bonds wild west -- skyrockets
-    else if(year <= 2006) base = 0.09;   // testing exists, enforcement is soft
-    else if(year <= 2013) base = 0.035;  // post-Mitchell-Report crackdown
-    else base = 0.02;                    // Biogenesis era and after -- rare, severe
+    else if(year <= 1989) base = 0.025;
+    else if(year <= 1993) base = 0.07;
+    else if(year <= 2003) base = 0.15;   // the McGwire/Sosa/Bonds wild west -- clearly elevated
+    else if(year <= 2006) base = 0.06;   // testing exists, enforcement is soft
+    else if(year <= 2013) base = 0.028;  // post-Mitchell-Report crackdown
+    else base = 0.016;                   // Biogenesis era and after -- rare, severe
     if(!base) return 0;
     const last = career.seasonLog[career.seasonLog.length-1];
     const opsPlus = last && last.opsPlus!=null ? last.opsPlus : 100;
@@ -7629,7 +7629,10 @@ import {
     if(opsPlus < 95) mult *= 1.6;
     if(career.age >= 32) mult *= 1.35;
     if(career.contract && (career.contract.tier==="minimum" || career.contract.tier==="backup")) mult *= 1.4;
-    return clamp(base * mult, 0, 0.45);
+    // A player who's already turned it down clearly isn't looking -- each refusal makes the next
+    // approach much less likely (and it's a quick two-button screen either way).
+    mult *= Math.pow(0.4, career._pedDeclines || 0);
+    return clamp(base * mult, 0, 0.42);
   }
   // "none" = no testing at all; "soft" = tested, but a positive is quietly buried; "strict" = a
   // positive costs real games and escalates for a repeat offender.
