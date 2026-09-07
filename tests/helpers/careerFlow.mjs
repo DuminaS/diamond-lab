@@ -49,6 +49,8 @@ export async function clickThroughToSeasonCard(page, maxTries = 60) {
     if (shown) return true;
     const clicked = await page.evaluate(() => {
       const content = document.getElementById("careerContent");
+      const pedNo = document.getElementById("pedNo");
+      if (pedNo) { pedNo.click(); return true; } // default automated path declines PEDs
       const btn = content && content.querySelector(
         "#injPlay, #playOnBtn, #continueBtn, button[id$='Ack'], button[id$='Continue'], .choice-btn, .fa-accept, [id^='pqSimSeries-'], [id^='pqSimEnd-'], #playoffTreeSimulateBtn:not([disabled])"
       );
@@ -134,6 +136,8 @@ export async function advanceOneSeason(page) {
         const simEnd = document.querySelector("#playoffRoundsHolder [id^='pqSimSeries-']:not([disabled])")
           || document.querySelector("#playoffRoundsHolder [id^='pqSimEnd-']:not([disabled])");
         if (simEnd) { simEnd.click(); return true; }
+        const pedNo = document.getElementById("pedNo");
+        if (pedNo) { pedNo.click(); return true; } // default automated path declines PEDs
         const btn = content && content.querySelector(".choice-btn, [id^='pqAck-'], button[id$='Ack'], .fa-accept");
         if (btn) { btn.click(); return true; }
         const simRoundBtn = document.getElementById("playoffTreeSimulateBtn");
@@ -178,6 +182,10 @@ export async function advanceOneSeason(page) {
     const clicked = await page.evaluate(() => {
       const content = document.getElementById("careerContent");
       if (!content) return false;
+      // PED offer: the default automated path DECLINES (keeps seeded careers clean and stable) --
+      // a spec that wants a using career clicks #pedYes itself.
+      const pedNo = document.getElementById("pedNo");
+      if (pedNo) { pedNo.click(); return true; }
       // Free-agency offer screen: each .fa-offer block leads with a .rival-link button (opens a
       // profile modal -- never advances the career), so it must be excluded from the generic
       // button catch-all below or the helper clicks it forever. The .choice-btn.fa-accept the same
