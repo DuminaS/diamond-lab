@@ -533,3 +533,49 @@ rotations, every slot a live registered non-retired pitcher). New specs:
 seed space shrunk, its own test surface, and a Compare-screen pitcher rendering pass. Parallel
 Universe stays hitter-only (forced at `beginMultiplayerCombine`) until a dedicated follow-up.
 Also deferred: two-way (Ohtani) careers.
+
+### Review-fixes pass — statistical consistency (post-Phase-16)
+
+An external review flagged that game results, individual performances, and season totals sometimes
+described different realities. Addressed on branch `review-fixes` (each a commit):
+
+1. **The bottom-of-the-9th walk-off logic** (`simulateRegulationScore`). The home team's last
+   at-bat was skipped based on the score *before* the visitor's top-of-the-9th runs — a visitor
+   who took the lead in the top of the 9th could win without the home team ever batting. Fixed:
+   the skip is decided after the visitor's half, and a home team that takes the lead in its
+   bottom half stops at exactly the winning run (9th and extra innings).
+2. **The pitcher game/stat model is game-authoritative** (`simulatePitcherScheduleGames`). The
+   game is simulated first; the pitcher's line is derived from it. Earned runs are a share of the
+   runs the opponent *actually* scored and never exceed them; innings are integer **outs**
+   (`ipOuts`) bounded by the innings played, displayed "5.2"; K/BB/H come from his rate profile ×
+   outs. The season line is the exact sum of the box scores.
+3. **`_injuryPenalty` was reset before it was read** on the pitcher path → the performance
+   penalty was always zero. `availabilityShare` now floors at 0 (a fully lost season is
+   representable).
+4. **Opponent-aware missed games** — a game the player misses is resolved by the same
+   opponent-aware engine as one he plays, on both paths.
+5. **The hitter season line is the sum of the game logs** (`simulateRegularSeasonGames`
+   two-pass). Season HR / TB / 2B / 3B were re-derived from `isoRate` and diverged sharply from
+   the per-game samples (14 season HR, 0 in the logs). Now the season targets (from the same
+   era-calibrated rates) are distributed across the real games via `distributeWithCaps` — a HR
+   can't exceed the hits or the team runs of the game it's placed in.
+6. **Pitcher analytics consistency** — batters-faced is `3·IP + H + BB` (not `IP·4.25 + H + BB`,
+   which double-counted); career FIP-/wRC+ compare against an innings-/PA-weighted league
+   environment across the seasons actually played.
+7. **The pitcher postseason** — his ability feeds run prevention on the games he starts (game 1,
+   the pivotal middle game, game 7), not the offense of every game; his starts get a real
+   pitching box; the clutch-at-bat Key Moment never fires for a pitcher.
+8. **Storage failures are visible** — `saveActiveCareer` surfaces a `#saveWarning` banner on a
+   failed write, keeps the last good envelope for a manual backup download, and clears on the
+   next success.
+9. **Pitcher build identities** — the 12 tools have direct roles (stuff→K, command→BB,
+   stamina→depth, durability→availability) instead of one talent scalar; **10.** pitcher
+   development consults the selected plan's growth/decline multipliers.
+
+Docs + CI: `package.json` renamed to `diamond-lab`; `CLAUDE.md` status refreshed; the Pages
+deploy workflow now gates on the full test suite.
+
+Still open from the review: an import path for a downloaded save backup; a long-career storage
+stress test; rare pitching feats (no-hitter / perfect game) as inspectable game highlights
+rather than season-level rolls (finding 12); separate career-greatness vs individual-performance
+multiplayer scoring presets (finding 13).
