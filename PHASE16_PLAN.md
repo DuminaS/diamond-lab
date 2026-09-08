@@ -73,12 +73,16 @@ never a shipped half-state where you can pick a path that doesn't fully simulate
   `PITCHER_OVERALL_WEIGHTS` + `pitcherOverall` in ratings.js, `evaluateProspect(picks, path)`.
   12 new balance tests. All pure additions — imported into main.js but nothing calls them yet,
   so zero behavior change / zero RNG drift.
-- **16b — the player's pitcher career.** `career.path`; `generateSeason` branches the player's own
-  stat line to a pitcher model (`buildUserPitcherSeason`) using `src/sim/pitching.js` + the
-  start-by-start game model (opposing lineup grade, W/L/SV/holds), the pitcher wear/injury curve,
-  a `pitcherRating` OPS+-analogue for the shared HOF/record paths. Career-hub / recap / season
-  table render a pitcher line. `career.path` still only ever set to "batter" until 16d — tested by
-  temporarily forcing it in a spec.
+- **16b — the player's pitcher career.** ✅ `career.path` / `career.pitcherRole` (+ migration),
+  `career.totals.pitching`. `generateSeason()` delegates to `generatePitcherSeason()` for the
+  pitcher path — reuses every shared piece (schedule, `resolvePlayoffs`, the whole league sim,
+  events, wear) and swaps only the player's line: `simulatePitcherLine` + `simulatePitcherSchedule
+  Games` (per-week schedule walk; the player's starts get a real `simulateGameScore` with his run-
+  prevention boost; W/L/SV/QS/CG from actual outcomes), pitcher age curves + wear curve + light
+  `developPitcherAttributes`. Season card / career-summary totals / season-by-season table render
+  a pitcher line. Hitter path untouched (one delegation line) → zero drift. Spec forces the path
+  in storage and plays 9 seasons. **Deferred to 16d:** baseball card, analytics tab, career-hub
+  stat widgets, Cy Young & the pitcher awards, HOF pitcher formula, leaderboards.
 - **16c — league staffs as tracked entities.** `career.teamRotations` (SP1–5, CL, SU1, SU2) +
   spawn/build/ensure/simulate/reconcile mirroring the Phase 15 lineup infra, RNG-isolated.
   Opposing SP-of-the-day into `simulateGameScore` for everyone. `defense` grade re-derived from
