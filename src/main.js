@@ -12808,9 +12808,9 @@ import {
      adjustment-plus-replacement batting WAR rather than a full fielding WAR) -- labelled "est."
      wherever that matters. League baselines come straight from the existing LEAGUE[decade] table. */
   const WAR_POS_ADJ = { C:9, SS:7, "2B":3, "3B":2, CF:2.5, LF:-7, RF:-7, "1B":-9.5, DH:-15 };
-  function analyticsForSeason(s){
+  function analyticsForSeason(s, lgOverride){
     const decade = s.decade || decadeForYear(s.year);
-    const lg = LEAGUE[decade] || LEAGUE["2000s"];
+    const lg = lgOverride || LEAGUE[decade] || LEAGUE["2000s"];
     const lgwOBA = clamp(0.55*lg.obp + 0.30*lg.slg + 0.02, 0.28, 0.36);
     const lgR_PA = lgwOBA * 0.37;
     const wOBAScale = 1.2, runsPerWin = 10;
@@ -12856,13 +12856,17 @@ import {
   // Phase 16d: the pitcher-season analogue of analyticsForSeason -- FIP / ERA- / K-BB% / LOB% and
   // a FIP-based pWAR estimate (the sim scores at the team-grade level, so it's a run-prevention
   // estimate, not a full defense-independent WAR).
-  function analyticsForPitcherSeason(s){
+  // `lgOverride` lets a career aggregate pass its own IP-weighted league environment instead of
+  // one decade's (review finding 11: a career FIP- was being compared to the ending decade only).
+  function analyticsForPitcherSeason(s, lgOverride){
     const decade = s.decade || decadeForYear(s.year);
-    const lg = PITCH_LEAGUE[decade] || PITCH_LEAGUE["2000s"];
+    const lg = lgOverride || PITCH_LEAGUE[decade] || PITCH_LEAGUE["2000s"];
     const ip = Math.max(0, s.ip || 0);
     const k = Math.max(0, s.k || 0), bb = Math.max(0, s.bbAllowed || 0);
     const hr = Math.max(0, s.hrAllowed || 0), h = Math.max(0, s.hAllowed || 0), er = Math.max(0, s.er || 0);
-    const bf = ip*4.25 + h + bb;                                  // rough batters faced
+    // batters faced ~= outs (3 per inning) + everyone who reached (review finding 11: the old
+    // ip*4.25 + h + bb double-counted the baserunners already inside the 4.25).
+    const bf = 3*ip + h + bb + Math.round(ip*0.03);
     const era = ip>0 ? 9*er/ip : 0;
     const fipV = s.fip != null ? s.fip : (ip>0 ? (13*hr + 3*bb - 2*k)/ip + lg.fipConst : lg.era);
     const eraMinus = era>0 ? Math.round(era/lg.era*100) : 100;
@@ -12886,11 +12890,19 @@ import {
     if(!log.length) return `<p style="color:var(--ink-muted);">No pitching data yet — check back after your rookie season.</p>`;
     const per = log.map(s=>({ s, a: analyticsForPitcherSeason(s) }));
     const pt = career.totals.pitching || {};
+    // IP-weighted league environment across the seasons actually pitched -- so a career FIP- for a
+    // pitcher who spanned the 1990s offense boom and the 2010s isn't judged only against his last
+    // decade (review finding 11).
+    let wEra=0, wK9=0, wBB9=0, wHR9=0, wFip=0, wIp=0;
+    log.forEach(s=>{ const d = s.decade || decadeForYear(s.year); const L = PITCH_LEAGUE[d]||PITCH_LEAGUE["2000s"]; const ip = s.ip||0;
+      wEra+=L.era*ip; wK9+=L.k9*ip; wBB9+=L.bb9*ip; wHR9+=L.hr9*ip; wFip+=L.fipConst*ip; wIp+=ip; });
+    const careerLg = wIp>0 ? { era: wEra/wIp, k9: wK9/wIp, bb9: wBB9/wIp, hr9: wHR9/wIp, fipConst: wFip/wIp, ipPerStart: (PITCH_LEAGUE[decadeForYear(career.year)]||PITCH_LEAGUE["2000s"]).ipPerStart }
+      : (PITCH_LEAGUE[decadeForYear(career.year)]||PITCH_LEAGUE["2000s"]);
     const careerLine = {
       year: career.year, decade: decadeForYear(career.year),
       ip: pt.ip||0, k: pt.k||0, bbAllowed: pt.bb||0, hrAllowed: pt.hr||0, hAllowed: pt.h||0, er: pt.er||0,
     };
-    const C = analyticsForPitcherSeason(careerLine);
+    const C = analyticsForPitcherSeason(careerLine, careerLg);
     const careerWAR = per.reduce((sum,p)=>sum + p.a.pWAR, 0);
     const peak = per.reduce((b,p)=> p.a.pWAR>b.a.pWAR ? p : b, per[0]);
     const cy = (career.seasonLog||[]).filter(s=>(s.awards||[]).includes("Cy Young")).length;
@@ -12958,7 +12970,13 @@ import {
       hbp: T.hbp||0, sf: T.sf||0, doubles: T.doubles||0, triples: T.triples||0, sb: T.sb||0, cs: T.cs||0,
       opsPlus: passerRating(T.comp, T.att, T.yards, T.td, T.int, T.bb),
     };
-    const C = analyticsForSeason(careerLine);
+    // PA-weighted league environment across the seasons actually played -- a career wRC+ shouldn't
+    // be judged only against the last decade the player was in (review finding 11).
+    let wObp=0, wSlg=0, wPa=0;
+    log.forEach(x=>{ const d = x.decade || decadeForYear(x.year); const L = LEAGUE[d]||LEAGUE["2000s"]; const pa = x.pa ?? x.att ?? 0;
+      wObp+=L.obp*pa; wSlg+=L.slg*pa; wPa+=pa; });
+    const careerLg = wPa>0 ? { ...(LEAGUE[decadeForYear(career.year)]||LEAGUE["2000s"]), obp: wObp/wPa, slg: wSlg/wPa } : undefined;
+    const C = analyticsForSeason(careerLine, careerLg);
     const careerWAR = per.reduce((sum,p)=>sum + p.a.bWAR, 0);
     const careerBsR = per.reduce((sum,p)=>sum + p.a.bsr, 0);
     const careerWRAA = per.reduce((sum,p)=>sum + p.a.wRAA, 0);
