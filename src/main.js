@@ -4735,6 +4735,23 @@ import {
         else if(e.retired) issues.push({ type:"lineup-slot-retired", qbId:id, year, teamId });
       });
     });
+
+    // Phase 16: the staff model. Every rotation slot references a registered, non-retired pitcher
+    // entity (or the player); no arm sits in two teams' staffs; each staff has 7 or 8 slots.
+    const teamRotations = careerObj.teamRotations || {};
+    const armSeen = new Map();
+    Object.keys(teamRotations).forEach(teamId=>{
+      const arr = teamRotations[teamId] || [];
+      if(arr.length && (arr.length < 7 || arr.length > 8)) issues.push({ type:"rotation-wrong-size", teamId, year, size: arr.length });
+      arr.forEach(id=>{
+        if(id===USER_QB_ID) return;
+        if(armSeen.has(id)) issues.push({ type:"arm-in-two-rotations", qbId:id, year, teams:[armSeen.get(id), teamId] });
+        armSeen.set(id, teamId);
+        const e = qbsById[id];
+        if(!e) issues.push({ type:"rotation-slot-unregistered", qbId:id, year, teamId });
+        else if(e.retired) issues.push({ type:"rotation-slot-retired", qbId:id, year, teamId });
+      });
+    });
     return issues;
   }
 
@@ -6595,6 +6612,20 @@ import {
     if(career && (!career.teamRotations || !Object.keys(career.teamRotations).length)){
       withIsolatedRandom(hashSeed("rotationinit:" + (career.name||"") + ":" + (career.draftYear||0)), buildLeagueRotations);
     }
+    // A Pitcher-path player must occupy a slot on his own club's staff. Normally
+    // buildTeamRotationRoster handles this at draft time; this covers a save whose rotations were
+    // built before the path was set (a resumed pre-16 save, or a converted one).
+    if(career && career.path===PATH_PITCHER && !career.isBackup && career.teamRotations){
+      const mine = career.teamRotations[career.teamId];
+      if(mine && !mine.includes(USER_QB_ID)){
+        const slots = rotationSlotsFor(career.year);
+        const want = career.pitcherRole==="CL" ? slots.indexOf("CL") : career.pitcherRole==="RP" ? slots.indexOf("SU") : 0;
+        const at = clamp(want < 0 ? 0 : want, 0, mine.length-1);
+        const bumped = mine[at];
+        mine[at] = USER_QB_ID;
+        if(bumped && bumped!==USER_QB_ID && career.qbsById[bumped]) retireQuarterback(bumped, "displaced");
+      }
+    }
   }
   function teamRotationEntities(teamId){
     return ((career.teamRotations && career.teamRotations[teamId]) || [])
@@ -6704,6 +6735,75 @@ import {
     });
     });
   }
+  // Phase 16e: free agency at staff scale -- the pitching-side twin of rollLineupFreeAgency. Every
+  // offseason a realistic trickle of non-ace rotation arms and relievers reaches the market and
+  // signs with a club that's a real downgrade at the same role; an old or washed-out arm retires.
+  // RNG-isolated so it can't shift the main stream.
+  function rollRotationFreeAgency(year){
+    if(!career.teamRotations) return;
+    const decade = decadeForYear(year);
+    withIsolatedRandom(hashSeed("rotationfa:" + (career.name||"") + ":" + (career.draftYear||0) + ":" + year), ()=>{
+    const MAX_MOVES = 8;
+    const slots = rotationSlotsFor(year);
+    const freshAt = (teamId, pitchRole, slotIdx, tag) => spawnRotationArm(teamId, decade, year, pitchRole,
+      rotationSlotTalent(pitchRole==="SP"?slotIdx:0, pitchRole, clamp((career.leagueStrength[teamId] ?? 60) + randInt(-9,9), 18, 97)), tag).id;
+    // occupant index of the first movable arm of a given role on a team (never the ace at slot 0)
+    const roleOccupantIdx = (teamId, pitchRole) => (career.teamRotations[teamId]||[]).findIndex((oid, i)=>{
+      if(oid===USER_QB_ID || (pitchRole==="SP" && i===0)) return false;
+      const oe = career.qbsById[oid];
+      return oe && slots[i]===pitchRole;
+    });
+    const market = [];
+    Object.keys(career.teamRotations).forEach(teamId=>{
+      (career.teamRotations[teamId]||[]).forEach((id, idx)=>{
+        if(id===USER_QB_ID || idx===0) return;                   // never the franchise ace
+        const e = career.qbsById[id];
+        if(!e || e.retired) return;
+        let chance = clamp(0.035 + Math.max(0, (e.age||28) - 30) * 0.021, 0.03, 0.20);
+        if(pitcherRivalEffTalent(e) >= 80) chance *= 0.35;
+        if((e.age||28) <= 25) chance *= 0.45;
+        if(Math.random() < chance) market.push({ e, teamId, idx, role: slots[idx] });
+      });
+    });
+    let moves = 0;
+    market.forEach(({ e, teamId, idx, role })=>{
+      if(career.teamRotations[teamId][idx] !== e.id) return;
+      const myTal = pitcherRivalEffTalent(e);
+      if(e.age >= (e.retireAge || 38) - 1 || myTal < 38){
+        retireQuarterback(e.id, "age");
+        career.teamRotations[teamId][idx] = freshAt(teamId, role, idx, "farepl"+year+"_"+idx);
+        return;
+      }
+      if(moves >= MAX_MOVES) return;
+      const suitors = Object.keys(career.teamRotations).filter(dt=>{
+        if(dt===teamId || dt===career.teamId) return false;
+        const oi = roleOccupantIdx(dt, role);
+        if(oi<0) return false;
+        const oe = career.qbsById[career.teamRotations[dt][oi]];
+        return oe && pitcherRivalEffTalent(oe) < myTal - 4;
+      });
+      if(!suitors.length) return;
+      const destTeam = suitors[Math.floor(Math.random() * suitors.length)];
+      const occIdx = roleOccupantIdx(destTeam, role);
+      const displaced = career.teamRotations[destTeam][occIdx];
+      const de = career.qbsById[displaced];
+      career.teamRotations[destTeam][occIdx] = e.id; e.teamId = destTeam; e.currentTeamId = destTeam;
+      if(de && (de.age >= (de.retireAge || 38) - 1 || pitcherRivalEffTalent(de) < 40)){
+        retireQuarterback(displaced, "displaced");
+        career.teamRotations[teamId][idx] = freshAt(teamId, role, idx, "fadep"+year+"_"+idx);
+      } else if(de){
+        de.teamId = teamId; de.currentTeamId = teamId;
+        career.teamRotations[teamId][idx] = displaced;
+      } else {
+        career.teamRotations[teamId][idx] = freshAt(teamId, role, idx, "fadep"+year+"_"+idx);
+      }
+      moves++;
+      career.leagueNewsLog.push({ year, teamId: destTeam, title:"Free-Agent Arm Signs", delta:0,
+        flavor:`${e.name} (${positionLabel(role)}) signs with ${teamNameAt(destTeam, year)}, leaving ${teamNameAt(teamId, year)}.` });
+    });
+    });
+  }
+
   // A team's run-prevention quality as a readout of its ACTUAL staff -- rotation weighted ~68%,
   // bullpen ~32%, top of the rotation weighted most. The Phase-16 twin of lineupOffenseGrade.
   const ROTATION_SLOT_WEIGHT = [1.35, 1.15, 0.95, 0.8, 0.68]; // SP1..SP5
@@ -8201,6 +8301,7 @@ import {
     simulateDepthChartSeasons(decade, league, career.year);
     rollVeteranFreeAgency(decade, career.year);
     rollLineupFreeAgency(career.year);
+    rollRotationFreeAgency(career.year);
     TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateSuccession(t.id, decade, career.year));
     TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateBenchMobility(t.id, decade, career.year));
     resolveFreeAgentPool(decade, career.year);
@@ -8601,6 +8702,7 @@ import {
     simulateDepthChartSeasons(decade, league, career.year);
     rollVeteranFreeAgency(decade, career.year);
     rollLineupFreeAgency(career.year);
+    rollRotationFreeAgency(career.year);
     TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateSuccession(t.id, decade, career.year));
     // Phase 2 of the QB-entity redesign: real bench mobility (trade/waive) and free-agent-pool
     // resolution (retirement hazard + teams signing off the pool), both once per team per season,
