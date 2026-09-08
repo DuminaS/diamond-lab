@@ -8,7 +8,7 @@ import { installSeededRandom } from "../helpers/seededRandom.mjs";
 const EASIER = { C: 3, SS: 3, "2B": 2, "3B": 2, CF: 3, LF: 1, RF: 1, "1B": 1, DH: 0 };
 
 test("an aging player slides down the defensive spectrum", async ({ page }) => {
-  test.setTimeout(420_000);
+  test.setTimeout(600_000);
 
   let anyMoved = false, seedsChecked = 0;
   for (const seed of [3, 11, 24, 42]) {

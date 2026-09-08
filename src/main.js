@@ -2036,7 +2036,9 @@ import {
   // Phase 15: bumped to 4 -- career.teamLineups (the full 9-man batting order per team). A schema-3
   // save has no teamLineups; ensureLeagueLineups() builds them lazily on the first resumed season
   // rather than during migration (the roster helpers need the live `career`).
-  const SAVE_SCHEMA_VERSION = 4;
+  // Phase 16c: bumped to 5 -- career.teamRotations (the 7/8-arm pitching staff per team).
+  // ensureLeagueRotations() builds them lazily the same way on the first resumed season.
+  const SAVE_SCHEMA_VERSION = 5;
   const SOLO_ACTIVE_CAREER_KEY = "diamondlab.activeCareer";
   // Multiplayer Parallel Universe Mode (MULTIPLAYER_MODE_SPEC.md section 12.3): solo play always
   // uses the plain key above, completely untouched -- a multiplayer session (Create/Join Private
@@ -3335,6 +3337,9 @@ import {
     // Isolated PRNG: ~250 entities' worth of rolls here would otherwise shift the main stream for
     // every seeded career from draft night on.
     withIsolatedRandom(hashSeed("lineupinit:" + (career.name||"") + ":" + (career.draftYear||0)), buildLeagueLineups);
+    // Phase 16c: fill out every team's pitching staff (rotation + bullpen) the same way -- isolated
+    // so ~240 arms' worth of rolls don't shift the main stream from draft night on.
+    withIsolatedRandom(hashSeed("rotationinit:" + (career.name||"") + ":" + (career.draftYear||0)), buildLeagueRotations);
 
     showScreen("draftnight");
     document.getElementById("draftNightActions").style.visibility = "hidden";
@@ -3735,7 +3740,10 @@ import {
       }
       started++;
       const oppOffense = opponentOffenseGrade(oppId, QB_INFLUENCE_REGULAR);
-      const scoreSim = simulateGameScore(myOff, oppOffense, career.defense, tieProbConditional, career.year, false, opponentDefenseGrade(oppId));
+      // Phase 16c: the specific arm the opponent runs out today (rotation turns over by week) is
+      // blended into the run suppression the player's bat faces -- an ace start is a tough night,
+      // a #5 start is a get-well game. Mean-preserving, no extra RNG.
+      const scoreSim = simulateGameScore(myOff, oppOffense, career.defense, tieProbConditional, career.year, false, opposingDefenseForGame(oppId, career.year, (slot.week||1)-1));
       const won = scoreSim.won;
       // ties (shared with the missed-games/incumbent-covered branch above, since season.teamTies
       // needs every tie regardless of who was under center) is NOT the right subtrahend for
@@ -6227,6 +6235,235 @@ import {
     return teamLineupIds(teamId).map(id=> id===USER_QB_ID ? null : (career.qbsById && career.qbsById[id]))
       .filter(e=> e && !e.retired);
   }
+
+  /* ================= Phase 16c: league pitching staffs as tracked characters =================
+     The pitching-side twin of career.teamLineups. career.teamRotations[teamId] holds 7/8 registry
+     ids -- five starters (SP1-5), a closer (CL, 1975+), and two setup arms (SU) -- each a real
+     entity that ages, retires, is succeeded, and drives its club's run-prevention grade. On the
+     Pitcher path the player's own slot stores USER_QB_ID. Same storage retention as the lineup
+     bats (rolling history window, budget cap, retiree prune). Every rebuild/sim runs inside
+     withIsolatedRandom so ~240 arms of stat rolls never shift the main (test-seeded) stream. */
+
+  // Age-adjusted talent for a pitcher entity -- the mound twin of rivalEffTalent (which uses the
+  // hitter prime curve).
+  function pitcherRivalEffTalent(e){
+    return clamp(Math.round(65 + ((e.talent||65)-65)*pitcherPrimeMultiplier(e.age||27)), 20, 99);
+  }
+  function rotationSlotsFor(year){
+    // no dedicated closer role before the mid-1970s -- just a rotation and long relief
+    return year < 1975 ? ["SP","SP","SP","SP","SP","SU","SU"] : ["SP","SP","SP","SP","SP","CL","SU","SU"];
+  }
+  // Talent target for a staff slot: the rotation steps down from an ace who tracks the team grade;
+  // a good closer sits near the #2 starter; setup men are replacement-ish.
+  function rotationSlotTalent(slotIndex, pitchRole, teamGrade){
+    if(pitchRole === "SP"){
+      return clamp(Math.round(teamGrade + [7, 2, -3, -7, -11][Math.min(slotIndex,4)] + randInt(-6,6)), 18, 97);
+    }
+    if(pitchRole === "CL") return clamp(Math.round(teamGrade + 2 + randInt(-7,7)), 18, 96);
+    return clamp(Math.round(teamGrade - 5 + randInt(-8,6)), 18, 92); // SU
+  }
+  function spawnRotationArm(teamId, decade, year, pitchRole, talent, idTag){
+    // starters skew a touch older than the everyday-bat population; relievers younger and more
+    // volatile in tenure.
+    const age = clamp(21 + Math.floor((Math.random()+Math.random())/2*(pitchRole==="SP"?15:13)), 21, 38);
+    const e = {
+      id: "arm_"+teamId+"_"+pitchRole+"_"+idTag,
+      name: randomFullName(), teamId, currentTeamId: teamId,
+      talent: clamp(Math.round(talent), 18, 97), age,
+      pitcher: true, pitchRole, rotationSlot: 1, role: "rotation", position: "P",
+      retireAge: clamp(age + randInt(2, 12), 30, 41),
+      draftYear: year - (age - 22),
+      seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0,
+        pitching: { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0 } },
+      retired: false, status: "active", rosterRole: null,
+      contract: rollRivalContract(decade, talent), entrenchedYears: rollEntrenchedYears(talent),
+    };
+    return registerQuarterback(e);
+  }
+  function buildTeamRotationRoster(teamId, decade, year){
+    const teamGrade = Math.round(teamId===career.teamId ? career.teamStrength : (career.leagueStrength[teamId] ?? 60));
+    const slots = rotationSlotsFor(year);
+    const mineAsPitcher = teamId===career.teamId && career.path===PATH_PITCHER && !career.isBackup;
+    // where the player slots in on his own staff
+    const userSlot = mineAsPitcher
+      ? (career.pitcherRole==="CL" ? slots.indexOf("CL") : career.pitcherRole==="RP" ? slots.indexOf("SU") : 0)
+      : -1;
+    const ids = [];
+    slots.forEach((pitchRole, i)=>{
+      if(i === userSlot){ ids.push(USER_QB_ID); return; }
+      let si = pitchRole === "SP" ? i : 0;
+      ids.push(spawnRotationArm(teamId, decade, year, pitchRole, rotationSlotTalent(si, pitchRole, teamGrade), year+"_"+i).id);
+    });
+    return ids;
+  }
+  function buildLeagueRotations(){
+    career.teamRotations = {};
+    const decade = decadeForYear(career.year);
+    TEAMS.filter(t=>t.start<=career.year).forEach(t=>{
+      career.teamRotations[t.id] = buildTeamRotationRoster(t.id, decade, career.year);
+    });
+  }
+  function ensureLeagueRotations(){
+    if(career && (!career.teamRotations || !Object.keys(career.teamRotations).length)){
+      withIsolatedRandom(hashSeed("rotationinit:" + (career.name||"") + ":" + (career.draftYear||0)), buildLeagueRotations);
+    }
+  }
+  function teamRotationEntities(teamId){
+    return ((career.teamRotations && career.teamRotations[teamId]) || [])
+      .map(id=> id===USER_QB_ID ? null : (career.qbsById && career.qbsById[id]))
+      .filter(e=> e && !e.retired);
+  }
+  // Ages every arm on every staff a year, drifts talent, and runs per-slot retirement + succession.
+  // Mirrors simulateLineupSeasons; RNG-isolated; runs right after it. Phase 16c does NOT simulate a
+  // per-arm stat line -- the `defense` grade and the opposing-SP game blend only need talent+age,
+  // and per-arm seasons (for Cy Young) land in 16d. Keeping this a cheap age/drift pass keeps the
+  // full-career sweep specs from blowing their timeout with a second ~240-entity simulation.
+  function simulateRotationSeasons(decade, league, year){
+    ensureLeagueRotations();
+    if(!career.teamRotations) return;
+    withIsolatedRandom(hashSeed("rotationsim:" + (career.name||"") + ":" + (career.draftYear||0) + ":" + year), ()=>{
+    Object.keys(career.teamRotations).forEach(teamId=>{
+      const t = TEAMS.find(x=>x.id===teamId);
+      if(t && t.start>year) return;
+      const slots = rotationSlotsFor(year);
+      const teamGrade = Math.round(career.leagueStrength[teamId] ?? 60);
+      let arr = career.teamRotations[teamId];
+      // rebuild to exactly one live arm per slot, keeping the valid occupant, succeeding where not
+      const bySlot = new Array(slots.length).fill(null);
+      const claimed = new Set();
+      arr.forEach((id, i)=>{
+        if(id===USER_QB_ID){ if(i<bySlot.length) bySlot[i] = USER_QB_ID; return; }
+        const e = career.qbsById[id];
+        if(e && !e.retired && e.age<=e.retireAge && !claimed.has(id)){
+          let target = (i<slots.length && slots[i]===e.pitchRole) ? i : slots.findIndex((r,si)=> r===e.pitchRole && !bySlot[si]);
+          if(target>=0){ bySlot[target] = id; claimed.add(id); }
+        }
+      });
+      arr = career.teamRotations[teamId] = slots.map((pitchRole, i)=>{
+        if(bySlot[i]) return bySlot[i];
+        return spawnRotationArm(teamId, decade, year, pitchRole,
+          rotationSlotTalent(pitchRole==="SP"?i:0, pitchRole, clamp(teamGrade+randInt(-10,10),18,97)), "fill"+year+"_"+i).id;
+      });
+      // retire the aged-out arms that just lost their slot
+      Object.values(bySlot).forEach(id=>{
+        if(!id || id===USER_QB_ID) return;
+        const e = career.qbsById[id];
+        if(e && !e.retired && e.age>e.retireAge) retireQuarterback(id, "age");
+      });
+      // age + drift the arms that kept a slot
+      arr.forEach((id, i)=>{
+        if(id===USER_QB_ID) return;
+        const e = career.qbsById[id];
+        if(!e || e.retired) return;
+        e.rotationSlot = i+1; e.pitchRole = slots[i];
+        if(e._agedYear === year) return; // shared entity guard
+        e._agedYear = year;
+        e.age++;
+        const drift = e.age<=26 ? randInt(-1,3) : e.age<=30 ? randInt(-2,2) : randInt(-4,1);
+        e.talent = clamp(e.talent + drift, 18, 99);
+      });
+    });
+    });
+  }
+  // Sweep every staff of any slot gone stale (retired / missing / duplicate), same job
+  // reconcileTeamLineups does for the bats. Runs late in the season, before the grade re-derive.
+  function reconcileTeamRotations(year){
+    if(!career.teamRotations) return;
+    withIsolatedRandom(hashSeed("rotationrecon:" + (career.name||"") + ":" + (career.draftYear||0) + ":" + year), ()=>{
+    const decade = decadeForYear(year);
+    Object.keys(career.teamRotations).forEach(teamId=>{
+      const slots = rotationSlotsFor(year);
+      const arr = career.teamRotations[teamId];
+      const teamGrade = clamp(Math.round(career.leagueStrength[teamId] ?? 60), 18, 97);
+      const claimed = new Set();
+      const bySlot = new Array(slots.length).fill(null);
+      arr.forEach((id, i)=>{
+        if(id===USER_QB_ID){ if(i<bySlot.length) bySlot[i] = USER_QB_ID; return; }
+        if(claimed.has(id)) return;
+        const e = career.qbsById[id];
+        if(!e || e.retired) return;
+        let target = (i<slots.length && slots[i]===e.pitchRole) ? i : slots.findIndex((r,si)=> r===e.pitchRole && !bySlot[si]);
+        if(target<0) target = bySlot.findIndex(x=>!x);
+        if(target>=0 && !bySlot[target]){ bySlot[target] = id; claimed.add(id); }
+      });
+      career.teamRotations[teamId] = slots.map((pitchRole, i)=>{
+        if(bySlot[i]) return bySlot[i];
+        const fresh = spawnRotationArm(teamId, decade, year, pitchRole,
+          rotationSlotTalent(pitchRole==="SP"?i:0, pitchRole, clamp(teamGrade+randInt(-9,9),18,97)), "recon"+year+"_"+i);
+        return fresh.id;
+      });
+    });
+    });
+  }
+  // A team's run-prevention quality as a readout of its ACTUAL staff -- rotation weighted ~68%,
+  // bullpen ~32%, top of the rotation weighted most. The Phase-16 twin of lineupOffenseGrade.
+  const ROTATION_SLOT_WEIGHT = [1.35, 1.15, 0.95, 0.8, 0.68]; // SP1..SP5
+  function staffRunPreventionGrade(teamId, year){
+    ensureLeagueRotations();
+    const arr = (career.teamRotations && career.teamRotations[teamId]) || [];
+    if(!arr.length) return null;
+    const slots = rotationSlotsFor(year);
+    let num = 0, den = 0;
+    arr.forEach((id, i)=>{
+      const pitchRole = slots[i] || "SU";
+      let ovr;
+      if(id===USER_QB_ID) ovr = computePitcherEffOverall(career.age);
+      else { const e = career.qbsById && career.qbsById[id]; if(!e) return; ovr = pitcherRivalEffTalent(e); }
+      const w = pitchRole==="SP" ? (ROTATION_SLOT_WEIGHT[i] || 0.6) : (pitchRole==="CL" ? 0.7 : 0.42);
+      num += ovr * w; den += w;
+    });
+    if(den<=0) return null;
+    // Compress toward league average -- real team-to-team ERA spread is much tighter than the raw
+    // talent spread, and `defense` already stacks with the roster-derived `weapons` grade inside
+    // computeTeamOverall; an uncompressed second roster signal let the best org run away past 116.
+    return clamp(Math.round(65 + (num/den - 65) * 0.62), 25, 94);
+  }
+  // Re-derives the "Defense & Bullpen" component (the `defense` grade) of every team from its real
+  // staff -- the Phase-16c twin of recomputeLineupGrades. Deliberately a MINORITY influence (30%
+  // roster / 70% the grade's own drift): unlike the Lineup grade, `defense` also folds in fielding
+  // and a team's own regression-to-mean, and two fully roster-derived grades compounding in
+  // computeTeamOverall widen the league's win spread past what the sport actually produces.
+  function recomputeStaffGrades(year){
+    ensureLeagueRotations();
+    TEAMS.filter(t=>t.start<=year).forEach(t=>{
+      const g = staffRunPreventionGrade(t.id, year);
+      if(g==null) return;
+      if(t.id===career.teamId){
+        career.defense = clamp(Math.round(safeNum(career.defense,60)*0.70 + g*0.30), 20, 99);
+        recomputeMyTeamStrength();
+      } else {
+        const lg = career.leagueTeamGrades && career.leagueTeamGrades[t.id];
+        if(lg){
+          lg.defense = clamp(Math.round(safeNum(lg.defense,60)*0.70 + g*0.30), 20, 99);
+          career.leagueStrength[t.id] = clamp(Math.round(computeTeamOverall(lg)), 20, 96);
+        }
+      }
+    });
+  }
+  // The eff-talent of each of a team's five starters, and today's turn. Regular season: the
+  // rotation just turns over (game N -> SP[N mod 5]).
+  function opposingRotationGrades(teamId){
+    ensureLeagueRotations();
+    const arr = (career.teamRotations && career.teamRotations[teamId]) || [];
+    return arr.slice(0, 5).filter(Boolean).map(id=>{
+      if(id===USER_QB_ID) return computePitcherEffOverall(career.age);
+      const e = career.qbsById && career.qbsById[id];
+      return e ? pitcherRivalEffTalent(e) : null;
+    }).filter(v=> v!=null);
+  }
+  // Adjust a team's persistent defense grade for the SPECIFIC arm on the mound today -- STRICTLY
+  // mean-preserving: today's starter is compared to his own rotation's average, and only that
+  // deviation (an ace is a few points tougher, a #5 a few points easier) moves the number. Over a
+  // full slate the rotation turns over evenly, so the season aggregate the player faces is exactly
+  // the team's own grade -- no systematic help or harm, just game-to-game texture. No RNG.
+  function opposingDefenseForGame(teamId, year, gameNo){
+    const base = opponentDefenseGrade(teamId);
+    const sps = opposingRotationGrades(teamId);
+    if(sps.length < 2) return base;
+    const avg = sps.reduce((a,b)=>a+b,0) / sps.length;
+    const today = sps[(gameNo||0) % sps.length];
+    return clamp(Math.round(base + (today - avg) * 0.40), 15, 99);
+  }
   // Player traded / signed elsewhere: give his old team a real hitter at his vacated position and
   // slot USER_QB_ID into the new team's lineup, displacing whoever played there.
   function reassignLineupsForTeamChange(oldTeamId, newTeamId){
@@ -6456,6 +6693,7 @@ import {
   function pruneStaleRetirees(year){
     const rostered = new Set();
     Object.values(career.teamLineups||{}).forEach(arr=> arr.forEach(id=>rostered.add(id)));
+    Object.values(career.teamRotations||{}).forEach(arr=> arr.forEach(id=>rostered.add(id)));
     Object.values(career.teamQbDepth||{}).forEach(s=>{ if(s.QB1) rostered.add(s.QB1); if(s.QB2) rostered.add(s.QB2); if(s.QB3) rostered.add(s.QB3); });
     Object.keys(career.rivalries||{}).forEach(id=>rostered.add(id));
     (career.leagueDepthCharts && Object.values(career.leagueDepthCharts).forEach(c=>{ if(c.qb2) rostered.add(c.qb2.id); if(c.qb3) rostered.add(c.qb3.id); }));
@@ -7517,7 +7755,7 @@ import {
       const gIp = ipShares[gi] || 0, gK = kShares[gi]||0, gBB = bbShares[gi]||0, gH = hShares[gi]||0, gER = erShares[gi]||0, gHR = hrShares[gi]||0;
       const myDef = Math.round(clamp(safeNum(career.defense,60)*0.42 + pRunPrev*0.58, 20, 99));
       const oppOffense = opponentOffenseGrade(oppId, QB_INFLUENCE_REGULAR);
-      const scoreSim = simulateGameScore(myOffBase, oppOffense, myDef, tieProbConditional, career.year, false, opponentDefenseGrade(oppId));
+      const scoreSim = simulateGameScore(myOffBase, oppOffense, myDef, tieProbConditional, career.year, false, opposingDefenseForGame(oppId, career.year, (slot.week||1)-1));
       const isTie = !!scoreSim.tie, won = scoreSim.won;
       if(isTie) teamTies++; else if(won) teamWins++; else teamLosses++;
       bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won: isTie?false:won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
@@ -7618,6 +7856,7 @@ import {
     spawnNewFranchiseRivals(career.year);
     simulateRivalSeasons(decade, league, career.year);
     simulateLineupSeasons(decade, league, career.year);
+    simulateRotationSeasons(decade, league, career.year);
     simulateDepthChartSeasons(decade, league, career.year);
     rollVeteranFreeAgency(decade, career.year);
     rollLineupFreeAgency(career.year);
@@ -7649,7 +7888,9 @@ import {
     const teamRebuildPull = Math.round(rebuildPull(safeNum(career.teamStrength,60))*volMult);
     adjustTeamStrength(career.teamId, Math.round(teamNoise) - teamDeclinePull + teamRebuildPull, 2);
     reconcileTeamLineups(career.year);
+    reconcileTeamRotations(career.year);
     recomputeLineupGrades(career.year);
+    recomputeStaffGrades(career.year);
     applyCapPressureToRoster();
 
     // wear economy -- pitcher stuff keys take the permanent hit
@@ -8000,6 +8241,8 @@ import {
     simulateRivalSeasons(decade, league, career.year);
     // Phase 15: the other seven/eight bats in every lineup, plus the storage trim.
     simulateLineupSeasons(decade, league, career.year);
+    // Phase 16c: every arm on every pitching staff -- real seasons, aging, succession.
+    simulateRotationSeasons(decade, league, career.year);
     // Wave 2B: now that simulateRivalSeasons has actually simulated the incumbent for real (the
     // ONE simulation pass he gets this year -- see resolveBackupSeasonSnaps/the isBackupIncumbent
     // branch there), patch this season's recap snapshot with his REAL final numbers. Before this
@@ -8074,9 +8317,12 @@ import {
     // a bat retired or moved without its slot being patched, a duplicate) BEFORE the grade is
     // re-derived, so every team fields a full nine of live, uniquely-rostered entities.
     reconcileTeamLineups(career.year);
-    // Phase 15c: after the four authored components have drifted, re-derive the Lineup grade of
-    // every team from its actual nine bats -- the tangible, roster-driven half of team quality.
+    reconcileTeamRotations(career.year);
+    // Phase 15c/16c: after the authored components have drifted, re-derive the Lineup grade from
+    // every team's nine bats and the Defense & Bullpen grade from its real staff -- the tangible,
+    // roster-driven halves of team quality.
     recomputeLineupGrades(career.year);
+    recomputeStaffGrades(career.year);
     applyCapPressureToRoster();
 
     // ----- Wear and tear economy: a persistent, career-long meter (not a per-injury dice roll) --
@@ -11239,6 +11485,24 @@ import {
   // grade tracks the team grade; the rotation steps down from there. Pre-1975 seasons ran a 4-man
   // rotation, modern seasons a 5-man.
   function buildTeamRotation(teamId, year){
+    // Phase 16c: read the real tracked staff when one exists; fabricated fallback for a pre-16 save.
+    ensureLeagueRotations();
+    const roster = career.teamRotations && career.teamRotations[teamId];
+    if(roster && roster.length){
+      const slots = rotationSlotsFor(year);
+      const staff = [];
+      roster.forEach((id, i)=>{
+        if(slots[i] !== "SP") return; // rotation card shows the starters
+        if(id===USER_QB_ID){
+          staff.push({ slot: staff.length+1, name: career.name + " (you)", ovr: Math.round(computePitcherEffOverall(career.age)), rivalId: null, isUser: true });
+          return;
+        }
+        const e = career.qbsById && career.qbsById[id];
+        if(!e) return;
+        staff.push({ slot: staff.length+1, name: e.name, ovr: pitcherRivalEffTalent(e), rivalId: e.id, isUser: false });
+      });
+      if(staff.length) return staff;
+    }
     const rand = createSeededRandom(hashSeed("rotation:" + teamId + ":" + year));
     const grade = Math.round(teamId===career.teamId ? career.teamStrength : (career.leagueStrength[teamId] ?? 60));
     const size = year < 1975 ? 4 : 5;
