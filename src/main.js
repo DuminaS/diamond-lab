@@ -325,6 +325,13 @@ import {
     physical: [[21,0.88],[23,0.95],[25,1.00],[27,1.00],[29,0.98],[31,0.93],[33,0.86],[35,0.76],[37,0.64],[39,0.52],[41,0.42]],
     hitting:  [[21,0.80],[23,0.88],[26,0.96],[28,1.00],[31,1.00],[33,0.97],[35,0.92],[37,0.85],[39,0.76],[41,0.66]],
     mental:   [[21,0.66],[23,0.76],[25,0.86],[27,0.93],[29,0.98],[31,1.00],[34,1.00],[36,0.98],[38,0.94],[40,0.88],[42,0.80]],
+    // Phase 16 -- pitcher tool aging. `stuff` (velocity / life / breaking / change) is a hair
+    // earlier-peaking and steeper-declining than a hitter's physical tools; `command` (locating
+    // and making the stuff play) keeps improving into the early 30s like a hitter's mental group;
+    // `makeup` (stamina / poise / composure / durability) holds up the best.
+    stuff:    [[20,0.82],[23,0.93],[25,1.00],[27,0.99],[29,0.95],[31,0.89],[33,0.80],[35,0.69],[37,0.57],[39,0.46],[41,0.37]],
+    command:  [[20,0.70],[23,0.82],[26,0.92],[28,0.98],[31,1.00],[34,1.00],[36,0.97],[38,0.92],[40,0.85],[42,0.77]],
+    makeup:   [[20,0.72],[23,0.82],[25,0.90],[27,0.95],[29,0.99],[31,1.00],[34,0.99],[36,0.96],[38,0.91],[40,0.84],[42,0.76]],
   };
   function ageMultiplier(group, age){ return curveVal(CURVES[group] || CURVES.mental, age); }
 
@@ -2092,6 +2099,7 @@ import {
       migrateTiesDefaults(envelope.career);
       migrateTeamOverallDerivation(envelope.career);
       migrateDevelopmentAgency(envelope.career);
+      migratePitcherPathDefaults(envelope.career);
     }
     if(envelope.schemaVersion < SAVE_SCHEMA_VERSION) envelope = { ...envelope, schemaVersion: SAVE_SCHEMA_VERSION };
     return envelope;
@@ -2105,6 +2113,18 @@ import {
   // reader to keep remembering the same fallback) rather than a fix for an otherwise-broken display.
   // Runs on every load (like syncQbRegistryFromLegacy), which is safe and idempotent -- a save that
   // already has ties everywhere is untouched.
+  // Phase 16: a save from before the Pitcher path existed has no `career.path` (it was always a
+  // batter) and no `career.totals.pitching` bucket. Defense-in-depth, same pattern as the ties
+  // backfill -- every read site already falls back, this just makes the data itself consistent.
+  // Idempotent; no Math.random().
+  function migratePitcherPathDefaults(careerObj){
+    if(!careerObj) return;
+    if(careerObj.path==null) careerObj.path = "batter";
+    if(careerObj.pitcherRole===undefined) careerObj.pitcherRole = null;
+    if(careerObj.totals && !careerObj.totals.pitching){
+      careerObj.totals.pitching = { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0 };
+    }
+  }
   function migrateTiesDefaults(careerObj){
     if(!careerObj) return;
     const fixTotals = t => { if(t && t.ties==null) t.ties = 0; };
@@ -3209,6 +3229,11 @@ import {
       college: playerCollege,
       hometown: playerHometown,
       position: playerPosition,
+      // Phase 16: which career the player is running. `path` is "batter" | "pitcher"; a pitcher
+      // also carries a `pitcherRole` ("SP" | "RP" | "CL"). The Pitcher fork (16d) sets build.path;
+      // until then every career is a batter.
+      path: (build && build.path) || PATH_BATTER,
+      pitcherRole: (build && build.path===PATH_PITCHER) ? (build.pitcherRole || "SP") : null,
       teamId: team.id,
       draftTeamId: team.id,
       leagueStrength,
@@ -3231,7 +3256,11 @@ import {
       seasonNumber: 1,
       seasonLog: [],
       totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, sacks:0, proBowls:0, allPros:0, mvps:0, rings:0, earnings:0, rushYards:0, rushTd:0,
-        bb:0, ab:0, hbp:0, sf:0, doubles:0, triples:0, sb:0, cs:0, rbi:0, runs:0 },
+        bb:0, ab:0, hbp:0, sf:0, doubles:0, triples:0, sb:0, cs:0, rbi:0, runs:0,
+        // Phase 16: career pitching accumulation (nested so it can never collide with a batter
+        // total key and migrates as a single presence check). cyYoungs sits alongside the shared
+        // proBowls/allPros/mvps counters that resolveSeason* increments.
+        pitching: { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0 } },
       contract: { apy: rookieApy, years: 6, tier: "rookie" },
       badStreak: 0,
       forcedOut: false,
@@ -3384,7 +3413,7 @@ import {
     career.tempBoosts = career.tempBoosts.filter(b=>b.seasonsLeft>0);
   }
   function effectiveAttr(key, age){
-    const group = ATTR_BY_KEY[key].group;
+    const group = (ATTR_BY_KEY[key] || PITCH_ATTR_BY_KEY[key]).group;
     const boosted = clamp(build[key] + activeBoostDelta(key), 10, 99);
     if(key==="DUR"){
       const mult = age<=33 ? 1 : clamp(1-(age-33)*0.03, 0.55, 1);
@@ -7377,7 +7406,300 @@ import {
     }
   }
 
+  /* ================= Phase 16: the player's pitcher season =================
+     A pitcher career runs through generatePitcherSeason() instead of the hitter block below. It
+     reuses every shared piece -- the schedule, resolvePlayoffs, the whole league simulation
+     (rivals / lineups / free agency / awards / team drift), events, wear -- and swaps only the
+     player's own stat line for a mound model built on src/sim/pitching.js. The hitter path
+     (generateSeason's main body) is completely untouched, so no existing seeded career shifts. */
+
+  // The player's pitching tools this season: the 12-tool build run through the pitcher age curves
+  // (effectiveAttr already handles the stuff/command/makeup groups), collapsed by
+  // PITCHER_OVERALL_WEIGHTS. 0-99, neutral 65.
+  function pitcherEffectiveBuild(age){
+    const eff = {};
+    PITCH_ATTR_KEYS.forEach(k=> eff[k] = effectiveAttr(k, age));
+    return eff;
+  }
+  function pitcherTalentNow(age){
+    return clamp(Math.round(pitcherOverall(pitcherEffectiveBuild(age))), 15, 99);
+  }
+  // The 0-99 "how much the player lifts his team" number resolvePlayoffs / the shared game sim
+  // read. For a pitcher this stands in on the offense side as a first approximation of "an ace
+  // wins games"; 16d routes pitching properly to the run-prevention side.
+  function computePitcherEffOverall(age){
+    const talent = pitcherTalentNow(age);
+    return clamp(58 + (talent - 65) * 0.95, 30, 96);
+  }
+
+  // Light pitcher development: a per-season nudge on the 12 tools, shaped by the tool group's age
+  // profile, scaled by workload and coaching. Mutates `build` in place, same contract as
+  // developAttributes. (A fuller model -- earned breakthroughs, bust risk -- is a later pass.)
+  function developPitcherAttributes(season){
+    if(career.age > 41) return;
+    const reps = clamp((season.games||0) / (career.pitcherRole==="SP" ? 30 : 58), 0.25, 1.15);
+    const coachMult = clamp(0.82 + (safeNum(career.coaching,60)-60)*0.006, 0.7, 1.28);
+    PITCH_ATTR_KEYS.forEach(k=>{
+      if(k==="DUR" || !Number.isFinite(build[k])) return;
+      const grp = PITCH_ATTR_BY_KEY[k].group;
+      const base = grp==="stuff"   ? (career.age<=25 ? 0.65 : career.age<=28 ? 0.05 : -0.95)
+                 : grp==="command" ? (career.age<=30 ? 0.72 : career.age<=34 ? 0.18 : -0.5)
+                 :                    (career.age<=31 ? 0.4  : -0.35);
+      const delta = base * reps * coachMult * (0.55 + Math.random()*0.95);
+      build[k] = clamp(Math.round(build[k] + delta), 15, 99);
+    });
+  }
+
+  // The player's real per-week log for the shared standings board + his own box scores. Mirrors
+  // simulateRegularSeasonGames: every scheduled week for career.teamId gets one entry. Weeks the
+  // player pitches get a real simulateGameScore (his start lifts the team's run prevention) plus a
+  // pitching line; every other week is resolved on team quality alone with no personal line.
+  function simulatePitcherScheduleGames({ schedule, line, role, decade }){
+    const mySlots = schedule.weeks.map((pairs, wIdx)=>{
+      const pair = pairs.find(g=>g.a===career.teamId || g.b===career.teamId);
+      if(!pair) return null;
+      return { week:wIdx+1, opponentId: pair.a===career.teamId ? pair.b : pair.a,
+        seriesId:pair.seriesId, gameInSeries:pair.gameInSeries, seriesLen:pair.seriesLen };
+    }).filter(Boolean);
+    const N = mySlots.length;
+    const isStarter = role === "SP";
+
+    // which slots the player appears in
+    const myApp = new Set();
+    if(isStarter){
+      const targetStarts = clamp(line.gs, 0, N);
+      const step = N / Math.max(1, targetStarts);
+      for(let i=0;i<targetStarts;i++) myApp.add(Math.min(N-1, Math.round(i*step + (i%2)*0.5)));
+    } else {
+      shuffle(mySlots.map((_,i)=>i)).slice(0, clamp(line.gp, 0, N)).forEach(i=>myApp.add(i));
+    }
+    const appCount = Math.max(1, myApp.size);
+    const ipShares = distributeAcrossGames(Math.round(line.ip*10), appCount).map(x=>x/10);
+    const kShares  = distributeAcrossGames(line.k, appCount);
+    const bbShares = distributeAcrossGames(line.bb, appCount);
+    const hShares  = distributeAcrossGames(line.h, appCount);
+    const erShares = distributeAcrossGames(line.er, appCount);
+    const hrShares = distributeAcrossGames(line.hr, appCount);
+
+    const myOffBase = clamp(58 + (safeNum(career.teamStrength,62)-65), 30, 96);
+    const genericWinProb = clamp(0.5 + (career.teamStrength-65)*0.01, 0.12, 0.88);
+    const tieProbFlat = tieProbability(career.year);
+    const tieProbConditional = tieStayProbability(career.year);
+    // the pitcher's run-prevention grade for a start, from this season's ERA+
+    const pRunPrev = clamp(56 + (line.eraPlus - 100) * 0.34, 26, 99);
+
+    const games = [];
+    let teamWins=0, teamLosses=0, teamTies=0, pw=0, pl=0, nd=0, sv=0, hld=0, qs=0, cg=0, sho=0, appOrder=0;
+    mySlots.forEach((slot, idx)=>{
+      const oppId = slot.opponentId;
+      const oppGrade = career.leagueStrength[oppId] ?? 60;
+      const oppRival = rivalForTeam(oppId);
+      const baseEntry = {
+        week:slot.week, seriesId:slot.seriesId, gameInSeries:slot.gameInSeries, seriesLen:slot.seriesLen,
+        opponentId:oppId, opponentName:teamNameAt(oppId, career.year), opponentGrade:Math.round(oppGrade),
+        opponentQbId: oppRival?oppRival.id:null, opponentQbName: oppRival?oppRival.name:null,
+        opponentQbOverall: oppRival?rivalEffTalent(oppRival):null,
+        comp:0, att:0, yards:0, td:0, int:0, sacks:0, bb:0, rushAtt:0, rushYards:0, rushTd:0,
+      };
+      if(!myApp.has(idx)){
+        const isTie = Math.random() < tieProbFlat;
+        const won = !isTie && Math.random() < genericWinProb;
+        if(isTie) teamTies++; else if(won) teamWins++; else teamLosses++;
+        let winnerScore, loserScore;
+        if(isTie){ const s = approxGameScore(Math.max(career.teamStrength,oppGrade), Math.min(career.teamStrength,oppGrade)); winnerScore = loserScore = Math.round((s.winnerScore+s.loserScore)/2); }
+        else ({ winnerScore, loserScore } = approxGameScore(won?career.teamStrength:oppGrade, won?oppGrade:career.teamStrength));
+        games.push({ ...baseEntry, won: isTie?null:won, tie:isTie,
+          myScore: isTie?winnerScore:(won?winnerScore:loserScore), oppScore: isTie?loserScore:(won?loserScore:winnerScore),
+          startedByBackup:true, pitched:false });
+        return;
+      }
+      const gi = appOrder++;
+      const gIp = ipShares[gi] || 0, gK = kShares[gi]||0, gBB = bbShares[gi]||0, gH = hShares[gi]||0, gER = erShares[gi]||0, gHR = hrShares[gi]||0;
+      const myDef = Math.round(clamp(safeNum(career.defense,60)*0.42 + pRunPrev*0.58, 20, 99));
+      const oppOffense = opponentOffenseGrade(oppId, QB_INFLUENCE_REGULAR);
+      const scoreSim = simulateGameScore(myOffBase, oppOffense, myDef, tieProbConditional, career.year, false, opponentDefenseGrade(oppId));
+      const isTie = !!scoreSim.tie, won = scoreSim.won;
+      if(isTie) teamTies++; else if(won) teamWins++; else teamLosses++;
+      bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won: isTie?false:won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
+      let decision = "ND";
+      if(isStarter){
+        if(gIp>=9 && !isTie){ cg++; if(gER===0) sho++; }
+        if(won && gIp>=5){ decision="W"; pw++; }
+        else if(!won && !isTie && gIp>=4 && gER >= Math.max(2, Math.ceil(scoreSim.oppTotal*0.55))){ decision="L"; pl++; }
+        else nd++;
+        if(gIp>=6 && gER<=3) qs++;
+      } else {
+        const margin = Math.abs(scoreSim.myTotal - scoreSim.oppTotal);
+        if(won && role==="CL" && margin<=3){ decision="SV"; sv++; }
+        else if(won && role!=="CL"){ decision="HLD"; hld++; }
+        else if(!won && !isTie && Math.random()<0.14){ decision="L"; pl++; }
+        else if(won && Math.random()<0.16){ decision="W"; pw++; }
+        else nd++;
+      }
+      games.push({ ...baseEntry, won: isTie?null:won, tie:isTie, myScore:scoreSim.myTotal, oppScore:scoreSim.oppTotal,
+        innings: { my:(scoreSim.quarters||[]).map(q=>q.myQ), opp:(scoreSim.quarters||[]).map(q=>q.oppQ) },
+        pitched:true, decision, ip:Math.round(gIp*10)/10, h:gH, er:gER, k:gK, bbAllowed:gBB, hrAllowed:gHR });
+    });
+    return { games, teamWins, teamLosses, teamTies, pw, pl, nd, sv, hld, qs, cg, sho, started: myApp.size };
+  }
+
+  function generatePitcherSeason(){
+    const decade = decadeForYear(career.year);
+    const league = LEAGUE[decade];
+    applyOrRefreshPedBoost();
+    const developmentPlan = prepareDevelopmentPlanForSeason();
+    applyCoordinatorCarouselIfDue();
+    const schedule = buildSeasonSchedule(career.year, decade);
+
+    // injury / suspension capture (same flags the hitter path reads), then reset
+    const missedGamesInjury = career._injuryMissedGames || 0;
+    const missedGamesSuspension = career._suspensionMissedGames || 0;
+    const hadInjuryThisSeason = !!career._hadInjuryThisSeason;
+    career._injuryMissedGames = 0; career._suspensionMissedGames = 0; career._injuryPenalty = 0; career._hadInjuryThisSeason = false;
+    career._backupMissedGames = 0; career._backupIncumbentWins = 0; career._backupIncumbentLosses = 0;
+    career._backupIncumbentName = null; career._backupIncumbentSeasonSnapshot = null;
+
+    let debutCallup = 0;
+    if(career.seasonLog.length===0 && league.games>=100){
+      const cuRand = createSeededRandom(hashSeed("callup:" + (career.name||"") + ":" + career.draftYear));
+      if(cuRand() < 0.6) debutCallup = clamp(35 + Math.floor(cuRand()*46), 0, league.games - 40);
+    }
+    const missedGames = missedGamesInjury + missedGamesSuspension;
+    const role = career.pitcherRole || "SP";
+    // a full slate is ~32 starts / ~65 relief outings; injury + a late debut scale it down
+    const fullApp = role==="SP" ? (PITCH_LEAGUE[decade]||PITCH_LEAGUE["2000s"]).startsFull : (role==="CL" ? 62 : 70);
+    const availabilityShare = clamp(1 - (missedGames + debutCallup) / league.games, 0.12, 1);
+
+    const talent = pitcherTalentNow(career.age);
+    const effOverall = computePitcherEffOverall(career.age);
+    // the season aggregate (rate stats + workload); the schedule walk below is the source of truth
+    // for W/L/SV/QS since those track the actual game outcomes.
+    const line = simulatePitcherLine({ talent, age: career.age, decade, role,
+      teamGrade: safeNum(career.teamStrength, 62), availabilityShare });
+    const perfPenalty = career._injuryPenalty || 0;
+    if(perfPenalty){ line.era = Math.round(line.era * (1 + perfPenalty*0.012) * 100)/100; line.eraPlus = Math.round((PITCH_LEAGUE[decade]||PITCH_LEAGUE["2000s"]).era * 100 / line.era); }
+
+    const reg = simulatePitcherScheduleGames({ schedule, line, role, decade });
+    const gpTotal = reg.started;
+    const pw = reg.pw, pl = reg.pl, sv = reg.sv, hld = reg.hld, qs = reg.qs;
+    const winPct = (pw + pl) > 0 ? pw/(pw+pl) : 0.5;
+    const rating = line.eraPlus;
+
+    const season = {
+      year: career.year, age: career.age, teamId: career.teamId, teamName: teamNameAt(career.teamId, career.year),
+      position: "P", pitcherRole: role, isPitching: true,
+      _pedSeason: !!career._pedUsing,
+      decade, games: gpTotal,
+      // pitching line
+      gs: Math.min(line.gs, gpTotal || line.gs), gp: gpTotal, ip: line.ip,
+      w: pw, l: pl, sv, hld, qs, cg: reg.cg, sho: reg.sho,
+      k: line.k, bbAllowed: line.bb, hAllowed: line.h, hrAllowed: line.hr, er: line.er,
+      era: line.era, whip: line.whip, eraPlus: line.eraPlus, fip: line.fip,
+      k9: line.k9, bb9: line.bb9, hr9: line.hr9, kbbRatio: line.kbbRatio,
+      rating, opsPlus: null,
+      // neutral hitter aliases so shared standings/awards/render code never reads a NaN
+      comp:0, att:0, pct:0, yards:0, td:0, int:0, sacks:0, rushAtt:0, rushYards:0, rushTd:0,
+      pa:0, ab:0, hits:0, singles:0, doubles:0, triples:0, hr:0, bb:0, hbp:0, sf:0,
+      sb:0, cs:0, rbi:0, runs:0, avg:0, obp:0, slg:0, ops:0,
+      wins: pw, losses: pl, ties: 0, gameLog: reg.games,
+      teamGames: league.games, teamWins: reg.teamWins, teamLosses: reg.teamLosses, teamTies: reg.teamTies,
+      missedGames, missedGamesInjury, missedGamesSuspension, missedGamesBackup: 0, debutCallup,
+      incumbentName: null, incumbentSeasonSnapshot: null,
+      teamOverall: career.teamStrength, overall: Math.round(effOverall),
+      teamChemistry: career.teamChemistry ?? 50, developmentPlanId: developmentPlan.id,
+      awards: [], proBowlScore:0, proBowlEligible:false, allProScore:0, allProEligible:false, mvpScore:0, mvpEligible:false,
+      contractApy: career.contract.apy, contractTier: career.contract.tier,
+    };
+
+    const playoffs = resolvePlayoffs(effOverall, season, schedule);
+    season.playoffs = playoffs;
+
+    career.seasonLog.push(season);
+    spawnNewFranchiseRivals(career.year);
+    simulateRivalSeasons(decade, league, career.year);
+    simulateLineupSeasons(decade, league, career.year);
+    simulateDepthChartSeasons(decade, league, career.year);
+    rollVeteranFreeAgency(decade, career.year);
+    rollLineupFreeAgency(career.year);
+    TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateSuccession(t.id, decade, career.year));
+    TEAMS.filter(t=>t.id!==career.teamId && t.start<=career.year).forEach(t=> evaluateBenchMobility(t.id, decade, career.year));
+    resolveFreeAgentPool(decade, career.year);
+    const mvp = resolveSeasonMVP(season, career.year);
+    const { proBowl, allPro } = resolveSeasonAllProAndProBowl(season, career.year);
+    resolveSeasonStatTitlesAndROY(season, career.year);
+    { const _pd = POSITIONS.find(p=>p.key===career.position); if(_pd && _pd.defWeight>0 && (season.pa||0)>=380) Math.random(); }
+    resolveGoldGlovesByPosition(season, career.year);
+    (season.awards||[]).forEach(a=>{
+      if(a==="MVP"||a==="All-Star"||a==="Silver Slugger"||a==="Rookie of the Year"||a==="Cy Young") recordLedgerEvent("award_won", { teamId: season.teamId, outcomeId: a });
+    });
+
+    const volMult = ERA_TEAM_VOLATILITY[decade] ?? 1.0;
+    career.leagueRivals.forEach(r=>{
+      const justSeason = r.seasons.length ? r.seasons[r.seasons.length-1] : null;
+      if(!justSeason || justSeason.year!==career.year) return;
+      const s = career.leagueStrength[r.teamId] ?? 60;
+      let nudge = randInt(-2,2)*volMult;
+      nudge -= contenderDeclinePull(s)*volMult;
+      nudge += rebuildPull(s)*volMult;
+      adjustTeamStrength(r.teamId, Math.round(nudge), 2);
+    });
+    rollLeagueNews(career.year, decade);
+    const teamNoise = randInt(-2,2)*volMult;
+    const teamDeclinePull = Math.round(contenderDeclinePull(safeNum(career.teamStrength,60))*volMult);
+    const teamRebuildPull = Math.round(rebuildPull(safeNum(career.teamStrength,60))*volMult);
+    adjustTeamStrength(career.teamId, Math.round(teamNoise) - teamDeclinePull + teamRebuildPull, 2);
+    reconcileTeamLineups(career.year);
+    recomputeLineupGrades(career.year);
+    applyCapPressureToRoster();
+
+    // wear economy -- pitcher stuff keys take the permanent hit
+    const ageWear = career.age>25 ? (career.age-25)*1.0 : 0.6;
+    const durRelief = (safeNum(build.DUR,60)-65)*0.04;
+    const seasonWear = clamp(ageWear - durRelief + (role==="SP"?0.6:0), 0.3, 8);
+    career.wearAndTear = clamp((career.wearAndTear||0) + seasonWear, 0, 100);
+    if(!hadInjuryThisSeason){
+      career.wearAndTear = clamp(career.wearAndTear - (career.age<28 ? 2.6 : 1.0), 0, 100);
+    }
+    if(career.wearAndTear > 45){
+      const breakdownChance = clamp((career.wearAndTear-45)*0.013, 0, 0.42);
+      if(Math.random() < breakdownChance){
+        const hurtable = ["VELO","FBL","BRK","CHG"].filter(k=>Number.isFinite(build[k]) && build[k]>18);
+        if(hurtable.length){
+          const hitKeys = shuffle(hurtable).slice(0, randInt(1,2));
+          hitKeys.forEach(k=>{ build[k] = clamp(build[k]-randInt(2,6), 15, 99); });
+          career.wearAndTear = clamp(career.wearAndTear - 22, 0, 100);
+          season.wearBreakdown = { keys: hitKeys.slice() };
+          const keyLabels = hitKeys.map(k=>(PITCH_ATTR_BY_KEY[k]||{}).label||k).join(" and ");
+          career.transactions.push(`${career.year}: An arm that's thrown too many innings — a permanent decline in ${keyLabels}.`);
+        }
+      }
+    }
+
+    career.totals.games += gpTotal;
+    career.totals.earnings += career.contract.apy;
+    const pt = career.totals.pitching || (career.totals.pitching = { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0 });
+    pt.gs += season.gs; pt.gp += gpTotal; pt.ip = Math.round((pt.ip + line.ip)*10)/10;
+    pt.w += pw; pt.l += pl; pt.sv += sv; pt.hld += hld;
+    pt.k += line.k; pt.bb += line.bb; pt.h += line.h; pt.hr += line.hr; pt.er += line.er;
+    pt.qs += qs; pt.cg += reg.cg; pt.sho += reg.sho;
+
+    checkAchievements();
+    if(!career.peakSeason || rating > (career.peakSeason.rating||0)) career.peakSeason = season;
+    career.reputation = clamp(career.reputation + (mvp?8:0) + (allPro?4:0) + (proBowl?2:0)
+      + (winPct>=0.62?1:winPct<=0.34?-2:0) + (line.eraPlus>=140?2:line.eraPlus<=82?-2:0), 0, 100);
+    career.gmRelationship = clamp((career.gmRelationship ?? 50) + (mvp?4:0) + (allPro?2:0) + (line.eraPlus>=125?2:line.eraPlus<=85?-3:0), 0, 100);
+    career.fanSupport = clamp((career.fanSupport ?? 50) + (mvp?5:0) + (proBowl?2:0) + (line.eraPlus>=125?3:line.eraPlus<=85?-4:0), 0, 100);
+    career.leaguePopularity = clamp((career.leaguePopularity ?? 50) + (mvp?7:0) + (allPro?3:0) + (proBowl?1:0) - (line.eraPlus<=80?2:0), 0, 100);
+
+    career.seasonsWithTeam++;
+    career.contract.years--;
+    tickTempBoosts();
+    developPitcherAttributes(season);
+    return season;
+  }
+
   function generateSeason(){
+    if(career.path === PATH_PITCHER) return generatePitcherSeason();
     const decade = decadeForYear(career.year);
     const league = LEAGUE[decade];
     maybeShiftPositionWithAge();
@@ -12160,11 +12482,16 @@ import {
     if(career.seasonsWithTeam===1 && career.seasonNumber>1) narratives.push(`First season in a new uniform with the ${season.teamName}.`);
     if(season.contractTier==="minimum") narratives.push(`A minimum-deal roster spot — every snap has to be earned.`);
     else if(season.contractTier==="backup") narratives.push(`A backup-caliber deal — the job isn't guaranteed week to week.`);
-    if(season.wins/Math.max(1,season.games) >= 0.75) narratives.push(`One of the best rooms in the league all year.`);
-    if(season.wins/Math.max(1,season.games) <= 0.25 && season.games>4) narratives.push(`A rough year up front — the offense never found its footing.`);
+    if(!season.isPitching && season.wins/Math.max(1,season.games) >= 0.75) narratives.push(`One of the best rooms in the league all year.`);
+    if(!season.isPitching && season.wins/Math.max(1,season.games) <= 0.25 && season.games>4) narratives.push(`A rough year up front — the offense never found its footing.`);
+    if(season.isPitching){
+      if(season.eraPlus>=150) narratives.push(`An ace's season — one of the best arms in the league by run prevention.`);
+      else if(season.eraPlus<=82 && season.ip>60) narratives.push(`A year to forget on the mound — the ERA sat well above league average all season.`);
+      if((season.cg||0)>=3) narratives.push(`${season.cg} complete game${season.cg===1?"":"s"} — a genuine workhorse in an era that barely has them.`);
+    }
     if(career.age>=agingVetThreshold()) narratives.push(`Father Time is undefeated — with a durability grade like this, every season from here is borrowed time.`);
     if(season.wearBreakdown){
-      const keyLabels = season.wearBreakdown.keys.map(k=>(ATTR_BY_KEY[k]||{}).label||k).join(" and ");
+      const keyLabels = season.wearBreakdown.keys.map(k=>(ATTR_BY_KEY[k]||PITCH_ATTR_BY_KEY[k]||{}).label||k).join(" and ");
       narratives.push(`⚠ The wear finally caught up with him this year — a permanent decline in ${keyLabels}. Playing through pain has a real cost.`);
     }
 
@@ -12173,7 +12500,9 @@ import {
       ? `<span class="badge good">Made the playoffs</span> — <b>#${p.seed} seed</b>, ${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}, #${p.confRank} of ${p.confSize} in the conference.`
       : `Missed the playoffs — ${recordLine(season.teamWins, season.teamLosses, season.teamTies||0)}, #${p.confRank} of ${p.confSize} in the conference.`;
     const missedW = (season.teamWins||0)-(season.wins||0), missedL = (season.teamLosses||0)-(season.losses||0);
-    const recordNote = season.debutCallup
+    const recordNote = season.isPitching
+      ? `<div class="record-note">On the mound he went <b>${season.w||0}-${season.l||0}</b> with a <b>${(season.era||0).toFixed(2)}</b> ERA over <b>${(season.ip||0).toFixed(1)}</b> innings${season.pitcherRole==="CL"?` and <b>${season.sv||0}</b> saves`:` across <b>${season.gs||0}</b> starts`}.</div>`
+      : season.debutCallup
       ? `<div class="record-note">Called up after ${season.debutCallup} game${season.debutCallup===1?"":"s"} in Triple-A — you played <b>${season.games}</b> of the team's ${season.teamGames}, going <b>${recordLine(season.wins, season.losses, season.ties||0)}</b> once you were up.</div>`
       : (missedW+missedL) >= 3
       ? `<div class="record-note">With you in the lineup the team went <b>${recordLine(season.wins, season.losses, season.ties||0)}</b>; in the ${missedW+missedL} game${missedW+missedL===1?"":"s"} you missed, ${recordLine(missedW, missedL, (season.teamTies||0)-(season.ties||0))}.</div>`
@@ -12195,6 +12524,7 @@ import {
       playoffRoundsHtml = `<div id="playoffRoundsHolder"></div>`;
     }
 
+    const isPitchingSeason = !!season.isPitching;
     const fmtAvg3 = v => (v||0).toFixed(3).replace(/^0/,"");
     const rushMini = (season.sb||0)>0
       ? `<span>SB <b class="tabular">${season.sb}${(season.cs||0)>0?`-${season.cs} CS`:""}</b>${recBy.sb?recordBadgeHtml(recBy.sb):""}${simBy.sb?simBestBadgeHtml(simBy.sb):""}</span>` : "";
@@ -12253,6 +12583,21 @@ import {
           </div>
 
           <div class="dash-tabpanel active" id="tabpanel-season">
+            ${isPitchingSeason ? `
+            <div class="widget-grid">
+              <div class="stat-widget"><span class="sw-label">ERA</span><span class="sw-value good tabular">${(season.era||0).toFixed(2)}</span><span class="sw-sub">${(season.whip||0).toFixed(2)} WHIP · ${(season.fip||0).toFixed(2)} FIP</span></div>
+              <div class="stat-widget"><span class="sw-label">Record</span><span class="sw-value tabular">${season.w||0}-${season.l||0}</span><span class="sw-sub">${season.pitcherRole==="CL"?`${season.sv||0} SV`:`${season.qs||0} QS`} · ${season.gs||0} GS</span></div>
+              <div class="stat-widget"><span class="sw-label">Strikeouts</span><span class="sw-value tabular">${season.k||0}</span><span class="sw-sub">${(season.k9||0).toFixed(1)} K/9 · ${(season.bb9||0).toFixed(1)} BB/9</span></div>
+              <div class="stat-widget"><span class="sw-label">ERA+</span><span class="sw-value tabular">${season.eraPlus||season.rating}</span><span class="sw-sub">100 = league avg</span></div>
+            </div>
+            <div class="mini-stat-row">
+              <span>IP <b class="tabular">${(season.ip||0).toFixed(1)}</b></span>
+              <span>H <b class="tabular">${season.hAllowed||0}</b></span>
+              <span>BB <b class="tabular">${season.bbAllowed||0}</b></span>
+              <span>HR <b class="tabular">${season.hrAllowed||0}</b></span>
+              ${(season.cg||0)>0?`<span>CG <b class="tabular">${season.cg}</b></span>`:""}
+              ${(season.sho||0)>0?`<span>SHO <b class="tabular">${season.sho}</b></span>`:""}
+            </div>` : `
             <div class="widget-grid">
               <div class="stat-widget"><span class="sw-label">Average</span><span class="sw-value tabular"><span class="sw-num" id="swNumYards" data-final="${(season.avg||0).toFixed(3)}" data-kind="avg3">${fmtAvg3(season.avg)}</span></span><span class="sw-sub">${fmtAvg3(season.obp)} OBP · ${fmtAvg3(season.slg)} SLG</span></div>
               <div class="stat-widget"><span class="sw-label">Home Runs</span><span class="sw-value good tabular"><span class="sw-num" id="swNumTd" data-final="${season.hr||season.td}" data-kind="int">${season.hr||season.td}</span>${recBy.hr?recordBadgeHtml(recBy.hr):""}${simBy.hr?simBestBadgeHtml(simBy.hr):""}</span><span class="sw-sub">${season.rbi||0} RBI · ${season.runs||0} R</span></div>
@@ -12264,7 +12609,7 @@ import {
               <span>PA <b class="tabular">${season.pa||season.att}</b></span>
               ${rushMini}
               ${sacksMini}
-            </div>
+            </div>`}
             <div class="badge-row" id="badgeRow">${badges}</div>
             ${narratives.map(n=>`<div class="narrative">${n}</div>`).join("")}
             <div class="standings-block">
@@ -13564,7 +13909,28 @@ import {
     restoreRandom();
     currentMultiplayerContext = null;
     const careerRecBy = {}; checkCareerRecords(t).forEach(r=> careerRecBy[r.key]=r);
-    document.getElementById("totalsGrid").innerHTML = [
+    const isPitcherCareer = career.path === PATH_PITCHER;
+    const pT = t.pitching || {};
+    const careerEra = (pT.ip||0)>0 ? (9*(pT.er||0)/pT.ip) : 0;
+    const careerWhip = (pT.ip||0)>0 ? ((pT.bb||0)+(pT.h||0))/pT.ip : 0;
+    document.getElementById("totalsGrid").innerHTML = (isPitcherCareer ? [
+      ["Seasons", career.seasonLog.length],
+      ["Career Earnings", fmtMoney(t.earnings)],
+      ["Record", `${pT.w||0}-${pT.l||0}`],
+      ["ERA", careerEra.toFixed(2)],
+      ["WHIP", careerWhip.toFixed(2)],
+      ["Innings", Math.round(pT.ip||0).toLocaleString()],
+      ["Strikeouts", (pT.k||0).toLocaleString()],
+      ["Walks", (pT.bb||0).toLocaleString()],
+      ["Starts", (pT.gs||0).toLocaleString()],
+      ["Saves", (pT.sv||0).toLocaleString()],
+      ["Complete Games", (pT.cg||0).toLocaleString()],
+      ["Shutouts", (pT.sho||0).toLocaleString()],
+      ["All-Star Games", t.proBowls],
+      ["Cy Youngs", pT.cyYoungs||0],
+      ["MVPs", t.mvps],
+      ["Rings", t.rings],
+    ] : [
       ["Seasons", career.seasonLog.length],
       ["Career Earnings", fmtMoney(t.earnings)],
       ["Hits", (t.hits ?? t.comp).toLocaleString(), careerRecBy.comp],
@@ -13578,13 +13944,24 @@ import {
       ["Silver Sluggers", t.allPros],
       ["MVPs", t.mvps],
       ["Rings", t.rings],
-    ].map(([label,val,rec])=>`<div class="totals-tile"><div class="tt-label">${label}</div><div class="tt-value tabular">${val}</div>${rec?recordBadgeHtml(rec):""}</div>`).join("");
+    ]).map(([label,val,rec])=>`<div class="totals-tile"><div class="tt-label">${label}</div><div class="tt-value tabular">${val}</div>${rec?recordBadgeHtml(rec):""}</div>`).join("");
 
     document.getElementById("trophyCase").innerHTML = buildTrophyCaseHTML();
 
     const table = document.getElementById("careerTable");
     const avg3 = v => (v==null?0:v).toFixed(3).replace(/^0\./, ".");
-    table.innerHTML = `<thead><tr><th>Year</th><th>Age</th><th>Team</th><th>Pos</th><th>G</th><th>PA</th><th>H/AB</th><th>AVG</th><th>TB</th><th>HR</th><th>K</th><th>OPS+</th><th>SB</th><th>Team Rec</th><th>Playoffs</th><th>Pay</th><th>Awards</th></tr></thead>
+    table.innerHTML = isPitcherCareer
+      ? `<thead><tr><th>Year</th><th>Age</th><th>Team</th><th>W-L</th><th>ERA</th><th>G</th><th>GS</th><th>IP</th><th>H</th><th>BB</th><th>K</th><th>WHIP</th><th>ERA+</th><th>SV</th><th>Team Rec</th><th>Playoffs</th><th>Pay</th><th>Awards</th></tr></thead>
+      <tbody>${career.seasonLog.map(s=> s.isPitching ? `<tr>
+        <td>${s.year}</td><td>${s.age}</td><td class="team-cell">${s.teamName}</td>
+        <td>${s.w||0}-${s.l||0}</td><td>${(s.era||0).toFixed(2)}</td><td>${s.games}</td><td>${s.gs||0}</td><td>${(s.ip||0).toFixed(1)}</td>
+        <td>${s.hAllowed||0}</td><td>${s.bbAllowed||0}</td><td>${s.k||0}</td><td>${(s.whip||0).toFixed(2)}</td><td>${s.eraPlus||s.rating}</td><td>${s.sv||0}</td>
+        <td>${recordLine(s.teamWins, s.teamLosses, s.teamTies||0)}</td>
+        <td>${s.playoffs.made ? "Seed #"+s.playoffs.seed+(s.playoffs.wonRing?" — Champs":"") : "Missed"}</td>
+        <td>${fmtMoney(s.contractApy)}</td><td>${decorateAwards(s.awards, s).join(", ")||"—"}</td>
+      </tr>` : `<tr><td>${s.year}</td><td>${s.age}</td><td class="team-cell">${s.teamName}</td><td colspan="11" style="opacity:0.6;">position-player season</td>
+        <td>${recordLine(s.teamWins, s.teamLosses, s.teamTies||0)}</td><td>${s.playoffs.made ? "Seed #"+s.playoffs.seed : "Missed"}</td><td>${fmtMoney(s.contractApy)}</td><td>${decorateAwards(s.awards, s).join(", ")||"—"}</td></tr>`).join("")}</tbody>`
+      : `<thead><tr><th>Year</th><th>Age</th><th>Team</th><th>Pos</th><th>G</th><th>PA</th><th>H/AB</th><th>AVG</th><th>TB</th><th>HR</th><th>K</th><th>OPS+</th><th>SB</th><th>Team Rec</th><th>Playoffs</th><th>Pay</th><th>Awards</th></tr></thead>
       <tbody>${career.seasonLog.map(s=>`<tr>
         <td>${s.year}</td><td>${s.age}</td><td class="team-cell">${s.teamName}</td><td>${s.position || career.position}</td><td>${s.games}</td>
         <td>${s.pa ?? s.att}</td><td>${(s.hits ?? s.comp)}/${s.ab ?? "—"}</td><td>${avg3(s.avg ?? s.pct)}</td><td>${s.yards.toLocaleString()}</td>
