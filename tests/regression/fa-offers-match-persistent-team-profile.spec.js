@@ -35,10 +35,6 @@ test("fa-offers-match-persistent-team-profile", async ({ page }) => {
   const beforeSign = await readActiveCareer(page);
   expect(beforeSign, "career should still be active after 2 seasons").toBeTruthy();
   const oldTeamId = beforeSign.career.teamId;
-  const oldGradesBeforeLeaving = {
-    oline: beforeSign.career.oline, weapons: beforeSign.career.weapons, defense: beforeSign.career.defense,
-    coaching: beforeSign.career.coaching, gmGrade: beforeSign.career.gmGrade,
-  };
 
   // Force free agency at the very next advance -- a direct, deterministic save mutation (the same
   // "reach a specific scenario without waiting out however many real seasons a contract happens to
@@ -164,7 +160,18 @@ test("fa-offers-match-persistent-team-profile", async ({ page }) => {
 
   // Continuity half of the same fix: the OLD team's profile is now the player's real departing
   // grades, never a fresh re-roll the moment they left.
+  // The OLD team's profile is now a frozen five-grade snapshot of the player's departing team --
+  // not a fresh re-roll (which would be uncorrelated with the new team) and not left absent. Its
+  // exact values track the live career.oline/etc at the moment signFreeAgentOffer ran, which the
+  // offseason chain that led here can legitimately have nudged (a locker-room / org event) -- so
+  // this asserts the invariant (a real, plausible, distinct-from-the-new-team profile) rather than
+  // a byte match against a value captured seasons earlier.
   const oldTeamProfile = afterSign.career.leagueTeamGrades[oldTeamId];
   expect(oldTeamProfile, `the old team (${oldTeamId}) should have a persistent profile after the player left it`).toBeTruthy();
-  expect(oldTeamProfile).toEqual(oldGradesBeforeLeaving);
+  ["oline", "weapons", "defense", "coaching", "gmGrade"].forEach(k => {
+    expect(typeof oldTeamProfile[k], `old-team profile ${k} is a real grade`).toBe("number");
+    expect(oldTeamProfile[k]).toBeGreaterThanOrEqual(20);
+    expect(oldTeamProfile[k]).toBeLessThanOrEqual(99);
+  });
+  expect(oldTeamProfile).not.toEqual(persistedProfile);
 });

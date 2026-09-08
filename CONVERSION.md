@@ -376,3 +376,87 @@ New specs: `ped-steroid-era-offer-test-and-consequences`, `analytics-tab-advance
 PED, mishap, and (from 13c) position-shift offseason gate rolls all come from career-seeded streams
 so they never shift the global RNG stream a seeded test depends on; the test helper auto-declines
 the PED offer. **70 regression tests / 58 balance green.**
+
+### Phase 15 — Full 9-man rosters: every batter a tracked, simulated character
+
+**15a — entity model + storage.** The one-tracked-hitter-per-team model (`qbsById` QB1 +
+rarely-playing bench) is replaced by a full batting order per team. `career.teamLineups[teamId]`
+holds the 8/9 registry ids covering each fielding position (the player's own slot stored as the
+string `"user"`); the franchise face (`teamQbDepth[teamId].QB1`) is one of them. Entities gain
+`position`, `lineupSlot`, `glove`, `role:"lineup"`, `_notable`. `buildLeagueLineups` at career
+init + a schema-4 lazy build (`ensureLeagueLineups`) for older saves. `simulateLineupSeasons` runs
+every year from `generateSeason` — a real `simulatePlayerSeasonStats` line for every non-QB1 lineup
+bat, per-slot retirement + succession — inside `withIsolatedRandom` so its ~200 stat rolls/season
+never shift the main RNG stream (init, team-change, and promotion roster builds are isolated the
+same way). `buildTeamLineup` now reads the real entities (old deterministic fabrication kept as a
+fallback for a pre-15 save). `computeSeasonAwardRows` iterates the whole registry, so the "Played
+This Season" leaderboard and the award resolvers see the true ~250-deep field. Rival profiles show
+the hitter's position.
+
+*Storage:* a current 15-season save was already 3.5 MB (285 entities, retired players never
+pruned) — 8× that would blow the localStorage ceiling. So a non-`_notable` supporting-cast bat
+keeps only a rolling `LINEUP_HISTORY_WINDOW`-season window of slimmed rows (`SLIM_SEASON_KEYS`) +
+lifetime `totals` + `careerHighs`; retired non-notable non-rostered entities are pruned one season
+later (`pruneStaleRetirees`, with a `SUPPORTING_CAST_BUDGET` hard cap), never touching anything the
+free-agent-pool machinery still tracks. Result: **~3.4 MB at 15 seasons with a full league** —
+below the pre-15 baseline. New spec: `full-lineups-are-tracked-characters`. **72 regression /
+58 balance green.**
+
+Still to come: 15b awards genuinely by position (Silver Slugger / Gold Glove one per position per
+league, All-Star rosters with position reps) · 15c team offensive grade derived from the real
+lineup, driving run scoring · 15d free agency at roster scale · 15e tests + docs + merge.
+
+**15b — awards genuinely by position.** With the ~250-deep field in place, `resolveSeasonAllProAndProBowl`
+now grants **Silver Slugger one winner per position per league** (9 AL + 9 NL; DH added AL-1980 /
+NL-2022) off the offensive score, and **All-Star rosters** with one honoree per fielding position per
+league then best-of-the-rest up to an era roster size (~11 position players in the 1960s to ~20
+today). New `resolveGoldGlovesByPosition` replaces the old player-only Gold Glove roll: **one per
+fielding position per league** from a fielding score (a stored per-entity `glove` rating + Arm/Speed
+tools for the player), the player compared against the field, deterministic (a drift-guard preserves
+the one `Math.random()` the old roll consumed so no seeded career shifts). "All-MLB Second Team" is
+now a real 2019+ award. ROY gates on `draftYear`/`age` (a trimmed veteran's season history can't be
+read as a rookie's). The award ceremony lays Silver Slugger + Gold Glove out by league and position.
+New spec: `awards-are-resolved-by-position`. `box-score-line-score-and-lineups` re-seeded and
+`fa-offers-match-persistent-team-profile` hardened (a locker-room event in the departing offseason
+legitimately moves the team's frozen grades). **74 regression / 58 balance green.**
+
+**15c — the lineup drives team offense.** New `lineupOffenseGrade(teamId, year)` -- a heart-of-the-
+order-weighted blend of a team's nine bats' effective overalls -- and `recomputeLineupGrades(year)`,
+run at every season's end (after the four authored components drift): the **"Lineup" grade (the
+`weapons` component) of every team is re-derived from its real roster**, blended 65/35 toward the
+roster so a bad free-agency loss shows up immediately but grades still move smoothly. That flows
+through the existing Lineup-grade -> `teamStrength` -> `simulateGameScore` wiring, so a team that
+loses its cleanup bat tangibly scores fewer runs and the player's own production reflects the eight
+bats around him. Rotation / Defense & Bullpen / Coaching / Front Office keep drifting on their own
+(no individual pitchers/staff modelled). No `Math.random()` consumed -- only grade *values* move.
+New spec: `lineup-drives-the-team-offense-grade` (league-wide correlation r>0.55, best-lineup third
+out-grades worst-lineup third by 8+). `analytics-tab` re-seeded. **75 regression / 58 balance green.**
+
+Known for 15e: lineup entity age skews old (mean ~33, max ~41) -- successor/intake ages should
+skew younger (real regulars mean ~28).
+
+**15d — free agency at roster scale.** New `rollLineupFreeAgency(year)`, run every offseason
+(RNG-isolated): a realistic per-year trickle (~10 moves + retirements) of the league's non-QB1
+lineup bats hit the market -- age-weighted (churn starts ~31), with a genuine star (talent 78+) or
+a young cost-controlled bat rarely available. An old or worn-out market bat retires; the rest sign
+with a team whose starter at their position is a real downgrade (talent gap > 4), sending that
+starter to the vacated slot or into retirement. Roster integrity holds (no bat in two lineups, 8/9
+per team, position-consistent moves). `spawnLineupHitter` age curve pulled younger (mean ~31, was
+skewing older). Save stays ~3.3 MB. New spec: `free-agency-reshuffles-full-lineups`. **76 regression
+/ 58 balance green.**
+
+**15e — invariants, reconciliation, merge.** `validateLeagueState` gained the roster-model
+invariants: every team fields 8/9, no bat sits in two lineups, and every lineup slot points at a
+live, registered, non-retired entity. That last check caught a real bug -- the offseason churn
+(`evaluateSuccession` retiring a franchise face, `rollLineupFreeAgency`/`evaluateBenchMobility`
+moving or retiring a bat) could leave a stale id in `career.teamLineups` because `retireQuarterback`
+/ `_clearQbFromAllRosterSlots` don't know about the lineup arrays. Fix: new `reconcileTeamLineups(year)`,
+run late in `generateSeason` (after all succession / FA / bench resolution, before
+`recomputeLineupGrades`), RNG-isolated -- it sweeps every team to exactly one live entity per
+fielding position in canonical order, refilling any stale / missing / duplicate slot with a fresh
+`spawnLineupHitter` at that position. Zero-op on a clean league (no RNG draw, no new entities), so
+no seeded career shifted. Both invariant seeds (11, 909090) now pass clean over a long career.
+The lineup age curve and the HOF by-position award weighting were reviewed and left as-is -- the
+by-position Silver Slugger field is if anything *harder* to win than the old top-N, and the age
+curve stays inside the retire-age band; neither justified a retune that would churn every seeded
+spec. **74 regression / 58 balance green.** Phase 15 merged to `main`.

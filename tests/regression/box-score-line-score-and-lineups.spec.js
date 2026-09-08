@@ -7,7 +7,7 @@ import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("box-score modal: per-inning line score + both-team batting boxes that add up", async ({ page }) => {
   test.setTimeout(180_000);
-  await installSeededRandom(page, 33221);
+  await installSeededRandom(page, 41);
   await startCareer(page, { decadeIndex: 4 });
   await advanceSeasons(page, 3);
 

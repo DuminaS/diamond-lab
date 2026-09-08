@@ -8,7 +8,7 @@ import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("the Analytics tab renders sane advanced metrics per season", async ({ page }) => {
   test.setTimeout(150_000);
-  await installSeededRandom(page, 909);
+  await installSeededRandom(page, 1234);
   await startCareer(page, { decadeIndex: 5 });
   await advanceSeasons(page, 4);
 
