@@ -33,6 +33,7 @@ import {
   developmentBaseForOverall,
   developmentCoachingMultiplier,
   developmentPlanFor,
+  developmentPlanText,
   developmentSpeedTag as devSpeedTag,
   developmentSwingChance,
   earnedBreakthroughChance,
@@ -2311,9 +2312,49 @@ import {
       setTimeout(()=> URL.revokeObjectURL(url), 1000);
     }catch(e){}
   }
+  // Restore a career from a downloaded backup file: validate the envelope, write it to the solo
+  // active-career key, and reload so the normal migrate/resume flow picks it up.
+  function restoreSaveFromFile(file, onResult){
+    if(!file){ onResult && onResult(false, "No file chosen."); return; }
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      let env;
+      try{ env = JSON.parse(String(reader.result)); }catch(e){ onResult && onResult(false, "That file isn't valid JSON."); return; }
+      if(!env || typeof env!=="object" || !env.career || !env.career.seasonLog){
+        onResult && onResult(false, "That doesn't look like a Diamond Lab save."); return;
+      }
+      try{
+        if(env.schemaVersion==null) env.schemaVersion = SAVE_SCHEMA_VERSION;
+        store.setItem(SOLO_ACTIVE_CAREER_KEY, JSON.stringify(env));
+      }catch(e){ onResult && onResult(false, "Couldn't write the restored save (storage is full or blocked)."); return; }
+      onResult && onResult(true, "");
+      location.reload();
+    };
+    reader.onerror = ()=> onResult && onResult(false, "Couldn't read that file.");
+    reader.readAsText(file);
+  }
+  {
+    const restoreBtn = document.getElementById("restoreBackupBtn");
+    const restoreInput = document.getElementById("restoreBackupInput");
+    if(restoreBtn && restoreInput){
+      restoreBtn.addEventListener("click", ()=> restoreInput.click());
+      restoreInput.addEventListener("change", ()=>{
+        const f = restoreInput.files && restoreInput.files[0];
+        restoreSaveFromFile(f, (ok, msg)=>{
+          if(!ok){ restoreBtn.textContent = msg || "Restore failed."; setTimeout(()=>{ restoreBtn.textContent = "Restore a career from a backup file"; }, 4000); }
+        });
+        restoreInput.value = "";
+      });
+    }
+  }
   document.addEventListener("click", (e)=>{
-    if(e.target && e.target.id==="saveWarningExport") downloadSaveBackup();
-    if(e.target && e.target.id==="saveWarningRetry") saveActiveCareer();
+    if(!e.target) return;
+    if(e.target.id==="saveWarningExport") downloadSaveBackup();
+    if(e.target.id==="saveWarningRetry") saveActiveCareer();
+    if(e.target.id==="saveWarningImport"){
+      const inp = document.getElementById("restoreBackupInput");
+      if(inp) inp.click();
+    }
   });
   // Migration requirement #12: persist the migrated/repaired envelope immediately once it's built,
   // rather than waiting for gameplay's own next natural checkpoint (playing a season, a trade, a
@@ -8229,7 +8270,8 @@ import {
     const g = keys => clamp(Math.round(keys.reduce((s,k)=> s + (eff[k]||65), 0) / keys.length), 15, 99);
     return {
       stuff:      g(["VELO","BRK","FBL","CHG"]),
-      command:    g(["CMD","SEQ","TUN","PIK"]),
+      command:    g(["CMD","SEQ","TUN"]),
+      hold:       clamp(Math.round(eff.PIK || 65), 15, 99),  // Pickoff & Hold -> running-game
       stamina:    clamp(Math.round(eff.STM || 65), 15, 99),
       durability: clamp(Math.round(eff.DUR || 65), 15, 99),
     };
@@ -13257,11 +13299,11 @@ import {
         </div>
       </div>` : "";
     const report = season.developmentReport;
-    const plan = developmentPlanFor(season.developmentPlanId);
+    const planText = developmentPlanText(season.developmentPlanId, career.path);
     const keyMomentDelta = Number(season.keyMomentDevelopmentDelta || 0);
     const finalMomentum = clamp(Number(report ? report.momentumAfter : career.breakthroughMomentum || 0) + keyMomentDelta, 0, 100);
     const performanceHtml = report ? `<div class="development-context">
-        <div><b>${svgEscape(plan.label)}</b> · ${svgEscape(report.performance.label)}</div>
+        <div><b>${svgEscape(planText.label)}</b> · ${svgEscape(report.performance.label)}</div>
         <div class="development-context-sub">Performance index <b class="tabular">${report.performance.index>=0?"+":""}${report.performance.index.toFixed(2)}</b> · ordinary growth ×<b class="tabular">${report.performanceMultiplier.toFixed(2)}</b> · breakthrough momentum <b class="tabular">${finalMomentum}/100</b>${keyMomentDelta ? ` (key moments ${fmtDelta(keyMomentDelta)})` : ""}</div>
       </div>` : "";
     const changes = season.attrChanges.filter(c=>c.delta!==0);
@@ -13389,10 +13431,11 @@ import {
     const wearTag = wear>=85 ? "Running on Fumes" : wear>=65 ? "Breaking Down" : wear>=45 ? "Battle-Tested" : wear>=25 ? "Some Mileage" : "Fresh";
     const chemistry = career.teamChemistry ?? 50;
     const chemistryTag = chemistry>=80 ? "Telepathic" : chemistry>=65 ? "In sync" : chemistry>=45 ? "Functional" : "Disconnected";
-    const developmentPlan = developmentPlanFor(career.developmentPlan);
+    const developmentPlan = developmentPlanText(career.developmentPlan, career.path);
+    const wearNoun = career.path===PATH_PITCHER ? "arm" : "physical";
     const wearSub = wear>=45
-      ? `Playing through injuries instead of resting them is what built this up — above 45, every season carries a real chance of a permanent physical decline.`
-      : `Stays low by resting injuries instead of playing through them. Keep it that way to protect his physical attributes long-term.`;
+      ? `Throwing (or playing) through injuries instead of resting them is what built this up — above 45, every season carries a real chance of a permanent ${wearNoun} decline.`
+      : `Stays low by resting injuries instead of pushing through them. Keep it that way to protect his ${wearNoun} attributes long-term.`;
     return `<div class="front-office-widget">
         ${fanMeterRow("GM Relations", career.gmRelationship, gmTag)}
         ${fanMeterRow("Fan Support", career.fanSupport, fanTag)}
@@ -14535,12 +14578,15 @@ import {
     const lastReport = lastSeason && lastSeason.developmentReport;
     const performanceLabel = lastReport ? lastReport.performance.label : "No performance grade recorded";
     const momentum = Math.round(career.breakthroughMomentum || 0);
-    const choices = DEVELOPMENT_PLAN_LIST.map(plan=>`
+    const choices = DEVELOPMENT_PLAN_LIST.map(plan=>{
+      const txt = developmentPlanText(plan.id, career.path);
+      return `
       <button class="choice-btn offseason-plan-choice" type="button" data-development-plan="${plan.id}" id="developmentPlan-${plan.id}">
-        <div class="cb-title">${svgEscape(plan.icon)} · ${svgEscape(plan.label)}</div>
-        <div class="cb-sub">${svgEscape(plan.summary)}</div>
+        <div class="cb-title">${svgEscape(plan.icon)} · ${svgEscape(txt.label)}</div>
+        <div class="cb-sub">${svgEscape(txt.summary)}</div>
         <div class="offseason-plan-meta">${offseasonPlanMeta(plan).map(item=>`<span>${svgEscape(item)}</span>`).join("")}</div>
-      </button>`).join("");
+      </button>`;
+    }).join("");
     content.innerHTML = eraWrap(decadeForYear(career.year+1), `
       <div class="ev-eyebrow">${career.year+1} Offseason · One program, one budget</div>
       <h3>Choose what gets the work.</h3>
@@ -14556,7 +14602,7 @@ import {
       btn.addEventListener("click", ()=>{
         const plan = developmentPlanFor(btn.dataset.developmentPlan);
         career.developmentPlan = plan.id;
-        career.transactions.push(`${career.year+1}: Offseason program -- ${plan.label}.`);
+        career.transactions.push(`${career.year+1}: Offseason program -- ${developmentPlanText(plan.id, career.path).label}.`);
         saveActiveCareer({ phase:"decision", eventId:"offseason_plan_selected" });
         nextSeason();
       });

@@ -52,6 +52,10 @@
     <div class="active-career-strip" id="multiplayerMatchesStrip"></div>
     <div class="best-strip" id="bestStrip"></div>
     <div class="last-build-strip" id="lastBuildStrip"></div>
+    <div class="restore-strip">
+      <button type="button" class="btn-ghost-inline" id="restoreBackupBtn">Restore a career from a backup file</button>
+      <input type="file" id="restoreBackupInput" accept="application/json,.json" hidden>
+    </div>
   </section>
 
   <!-- COMBINE SETUP: mode + Key Moments, asked right before the combine actually starts (solo path only -- multiplayer's own lobby screens ask their own equivalent options). -->
@@ -236,6 +240,7 @@
       <strong>Progress isn't saving.</strong>
       <span id="saveWarningDetail">This browser is blocking or out of storage — your career is safe in memory, but close the tab and you'll lose everything since the last successful save.</span>
       <button type="button" id="saveWarningExport">Download a backup</button>
+      <button type="button" id="saveWarningImport">Restore from file</button>
       <button type="button" id="saveWarningRetry">Try again</button>
     </div>
     <div id="careerContent"></div>

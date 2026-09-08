@@ -87,9 +87,12 @@ export function pitcherExpectedRates(talent, age, decade, scale = 1, facets = nu
   const edge = (Number(talent) - 65) * aged;
   const stuffEdge = ((facets && Number.isFinite(facets.stuff) ? facets.stuff : talent) - 65) * aged;
   const cmdEdge = ((facets && Number.isFinite(facets.command) ? facets.command : talent) - 65) * aged;
-  const eraPlusDelta = edge >= 0
+  // Pickoff & Hold -> running-game suppression: holding runners close cuts the extra base that
+  // turns a single into a run. A small, ERA-level effect (no separate SB-allowed stat is modelled).
+  const holdEdge = ((facets && Number.isFinite(facets.hold) ? facets.hold : talent) - 65) * aged;
+  const eraPlusDelta = (edge >= 0
     ? ERA_PLUS_UP_K * Math.pow(edge, ERA_PLUS_UP_P)
-    : -ERA_PLUS_DOWN_K * Math.pow(-edge, ERA_PLUS_DOWN_P);
+    : -ERA_PLUS_DOWN_K * Math.pow(-edge, ERA_PLUS_DOWN_P)) + holdEdge * 0.20;
   const eraPlus = clamp(100 + eraPlusDelta, 28, 320);
   const era = clamp(lg.era * 100 / eraPlus, cal.eraLo, cal.eraHi);
   const k9 = clamp(lg.k9 + stuffEdge * (stuffEdge >= 0 ? cal.k9.up : cal.k9.down), cal.k9.lo, cal.k9.hi);
