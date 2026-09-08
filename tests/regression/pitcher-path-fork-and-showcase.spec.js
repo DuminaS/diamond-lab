@@ -65,4 +65,12 @@ test("picking Pitcher runs the pitching Showcase and starts a pitcher career", a
   const cardText = await page.textContent("#tabpanel-season");
   expect(cardText).toMatch(/ERA/);
   expect(cardText).toMatch(/WHIP/);
+
+  // the Analytics tab shows the pitcher view (FIP / pWAR), not "No batting data"
+  await page.evaluate(() => document.querySelector('.dash-tab[data-tab="analytics"]')?.click());
+  await page.waitForTimeout(150);
+  const analytics = await page.textContent("#tabpanel-analytics");
+  expect(analytics).toMatch(/FIP/);
+  expect(analytics).toMatch(/pWAR/);
+  expect(analytics).not.toMatch(/No batting data/);
 });
