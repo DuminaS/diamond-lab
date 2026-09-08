@@ -83,10 +83,16 @@ never a shipped half-state where you can pick a path that doesn't fully simulate
   a pitcher line. Hitter path untouched (one delegation line) → zero drift. Spec forces the path
   in storage and plays 9 seasons. **Deferred to 16d:** baseball card, analytics tab, career-hub
   stat widgets, Cy Young & the pitcher awards, HOF pitcher formula, leaderboards.
-- **16c — league staffs as tracked entities.** `career.teamRotations` (SP1–5, CL, SU1, SU2) +
-  spawn/build/ensure/simulate/reconcile mirroring the Phase 15 lineup infra, RNG-isolated.
-  Opposing SP-of-the-day into `simulateGameScore` for everyone. `defense` grade re-derived from
-  the real staff. Storage measured + retention tuned. `SAVE_SCHEMA_VERSION` → 5.
+- **16c — league staffs as tracked entities.** ✅ `career.teamRotations` (SP1–5, CL from 1975,
+  2×SU) mirroring the Phase 15 lineup infra, RNG-isolated. `simulateRotationSeasons` is a cheap
+  age/drift/succession pass (per-arm stat lines land in 16d with Cy Young). `staffRunPrevention
+  Grade` + `recomputeStaffGrades` re-derive the `defense` grade from the real staff — as a
+  *minority* 30% influence, compressed toward average (two full roster-derived grades widened the
+  win spread past 116). `opposingDefenseForGame` — the arm on the mound today adjusts run
+  suppression, strictly mean-preserving (deviation from the rotation's own average), applied to
+  both hitter and pitcher game sims, no RNG → zero seeded drift. `buildTeamRotation` box-score
+  helper reads the real staff. `SAVE_SCHEMA_VERSION` → 5. 75 regression / 70 balance, no
+  re-seeding needed.
 - **16d — the fork + awards & Cooperstown.** The path-select screen (two big silhouette buttons)
   after the combine-setup Begin; pitcher Showcase (pool + tools + blind/classic + respins);
   Results + share; draft night; `cs.path`/`build.path`/`career.path` wired end to end. Cy Young,
