@@ -78,6 +78,23 @@ test("a starting-pitcher career simulates era-realistic seasons and keeps the wh
     const derivedEra = 9 * s.er / (s.ipOuts / 3);
     expect(Math.abs(derivedEra - s.era), `year ${s.year} ERA ${s.era} vs derived ${derivedEra.toFixed(2)}`).toBeLessThan(0.06);
   }
+  // if he made a postseason, the games he started are pitching boxes (not batting), and no ER
+  // exceeds the opponent's runs (review finding 7)
+  let sawPlayoffStart = false;
+  for (const s of seasons) {
+    for (const rd of (s.playoffs?.rounds || [])) {
+      for (const g of (rd.games || [])) {
+        if (g.box && g.box.pitched) {
+          sawPlayoffStart = true;
+          expect(Number.isInteger(g.box.ipOuts)).toBe(true);
+          expect(g.box.er).toBeLessThanOrEqual(g.oppScore);
+        }
+        if (g.box && g.box.dnp) expect(g.box.pitched).toBeFalsy();
+      }
+    }
+  }
+  // (sawPlayoffStart may be false if this seed's team never made October -- that's fine)
+
   // career IP-outs = sum of season IP-outs
   const seasonOuts = seasons.reduce((a, s) => a + s.ipOuts, 0);
   expect(Math.abs(fc.totals.pitching.ipOuts - seasonOuts)).toBeLessThanOrEqual(seasons.length);

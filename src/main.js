@@ -265,8 +265,22 @@ import {
   // simply existing on the page before the Wild Card game has been simmed still tells the player
   // they won both earlier rounds -- so the DOM itself must not contain a round's box until the
   // round before it has actually been finished as a win.
+  // A pitcher's series line across the starts he made in a playoff round.
+  function pitcherSeriesBoxHtml(r){
+    const starts = (r.games||[]).filter(g=> g && g.box && g.box.pitched);
+    if(!starts.length) return `<div><div class="sbx-label">Role</div><div class="sbx-value">Did not pitch this series</div></div>`;
+    const s = k => starts.reduce((a,g)=> a + (g.box[k]||0), 0);
+    const outs = s("ipOuts"), er = s("er");
+    return `
+      <div><div class="sbx-label">IP</div><div class="sbx-value tabular">${fmtOutsToIp(outs)}</div></div>
+      <div><div class="sbx-label">ERA</div><div class="sbx-value tabular">${outs>0 ? (27*er/outs).toFixed(2) : "0.00"}</div></div>
+      <div><div class="sbx-label">K</div><div class="sbx-value tabular">${s("k")}</div></div>
+      <div><div class="sbx-label">BB</div><div class="sbx-value tabular">${s("bb")}</div></div>
+      <div><div class="sbx-label">Starts</div><div class="sbx-value tabular">${starts.length}</div></div>`;
+  }
   function playoffRoundBoxHtml(r, i, year){
     const isSB = r.round==="Super Bowl";
+    const isPitcher = career.path === PATH_PITCHER;
     if(isSB){
       return `
         <div class="superbowl-box" data-round-idx="${i}" data-round-state="pending">
@@ -279,11 +293,12 @@ import {
           <div class="sb-quarters" id="pqQuarters-${i}"></div>
           <div class="pr-controls" id="pqControls-${i}"></div>
           <div class="sb-box" id="sbBox-${i}" style="display:none;">
+            ${isPitcher ? pitcherSeriesBoxHtml(r) : `
             <div><div class="sbx-label">H/AB</div><div class="sbx-value tabular">${(r.box?.comp)??0}-for-${(r.box?.att)??0}</div></div>
             <div><div class="sbx-label">Total Bases</div><div class="sbx-value tabular">${(r.box?.yards)??0}</div></div>
             <div><div class="sbx-label">HR</div><div class="sbx-value tabular">${(r.box?.td)??0}</div></div>
             <div><div class="sbx-label">K</div><div class="sbx-value tabular">${(r.box?.int)??0}</div></div>
-            ${r.box&&r.box.rushAtt>0?`<div><div class="sbx-label">SB</div><div class="sbx-value tabular">${r.box.rushYards}-for-${r.box.rushAtt}</div></div>`:""}
+            ${r.box&&r.box.rushAtt>0?`<div><div class="sbx-label">SB</div><div class="sbx-value tabular">${r.box.rushYards}-for-${r.box.rushAtt}</div></div>`:""}`}
           </div>
         </div>`;
     }
@@ -5644,20 +5659,71 @@ import {
   // Moment that flips an earlier game genuinely changes whether later games are needed). The game
   // object carries the fields the Key Moment machinery reads off a "round", so triggerKeyMoment /
   // applyKeyMomentSwing operate on it unchanged.
+  // Phase 16 / review finding 7: which game of a playoff series the player-pitcher starts. An ace
+  // takes game 1, then comes back for the pivotal middle game and (in a 7-gamer) a game 7.
+  function pitcherStartsPlayoffGame(gameIdx, seriesTarget){
+    if((career.pitcherRole||"SP") !== "SP") return false;
+    if(seriesTarget <= 2) return gameIdx === 0;                 // best-of-3: game 1
+    if(seriesTarget === 3) return gameIdx === 0 || gameIdx === 4; // best-of-5: games 1 & 5
+    return gameIdx === 0 || gameIdx === 3 || gameIdx === 6;      // best-of-7: games 1, 4, 7
+  }
+  // His run-prevention grade for a postseason start, from his most recent season's ERA+.
+  function pitcherPlayoffRunPrevention(season){
+    const last = [...(career.seasonLog||[])].reverse().find(s=>s.isPitching) || season;
+    const eraPlus = (last && last.eraPlus) || 110;
+    const clutch = (eraEffective(season ? season.age : career.age, season ? season.decade : decadeForYear(career.year)).CMP || 65) - 65;
+    return clamp(56 + (eraPlus - 100) * 0.36 + clutch * 0.12, 24, 99);
+  }
+
   function ensurePlayoffGame(round, gameIdx, season){
     if(round.games[gameIdx]) return round.games[gameIdx];
     const oppOffense = opponentOffenseGrade(round.oppId, QB_INFLUENCE_PLAYOFF);
-    const myOff = playoffOffenseGrade(round._rawEffOverall, season);
-    const g = simulateGameScore(myOff, oppOffense, career.defense, null, season.year, true, opponentDefenseGrade(round.oppId));
+    const isPitcher = career.path === PATH_PITCHER;
+    const myStart = isPitcher && pitcherStartsPlayoffGame(gameIdx, round.seriesTarget);
+    // Pitcher path: his ability feeds RUN PREVENTION on the games he starts, not the offense of
+    // every game in the series. Non-start games are ordinary team-quality games.
+    const myOff = isPitcher
+      ? playoffOffenseGrade(clamp(56 + (safeNum(career.teamStrength,62)-65), 30, 96), season)
+      : playoffOffenseGrade(round._rawEffOverall, season);
+    const myDef = myStart
+      ? Math.round(clamp(safeNum(career.defense,60)*0.4 + pitcherPlayoffRunPrevention(season)*0.6, 20, 99))
+      : career.defense;
+    const g = simulateGameScore(myOff, oppOffense, myDef, null, season.year, true, opponentDefenseGrade(round.oppId));
     const game = {
       myScore: g.myTotal, oppScore: g.oppTotal, won: g.won, quarters: g.quarters,
-      box: generateGameBoxScore(season, g.myTotal, g.myTds),
-      _revealedCount: 0, _keyMomentChecked: false,
+      box: (isPitcher
+        ? (myStart ? generatePitcherGameBox(g, season) : { pitched:false, dnp:true })
+        : generateGameBoxScore(season, g.myTotal, g.myTds)),
+      _revealedCount: 0, _keyMomentChecked: false, _pitcherStart: myStart,
       round: round.round, opponent: round.opponent, oppId: round.oppId, oppTendency: round.oppTendency,
       _offOverall: myOff, _defOverall: round._defOverall, _defOffense: round._defOffense, _oppQbId: round._oppQbId,
     };
     round.games[gameIdx] = game;
     return game;
+  }
+  // A pitching box line for one playoff start, derived FROM the game (ER never exceeds the runs
+  // the opponent actually scored; outs bounded by innings played), same contract as the regular
+  // season's game-authoritative model.
+  function generatePitcherGameBox(g, season){
+    const inningsPlayed = Math.max(9, (g.quarters||[]).length);
+    const oppRuns = g.oppTotal;
+    const eraPlus = (season && season.eraPlus) || 110;
+    let inn = 6.4 + (eraPlus-100)*0.02 + (Math.random()*1.8 - 0.9);
+    if(Math.abs(g.myTotal - g.oppTotal) >= 8) inn -= 1.3;
+    if(oppRuns <= 1) inn += Math.random()*1.6;
+    const outs = Math.round(clamp(inn, 2, Math.min(inningsPlayed, 9)) * 3);
+    const frac = outs/(inningsPlayed*3);
+    const er = Math.round(clamp(oppRuns*frac*(0.7+Math.random()*0.95), 0, oppRuns));
+    const k9 = (season && season.k9) || 8, bb9 = (season && season.bb9) || 3;
+    const k = Math.round(k9 * outs/27 * (0.6+Math.random()*0.9));
+    const bb = Math.round(bb9 * outs/27 * (0.4+Math.random()*1.3));
+    const h = Math.max(er>0?1:0, Math.round(((season&&season.whip?season.whip*9-bb9:9)) * outs/27 * (0.5+Math.random())));
+    return {
+      pitched:true, ipOuts: outs, ip: fmtOutsToIp(outs), er, k, bb, h,
+      decision: g.won && outs>=15 ? "W" : (!g.won && outs>=12 && er>=Math.max(2,Math.ceil(oppRuns*0.55))) ? "L" : "ND",
+      // neutral batting aliases so the box-score modal never reads a NaN
+      ab:0, r:0, comp:0, att:0, yards:0, td:0, int:0, sacks:0, rushAtt:0, rushYards:0, rushTd:0,
+    };
   }
 
   // Advances through the bracket looking for the player's NEXT game. A round the player has a
@@ -14155,7 +14221,8 @@ import {
         holder.appendChild(el);
       }
       g._revealedCount++;
-      if(g._revealedCount===6 && !g._keyMomentChecked && isPivotalGame(r) && g.oppTendency && KeyMomentSettings.isEnabled()){
+      // The Key Moment is a clutch AT-BAT -- never for a pitcher-path career (review finding 7).
+      if(g._revealedCount===6 && !g._keyMomentChecked && career.path!==PATH_PITCHER && isPivotalGame(r) && g.oppTendency && KeyMomentSettings.isEnabled()){
         g._keyMomentChecked = true;
         const elig = keyMomentScoreEligibility(g);
         if(elig>0 && Math.random() < baseChance*elig){
