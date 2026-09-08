@@ -4541,6 +4541,23 @@ import {
       if(!qbsById[id]) issues.push({ type:"free-agent-unregistered", qbId:id, year });
     });
     retiredQbIds.forEach(id=>{ if(!qbsById[id]) issues.push({ type:"retired-unregistered", qbId:id, year }); });
+
+    // Phase 15: the full-lineup model. Every batting-order slot references a registered, non-retired
+    // entity (or the player); no bat sits in two teams' lineups; each team fields 8 or 9.
+    const teamLineups = careerObj.teamLineups || {};
+    const lineupSeen = new Map();
+    Object.keys(teamLineups).forEach(teamId=>{
+      const arr = teamLineups[teamId] || [];
+      if(arr.length && (arr.length < 8 || arr.length > 9)) issues.push({ type:"lineup-wrong-size", teamId, year, size: arr.length });
+      arr.forEach(id=>{
+        if(id===USER_QB_ID) return;
+        if(lineupSeen.has(id)) issues.push({ type:"bat-in-two-lineups", qbId:id, year, teams:[lineupSeen.get(id), teamId] });
+        lineupSeen.set(id, teamId);
+        const e = qbsById[id];
+        if(!e) issues.push({ type:"lineup-slot-unregistered", qbId:id, year, teamId });
+        else if(e.retired) issues.push({ type:"lineup-slot-retired", qbId:id, year, teamId });
+      });
+    });
     return issues;
   }
 
@@ -6263,6 +6280,37 @@ import {
     });
     });
   }
+  // Sweeps every team's lineup of any slot that's gone stale -- an id that got retired, moved to
+  // free agency, or (a QB1) succeeded elsewhere in the offseason chain without its lineup slot
+  // being updated, or a duplicate. Each bad slot is refilled with a fresh hitter at its position.
+  // Runs late in generateSeason, after all the succession / FA / bench churn, so the invariant
+  // "every lineup slot is a live, uniquely-rostered entity" always holds at a season boundary.
+  function reconcileTeamLineups(year){
+    if(!career.teamLineups) return;
+    withIsolatedRandom(hashSeed("lineuprecon:" + (career.name||"") + ":" + (career.draftYear||0) + ":" + year), ()=>{
+    const decade = decadeForYear(year);
+    const claimed = new Set();
+    Object.keys(career.teamLineups).forEach(teamId=>{
+      const { positions } = lineupPositionsFor(teamId, year);
+      const arr = career.teamLineups[teamId];
+      const teamGrade = clamp(Math.round(career.leagueStrength[teamId] ?? 60), 18, 97);
+      // one live entity per fielding position, in canonical order
+      const byPos = {};
+      arr.forEach(id=>{
+        if(id===USER_QB_ID){ byPos[POSITIONS.some(p=>p.key===career.position)?career.position:"1B"] = USER_QB_ID; return; }
+        if(claimed.has(id)) return;
+        const e = career.qbsById[id];
+        if(e && !e.retired && e.position && positions.includes(e.position) && !byPos[e.position]){ byPos[e.position] = id; claimed.add(id); }
+      });
+      career.teamLineups[teamId] = positions.map((pos, idx)=>{
+        if(byPos[pos]) return byPos[pos];
+        const fresh = spawnLineupHitter(teamId, decade, year, pos, clamp(teamGrade+randInt(-10,10), 18, 97), "recon"+year+"_"+idx);
+        claimed.add(fresh.id);
+        return fresh.id;
+      });
+    });
+    });
+  }
   // Runs every season from generateSeason: real season lines for the seven/eight non-QB1 lineup
   // hitters on every team, per-slot retirement + succession, and the storage trim.
   function simulateLineupSeasons(decade, league, year){
@@ -7661,6 +7709,10 @@ import {
     const teamRebuildPull = Math.round(rebuildPull(safeNum(career.teamStrength,60))*volMult);
     const myNudge = Math.round(teamNoise) - teamDeclinePull + teamRebuildPull;
     adjustTeamStrength(career.teamId, myNudge, 2);
+    // Phase 15e: sweep any lineup slot left stale by the offseason churn above (a QB1 succeeded,
+    // a bat retired or moved without its slot being patched, a duplicate) BEFORE the grade is
+    // re-derived, so every team fields a full nine of live, uniquely-rostered entities.
+    reconcileTeamLineups(career.year);
     // Phase 15c: after the four authored components have drifted, re-derive the Lineup grade of
     // every team from its actual nine bats -- the tangible, roster-driven half of team quality.
     recomputeLineupGrades(career.year);

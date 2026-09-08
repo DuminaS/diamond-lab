@@ -445,6 +445,18 @@ per team, position-consistent moves). `spawnLineupHitter` age curve pulled young
 skewing older). Save stays ~3.3 MB. New spec: `free-agency-reshuffles-full-lineups`. **76 regression
 / 58 balance green.**
 
-Still to come: 15e -- lineup age curve tuning (mean should be ~28), lineup entity continuity (a
-slot should prefer keeping its current occupant), HOF-weight retune for the more frequent
-by-position awards, docs, merge `phase-15` -> `main`.
+**15e — invariants, reconciliation, merge.** `validateLeagueState` gained the roster-model
+invariants: every team fields 8/9, no bat sits in two lineups, and every lineup slot points at a
+live, registered, non-retired entity. That last check caught a real bug -- the offseason churn
+(`evaluateSuccession` retiring a franchise face, `rollLineupFreeAgency`/`evaluateBenchMobility`
+moving or retiring a bat) could leave a stale id in `career.teamLineups` because `retireQuarterback`
+/ `_clearQbFromAllRosterSlots` don't know about the lineup arrays. Fix: new `reconcileTeamLineups(year)`,
+run late in `generateSeason` (after all succession / FA / bench resolution, before
+`recomputeLineupGrades`), RNG-isolated -- it sweeps every team to exactly one live entity per
+fielding position in canonical order, refilling any stale / missing / duplicate slot with a fresh
+`spawnLineupHitter` at that position. Zero-op on a clean league (no RNG draw, no new entities), so
+no seeded career shifted. Both invariant seeds (11, 909090) now pass clean over a long career.
+The lineup age curve and the HOF by-position award weighting were reviewed and left as-is -- the
+by-position Silver Slugger field is if anything *harder* to win than the old top-N, and the age
+curve stays inside the retire-age band; neither justified a retune that would churn every seeded
+spec. **74 regression / 58 balance green.** Phase 15 merged to `main`.
