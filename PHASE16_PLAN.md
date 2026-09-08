@@ -93,12 +93,21 @@ never a shipped half-state where you can pick a path that doesn't fully simulate
   both hitter and pitcher game sims, no RNG → zero seeded drift. `buildTeamRotation` box-score
   helper reads the real staff. `SAVE_SCHEMA_VERSION` → 5. 75 regression / 70 balance, no
   re-seeding needed.
-- **16d — the fork + awards & Cooperstown.** The path-select screen (two big silhouette buttons)
-  after the combine-setup Begin; pitcher Showcase (pool + tools + blind/classic + respins);
-  Results + share; draft night; `cs.path`/`build.path`/`career.path` wired end to end. Cy Young,
-  Reliever of the Year, pitching Triple Crown, ERA/K/W/SV titles, All-Star staff reps, pitcher
-  Gold Glove, pitcher Cooperstown formula, no-hitter Key Moment, analytics pitcher view. **This is
-  where it goes live for users.**
+- **16d — the fork + awards & Cooperstown.** ✅ Split into 4 commits:
+  - *(1)* Path-select choice (two big silhouette buttons) on the Showcase setup screen;
+    `cs.path` → `build.path`/`build.pitcherRole` → `career.path`/`pitcherRole`/`position:"P"`;
+    pitcher Showcase (PITCHERS pool + PITCH_ATTRIBUTES + blind/classic + respins), pitcher grade
+    labels, Results + share, identity panel (no position re-roll). Multiplayer forced to batter.
+  - *(2)* `simulateRotationSeasons` writes a compact per-arm season line (RNG-isolated);
+    `resolveCyYoungAndPitchingTitles` — Cy Young (1/league), Reliever of the Year (1976+),
+    pitching Triple Crown, ERA/K/W/WHIP/Saves titles, All-Star staff reps; pitcher Gold Glove;
+    a full pitcher branch in `computeHofScore`; award-ceremony Cy Young hero + Pitching Titles.
+    No `Math.random()` in any of it → hitter path unaffected. 3 legacy specs updated for renamed
+    labels ("Hitter OVR", pitcher gold-glove count, "Pitcher" in an NL batting order).
+  - *(3)* Pitcher UI — `buildPitcherAnalyticsTabHTML` (FIP/ERA-/K-BB%/LOB%/pWAR),
+    `buildPitcherRivalProfileHTML`, the baseball card + career-recap share branch for a pitcher.
+  - *(4)* Rare gems (no-hitter / perfect game / immaculate inning — seeded per-season roll) +
+    ~16 pitcher achievements.
 - **16e — FA at staff scale + multiplayer + polish.** `rollRotationFreeAgency`; multiplayer path
   lock + compare + match code; achievements pass; `validateLeagueState` rotation invariants;
   CONVERSION.md; re-seed drift; merge `phase-16` → `main` → push.
