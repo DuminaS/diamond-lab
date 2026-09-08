@@ -3656,12 +3656,30 @@ import {
     const oppFacingGrade = myDefense!=null ? (offOverall*0.8 + myDefense*0.2) : offOverall;
     const quarters = []; // one entry per inning (field name kept for the reveal code)
     let myTotal=0, oppTotal=0, myTds=0, myFgs=0, oppTds=0, oppFgs=0;
+    // The opponent is treated as the home team (bats last). Review fix: the bottom-of-the-9th
+    // skip must be decided AFTER the visitor's top half -- the old code checked oppTotal>myTotal
+    // using the pre-9th totals, so a visitor who took the lead in the top of the 9th could still
+    // win without the home team getting its final at-bat (a reproduced wrong-winner bug).
     for(let q=1;q<=9;q++){
       const myQ = scoreForInning(offOverall, myFacingGrade);
-      // Home team bats last: skip the bottom of the 9th if they're already ahead.
-      const oppQ = (q===9 && oppTotal>myTotal) ? { pts:0, tds:0, fgs:0 } : scoreForInning(defOverall, oppFacingGrade);
-      myTotal+=myQ.pts; oppTotal+=oppQ.pts;
-      quarters.push({ q, myQ: myQ.pts, oppQ: oppQ.pts, myTotal, oppTotal });
+      let oppQ;
+      if(q===9 && oppTotal > myTotal){
+        // home led entering the 9th -- do they still lead after the visitor's top half?
+        if(oppTotal > myTotal + myQ.pts){
+          oppQ = { pts:0, tds:0, fgs:0 };                             // yes: game over, no bottom 9th
+        } else {
+          oppQ = scoreForInning(defOverall, oppFacingGrade);          // no: the visitor tied/led -- home must bat
+        }
+      } else {
+        oppQ = scoreForInning(defOverall, oppFacingGrade);
+      }
+      myTotal += myQ.pts;
+      let oppPts = oppQ.pts;
+      // Walk-off: a home team that was tied or behind and whose bottom-9th runs put it ahead would
+      // have stopped the instant it scored the winning run -- trim the lump-sum excess.
+      if(q===9 && oppTotal <= myTotal && oppTotal + oppPts > myTotal) oppPts = (myTotal - oppTotal) + 1;
+      oppTotal += oppPts;
+      quarters.push({ q, myQ: myQ.pts, oppQ: oppPts, myTotal, oppTotal });
     }
     return { quarters, myTotal, oppTotal, myTds, myFgs, oppTds, oppFgs };
   }
@@ -3688,8 +3706,12 @@ import {
     const quarters = [...regulation.quarters];
     for(let inn=10; inn<=21; inn++){
       const myR = scoreForInning(offOverall, defOverall).pts + (Math.random()<0.12 ? 1 : 0);
-      const oppR = scoreForInning(defOverall, offOverall).pts + (Math.random()<0.12 ? 1 : 0);
-      myTotal += myR; oppTotal += oppR;
+      let oppR = scoreForInning(defOverall, offOverall).pts + (Math.random()<0.12 ? 1 : 0);
+      myTotal += myR;
+      // The home team (opp) bats the bottom -- and walks off the moment it leads, so a bottom-half
+      // outburst can only ever be exactly the winning run.
+      if(oppTotal <= myTotal && oppTotal + oppR > myTotal) oppR = (myTotal - oppTotal) + 1;
+      oppTotal += oppR;
       quarters.push({ q: inn, myQ: myR, oppQ: oppR, myTotal, oppTotal });
       if(myTotal !== oppTotal) break;
     }

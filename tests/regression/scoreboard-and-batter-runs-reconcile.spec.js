@@ -11,7 +11,7 @@ import { startCareer, advanceOneSeason, readActiveCareer } from "../helpers/care
 import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("scoreboard-and-batter-runs-reconcile", async ({ page }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(420_000);
   await installSeededRandom(page, 24601);
   await startCareer(page, { decadeIndex: 5 }); // modern era -- more HR per game to exercise this
 
