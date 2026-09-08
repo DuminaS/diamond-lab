@@ -21,6 +21,27 @@ export const HITTER_OVERALL_WEIGHTS = Object.freeze({
 // Back-compat alias -- main.js still imports the old name until the rename pass.
 export const FOOTBALL_OVERALL_WEIGHTS = HITTER_OVERALL_WEIGHTS;
 
+// What predicts a pitcher's per-season value (Phase 16): command carries the most weight, then raw
+// stuff (breaking ball + velocity), then the skills that make the stuff play up (sequencing,
+// deception, changeup). Fastball life, stamina, poise and composure are real but secondary;
+// pickoff/hold is a minor edge; durability is excluded here (it gates how much of a career
+// happens, not how good a season is -- same treatment as a hitter's DUR). Sums to 1.0. Keys are
+// the 12 pitching tools defined in src/data/pitchers.js.
+export const PITCHER_OVERALL_WEIGHTS = Object.freeze({
+  CMD: 0.20,
+  BRK: 0.15,
+  VELO: 0.14,
+  SEQ: 0.11,
+  TUN: 0.10,
+  CHG: 0.09,
+  FBL: 0.07,
+  STM: 0.06,
+  PSE: 0.04,
+  CMP: 0.03,
+  PIK: 0.01,
+  DUR: 0.00,
+});
+
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 export function weightedRating(values, weights = HITTER_OVERALL_WEIGHTS) {
@@ -39,11 +60,15 @@ export function hitterOverall(values) {
 // Back-compat alias.
 export const footballOverall = hitterOverall;
 
+export function pitcherOverall(values) {
+  return weightedRating(values, PITCHER_OVERALL_WEIGHTS);
+}
+
 // The Combine grade intentionally measures completeness. Football OVR is kept
 // alongside it because the career engine values the attributes unequally. These
 // are two useful but different scouting facts and must not be presented as if
 // they were the same rating.
-export function evaluateProspect(picks) {
+export function evaluateProspect(picks, path = "batter") {
   const values = picks.map(pick => Number(pick.value));
   const average = values.reduce((sum, value) => sum + value, 0) / values.length;
   const variance = values.reduce((sum, value) => sum + (value - average) ** 2, 0) / values.length;
@@ -52,11 +77,15 @@ export function evaluateProspect(picks) {
   const floorBonus = Math.min(...values) >= 85 ? 2 : 0;
   const build = Object.fromEntries(picks.map(pick => [pick.key, Number(pick.value)]));
   const score = Math.round(clamp(average - balancePenalty + floorBonus, 0, 98));
+  const roleOverall = path === "pitcher" ? pitcherOverall(build) : footballOverall(build);
 
   return {
     score,
-    footballOverall: Math.round(footballOverall(build)),
-    footballOverallExact: footballOverall(build),
+    // `footballOverall` keeps its legacy name (dozens of read sites) but now carries whichever
+    // role's weighted rating matches the build's path -- hitter weights for a batter, pitcher
+    // weights for a pitcher.
+    footballOverall: Math.round(roleOverall),
+    footballOverallExact: roleOverall,
     avg: Math.round(average * 10) / 10,
     std: Math.round(standardDeviation * 10) / 10,
     balancePenalty: Math.round(balancePenalty * 10) / 10,

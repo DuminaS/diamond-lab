@@ -63,20 +63,32 @@ gets a pitcher greatness branch.
 
 ## Rollout (each a commit; `npm run test:balance` + build + `npx playwright test tests/regression`
 green at each boundary)
-- **16a — the fork + pitcher build.** Path-select screen; `cs.path`/`build.path`/`career.path`;
-  `pitchers.js` (~120 arms); `PITCH_ATTRIBUTES`; Showcase / Combine score / Results / share branch
-  on path; draft screen shows a pitcher. Career runs on a placeholder pitcher season sim so it's
-  playable end to end.
-- **16b — pitcher season & game sim.** `simulatePitcherSeasonStats`, `PITCH_LEAGUE` /
-  `PITCH_STAT_CAL`, `pitcherRating`, the player's start-by-start game model, W/L/SV/holds, the
-  pitcher wear/injury curve. Real era-faithful lines.
-- **16c — league staffs as tracked entities.** `career.teamRotations` + spawn/build/ensure/
-  simulate/reconcile/FA-less-for-now, RNG-isolated. Opposing SP-of-the-day into `simulateGameScore`
-  for everyone. `defense` grade derived from the real staff. Storage measured + retention tuned.
-  Schema → 5.
-- **16d — awards & Cooperstown.** Cy Young, Reliever of the Year, pitching Triple Crown, the rate
-  titles, All-Star staff reps, pitcher Gold Glove, pitcher HOF formula, no-hitter Key Moment,
-  analytics pitcher view.
+
+**Engine-first ordering** — the user-facing Pitcher fork is the LAST thing wired on, so there is
+never a shipped half-state where you can pick a path that doesn't fully simulate.
+
+- **16a — pure pitcher stat engine.** ✅ `src/data/pitchers.js` (~140 arms), `PITCH_ATTRIBUTES`
+  (12 tools) + era-normalization, `src/sim/pitching.js` (`PITCH_LEAGUE`, `PITCH_STAT_CAL`,
+  `pitcherExpectedRates`, `simulatePitcherLine`, `fip`, `cyYoungScore`, `pitcherPrimeMultiplier`),
+  `PITCHER_OVERALL_WEIGHTS` + `pitcherOverall` in ratings.js, `evaluateProspect(picks, path)`.
+  12 new balance tests. All pure additions — imported into main.js but nothing calls them yet,
+  so zero behavior change / zero RNG drift.
+- **16b — the player's pitcher career.** `career.path`; `generateSeason` branches the player's own
+  stat line to a pitcher model (`buildUserPitcherSeason`) using `src/sim/pitching.js` + the
+  start-by-start game model (opposing lineup grade, W/L/SV/holds), the pitcher wear/injury curve,
+  a `pitcherRating` OPS+-analogue for the shared HOF/record paths. Career-hub / recap / season
+  table render a pitcher line. `career.path` still only ever set to "batter" until 16d — tested by
+  temporarily forcing it in a spec.
+- **16c — league staffs as tracked entities.** `career.teamRotations` (SP1–5, CL, SU1, SU2) +
+  spawn/build/ensure/simulate/reconcile mirroring the Phase 15 lineup infra, RNG-isolated.
+  Opposing SP-of-the-day into `simulateGameScore` for everyone. `defense` grade re-derived from
+  the real staff. Storage measured + retention tuned. `SAVE_SCHEMA_VERSION` → 5.
+- **16d — the fork + awards & Cooperstown.** The path-select screen (two big silhouette buttons)
+  after the combine-setup Begin; pitcher Showcase (pool + tools + blind/classic + respins);
+  Results + share; draft night; `cs.path`/`build.path`/`career.path` wired end to end. Cy Young,
+  Reliever of the Year, pitching Triple Crown, ERA/K/W/SV titles, All-Star staff reps, pitcher
+  Gold Glove, pitcher Cooperstown formula, no-hitter Key Moment, analytics pitcher view. **This is
+  where it goes live for users.**
 - **16e — FA at staff scale + multiplayer + polish.** `rollRotationFreeAgency`; multiplayer path
   lock + compare + match code; achievements pass; `validateLeagueState` rotation invariants;
   CONVERSION.md; re-seed drift; merge `phase-16` → `main` → push.

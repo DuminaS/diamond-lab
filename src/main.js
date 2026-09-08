@@ -2,10 +2,15 @@ import { showRewardedAd } from "./ads/rewardedAd.js";
 import { openDialog, closeDialog } from "./ui/dialog.js";
 import { TEAMS, TEAM_COLORS, DIVISIONS, DIVISIONS_1994_2012, DIVISIONS_1969_1993, DIVISIONS_PRE_1970, PLAYOFF_ERAS } from "./data/teams.js";
 import { PLAYERS as QBS } from "./data/players.js";
+import { PITCHERS } from "./data/pitchers.js";
 import { SCHEMES } from "./data/schemes.js";
 import { shuffle, pick, clamp, randInt, lerp, svgEscape, fmtPct, safeNum, fmtMoney, fmtDelta, recordLine } from "./utils/index.js";
 import { BADGE_ICONS, MLB_RECORDS, TROPHY_ICONS } from "./data/awards.js";
-import { FOOTBALL_OVERALL_WEIGHTS as OVERALL_WEIGHTS, chooseDraftTeam, evaluateProspect } from "./sim/ratings.js";
+import { FOOTBALL_OVERALL_WEIGHTS as OVERALL_WEIGHTS, PITCHER_OVERALL_WEIGHTS as PITCH_OVERALL_WEIGHTS, chooseDraftTeam, evaluateProspect, pitcherOverall } from "./sim/ratings.js";
+import {
+  PITCH_LEAGUE, PITCH_STAT_CAL, ROTATION_STAT_SCALE, pitcherExpectedRates, pitcherPrimeMultiplier,
+  simulatePitcherLine, fip as pitcherFip, cyYoungScore,
+} from "./sim/pitching.js";
 import {
   KEY_MOMENT_BASE_TRIGGER_CHANCE,
   KEY_MOMENT_SITUATION_FLAGS,
@@ -57,6 +62,24 @@ import {
     {"key":"DEC","label":"Plate Approach","group":"mental"},
     {"key":"CLU","label":"Clutch","group":"mental"},
     {"key":"DUR","label":"Durability","group":"mental"},
+  ];
+  // Phase 16: the pitcher build's twelve tools, three groups of four. Parallel to ATTRIBUTES --
+  // the Showcase draws from this list (and the PITCHERS pool) when the player takes the Pitcher
+  // path. Group names: "stuff" (raw arm), "command" (locating + making it play), "makeup" (holding
+  // up over a start and a season). Keys match the `pr` block in src/data/pitchers.js.
+  const PITCH_ATTRIBUTES = [
+    {"key":"VELO","label":"Velocity","group":"stuff"},
+    {"key":"FBL","label":"Fastball Life","group":"stuff"},
+    {"key":"BRK","label":"Breaking Ball","group":"stuff"},
+    {"key":"CHG","label":"Changeup","group":"stuff"},
+    {"key":"CMD","label":"Command","group":"command"},
+    {"key":"TUN","label":"Deception","group":"command"},
+    {"key":"SEQ","label":"Sequencing","group":"command"},
+    {"key":"PIK","label":"Pickoff & Hold","group":"command"},
+    {"key":"STM","label":"Stamina","group":"makeup"},
+    {"key":"PSE","label":"Poise","group":"makeup"},
+    {"key":"CMP","label":"Composure","group":"makeup"},
+    {"key":"DUR","label":"Durability","group":"makeup"},
   ];
   const DECADES = ["1960s","1970s","1980s","1990s","2000s","2010s","2020s"];
   const DECADE_BLURB = {"1960s":"Pitching rules the earth — high mounds, big parks, a .240 hitter plays every day. 1968 is the nadir.","1970s":"Turf, the DH arrives in the AL, and speed comes back. Contact and stolen bases over the long ball.","1980s":"Balanced baseball — 30-30 seasons, artificial turf gap power, and the leadoff man as a weapon.","1990s":"Expansion, smaller parks, and the start of an offensive surge. Forty homers stops being special.","2000s":"The height of the offensive era — 50-homer seasons, .300 team averages, and a rewritten record book.","2010s":"The strikeout explosion and the launch-angle revolution. Velocity up, contact down, defense shifted.","2020s":"Three true outcomes, a lively then a deadened ball, the universal DH, and a pitch clock."};
@@ -115,6 +138,11 @@ import {
 
   const ATTR_KEYS = ATTRIBUTES.map(a=>a.key);
   const ATTR_BY_KEY = Object.fromEntries(ATTRIBUTES.map(a=>[a.key,a]));
+  const PITCH_ATTR_KEYS = PITCH_ATTRIBUTES.map(a=>a.key);
+  const PITCH_ATTR_BY_KEY = Object.fromEntries(PITCH_ATTRIBUTES.map(a=>[a.key,a]));
+  // Phase 16: the draft-path selector. cs.path / build.path / career.path all carry one of these.
+  const PATH_BATTER = "batter", PATH_PITCHER = "pitcher";
+  const attributesForPath = p => p===PATH_PITCHER ? PITCH_ATTRIBUTES : ATTRIBUTES;
 
   /* ----- Era-adjusted combine ratings -----
      The raw QBS ratings sit on one flat 0-99 scale, so an attribute a given era simply valued
@@ -134,10 +162,21 @@ import {
     ATTR_KEYS.forEach(k=>{ avg[k] = pool.length ? pool.reduce((s,p)=>s+p.r[k],0)/pool.length : 65; });
     ERA_ATTR_AVG[d] = avg;
   });
+  // Phase 16: the same per-era normalization for the pitcher pool, keyed off `pr` and the 12
+  // pitching tools.
+  const ERA_PITCH_ATTR_AVG = {};
+  DECADES.forEach(d=>{
+    const pool = PITCHERS.filter(p=>p.decade===d);
+    const avg = {};
+    PITCH_ATTR_KEYS.forEach(k=>{ avg[k] = pool.length ? pool.reduce((s,p)=>s+p.pr[k],0)/pool.length : 65; });
+    ERA_PITCH_ATTR_AVG[d] = avg;
+  });
   function eraNormalizedValue(player, key){
-    const avg = (ERA_ATTR_AVG[player.decade]||{})[key];
-    if(avg==null) return player.r[key];
-    return clamp(Math.round(65 + (player.r[key]-avg)), 15, 99);
+    const isPitcher = !!player.pr;
+    const raw = isPitcher ? player.pr[key] : player.r[key];
+    const avg = ((isPitcher ? ERA_PITCH_ATTR_AVG : ERA_ATTR_AVG)[player.decade]||{})[key];
+    if(avg==null) return raw;
+    return clamp(Math.round(65 + (raw-avg)), 15, 99);
   }
 
   /* ================= Utilities ================= */
