@@ -1038,6 +1038,60 @@ import {
       hint:"Survive 2 or more permanent wear-and-tear breakdowns.",
       check: ()=> seasonRule(s=>s.wearBreakdown, 2)(career) },
 
+    // ----- the mound (Phase 16) -----
+    { key:"nohitter", name:"No-Hitter", icon:"lock",
+      blurb:"Twenty-seven outs, zero hits, one very long ninth inning.",
+      hint:"Throw a no-hitter.",
+      check: ()=> (career.totals.pitching && career.totals.pitching.noHitters>0) || seasonRule(s=> (s.gems||[]).includes("No-Hitter") || (s.gems||[]).includes("Perfect Game"))(career) },
+    { key:"perfectgame", name:"Perfect Game", icon:"crown",
+      blurb:"Twenty-seven up, twenty-seven down. Nobody reaches. Nobody.",
+      hint:"Throw a perfect game.",
+      check: ()=> (career.totals.pitching && career.totals.pitching.perfectGames>0) || seasonRule(s=> (s.gems||[]).includes("Perfect Game"))(career) },
+    { key:"immaculate", name:"Immaculate Inning", icon:"bolt",
+      blurb:"Nine pitches, three strikeouts, back to the dugout.",
+      hint:"Throw an immaculate inning.",
+      check: ()=> (career.totals.pitching && career.totals.pitching.immaculate>0) || seasonRule(s=> (s.gems||[]).includes("Immaculate Inning"))(career) },
+    { key:"cyyoungwinner", name:"Cy Young Winner", icon:"trophy",
+      blurb:"The best arm in the league, by the writers' own vote.",
+      hint:"Win a Cy Young Award.",
+      check: ()=> seasonRule(s=> (s.awards||[]).includes("Cy Young"))(career) },
+    { key:"cyyoungcollection", name:"The Cy Young Collection", icon:"crown",
+      blurb:"Not a fluke year — the best pitcher of a generation.",
+      hint:"Win 3 or more Cy Young Awards across a career.",
+      check: ()=> (career.totals.pitching && (career.totals.pitching.cyYoungs||0) >= 3) },
+    { key:"pitchingtriplecrown", name:"Pitching Triple Crown", icon:"trophy",
+      blurb:"Led the league in wins, ERA, and strikeouts in the same year. It almost never happens.",
+      hint:"Win the Wins, ERA, and Strikeout titles in one season.",
+      check: ()=> seasonRule(s=> (s.awards||[]).includes("Pitching Triple Crown"))(career) },
+    { key:"strikeoutmachine", name:"Strikeout Machine", icon:"flame",
+      blurb:"A season of empty swings and long walks back to the dugout.",
+      hint:"Strike out 280 or more batters in a season.",
+      check: ()=> seasonRule(s=> s.isPitching && (s.k||0)>=280)(career) },
+    { key:"sub200era", name:"The Sub-2.00 Season", icon:"gem",
+      blurb:"An ERA that reads like a typo on the back of the card.",
+      hint:"Post a sub-2.00 ERA over a full starter's workload (160+ IP).",
+      check: ()=> seasonRule(s=> s.isPitching && (s.ip||0)>=160 && (s.era||9)<2.00)(career) },
+    { key:"threehundredwins", name:"300 Wins", icon:"mountain",
+      blurb:"A number that used to be the automatic ticket to Cooperstown.",
+      hint:"Win 300 or more games across a career.",
+      check: ()=> (career.totals.pitching && (career.totals.pitching.w||0) >= 300) },
+    { key:"threethousandk", name:"3,000 Strikeouts", icon:"book",
+      blurb:"An entire career's worth of hitters walking back to the bench.",
+      hint:"Record 3,000 or more career strikeouts.",
+      check: ()=> (career.totals.pitching && (career.totals.pitching.k||0) >= 3000) },
+    { key:"lockeddownlate", name:"The Closer", icon:"lock",
+      blurb:"Three outs, game over, hand it to the setup guy tomorrow.",
+      hint:"Record 40 or more saves in a season.",
+      check: ()=> seasonRule(s=> (s.sv||0)>=40)(career) },
+    { key:"fourhundredsaves", name:"400 Saves", icon:"anchor",
+      blurb:"A decade-plus of walking in from the bullpen with the game on the line.",
+      hint:"Record 400 or more career saves.",
+      check: ()=> (career.totals.pitching && (career.totals.pitching.sv||0) >= 400) },
+    { key:"ironmanarm", name:"The Iron Arm", icon:"shield",
+      blurb:"They don't make them like this anymore — and mostly they never did.",
+      hint:"Throw 260+ innings in a season, or 10+ complete games.",
+      check: ()=> seasonRule(s=> s.isPitching && ((s.ip||0)>=260 || (s.cg||0)>=10))(career) },
+
     // ----- dynasties, droughts, and history-flavored streaks -----
     { key:"threepeat", name:"Three-Peat", icon:"crown",
       blurb:"Three straight titles. The rest of the league is just playing for second.",
@@ -2135,7 +2189,10 @@ import {
     if(careerObj.path==null) careerObj.path = "batter";
     if(careerObj.pitcherRole===undefined) careerObj.pitcherRole = null;
     if(careerObj.totals && !careerObj.totals.pitching){
-      careerObj.totals.pitching = { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0 };
+      careerObj.totals.pitching = { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0, noHitters:0, perfectGames:0, immaculate:0 };
+    } else if(careerObj.totals && careerObj.totals.pitching){
+      const p = careerObj.totals.pitching;
+      ["noHitters","perfectGames","immaculate"].forEach(k=>{ if(p[k]==null) p[k] = 0; });
     }
   }
   function migrateTiesDefaults(careerObj){
@@ -3306,7 +3363,7 @@ import {
         // Phase 16: career pitching accumulation (nested so it can never collide with a batter
         // total key and migrates as a single presence check). cyYoungs sits alongside the shared
         // proBowls/allPros/mvps counters that resolveSeason* increments.
-        pitching: { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0 } },
+        pitching: { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0, noHitters:0, perfectGames:0, immaculate:0 } },
       contract: { apy: rookieApy, years: 6, tier: "rookie" },
       badStreak: 0,
       forcedOut: false,
@@ -6505,7 +6562,7 @@ import {
       retireAge: clamp(age + randInt(2, 12), 30, 41),
       draftYear: year - (age - 22),
       seasons: [], totals: { games:0, comp:0, att:0, yards:0, td:0, int:0, wins:0, losses:0, ties:0, proBowls:0, allPros:0, mvps:0, rings:0,
-        pitching: { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0 } },
+        pitching: { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0, noHitters:0, perfectGames:0, immaculate:0 } },
       retired: false, status: "active", rosterRole: null,
       contract: rollRivalContract(decade, talent), entrenchedYears: rollEntrenchedYears(talent),
     };
@@ -8078,6 +8135,33 @@ import {
     const winPct = (pw + pl) > 0 ? pw/(pw+pl) : 0.5;
     const rating = line.eraPlus;
 
+    // Rare gems -- a no-hitter, a perfect game, an immaculate inning. Chance scales with the
+    // season's dominance (ERA+) and swing-and-miss (K/9) and how many starts he made. Seeded off
+    // the career so it can't shift the main RNG stream every other seeded test depends on.
+    const gems = [];
+    if(role === "SP" && (line.gs||0) >= 8){
+      const gRand = createSeededRandom(hashSeed("gems:" + (career.name||"") + ":" + career.draftYear + ":" + career.year));
+      const dominance = clamp((line.eraPlus - 100)/60 + (line.k9 - 7)/6, -0.5, 2.2);
+      const starts = line.gs;
+      const noHitP  = clamp(0.010 * starts/32 * (1 + dominance), 0, 0.16);
+      const perfectP = noHitP * 0.14;
+      const immacP  = clamp(0.05 * starts/32 * (1 + Math.max(0, dominance)), 0, 0.35);
+      if(gRand() < perfectP){
+        gems.push("Perfect Game");
+        career.totals.pitching.perfectGames = (career.totals.pitching.perfectGames||0) + 1;
+        career.totals.pitching.noHitters = (career.totals.pitching.noHitters||0) + 1;
+        career.transactions.push(`${career.year}: 27 up, 27 down — a perfect game.`);
+      } else if(gRand() < noHitP){
+        gems.push("No-Hitter");
+        career.totals.pitching.noHitters = (career.totals.pitching.noHitters||0) + 1;
+        career.transactions.push(`${career.year}: Threw a no-hitter.`);
+      }
+      if(gRand() < immacP){
+        gems.push("Immaculate Inning");
+        career.totals.pitching.immaculate = (career.totals.pitching.immaculate||0) + 1;
+      }
+    }
+
     const season = {
       year: career.year, age: career.age, teamId: career.teamId, teamName: teamNameAt(career.teamId, career.year),
       position: "P", pitcherRole: role, isPitching: true,
@@ -8090,6 +8174,7 @@ import {
       era: line.era, whip: line.whip, eraPlus: line.eraPlus, fip: line.fip,
       k9: line.k9, bb9: line.bb9, hr9: line.hr9, kbbRatio: line.kbbRatio,
       cyScore: cyYoungScore({ ...line, w: pw, sv, role }, decade),
+      gems,
       rating, opsPlus: null,
       // neutral hitter aliases so shared standings/awards/render code never reads a NaN
       comp:0, att:0, pct:0, yards:0, td:0, int:0, sacks:0, rushAtt:0, rushYards:0, rushTd:0,
@@ -13125,6 +13210,11 @@ import {
     if(!season.isPitching && season.wins/Math.max(1,season.games) >= 0.75) narratives.push(`One of the best rooms in the league all year.`);
     if(!season.isPitching && season.wins/Math.max(1,season.games) <= 0.25 && season.games>4) narratives.push(`A rough year up front — the offense never found its footing.`);
     if(season.isPitching){
+      (season.gems||[]).forEach(g=>{
+        if(g==="Perfect Game") narratives.push(`💎 A perfect game this season — 27 up, 27 down. One of the rarest things in the sport.`);
+        else if(g==="No-Hitter") narratives.push(`💎 Threw a no-hitter this season.`);
+        else if(g==="Immaculate Inning") narratives.push(`Nine pitches, three strikeouts — an immaculate inning.`);
+      });
       if(season.eraPlus>=150) narratives.push(`An ace's season — one of the best arms in the league by run prevention.`);
       else if(season.eraPlus<=82 && season.ip>60) narratives.push(`A year to forget on the mound — the ERA sat well above league average all season.`);
       if((season.cg||0)>=3) narratives.push(`${season.cg} complete game${season.cg===1?"":"s"} — a genuine workhorse in an era that barely has them.`);
