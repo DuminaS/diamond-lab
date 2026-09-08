@@ -2269,15 +2269,52 @@ import {
   // any NEW call site (Wave 1 adds several -- see the calls after confirmPlayoffRound,
   // tryFinalizeLeaguePlayoffBracket, finalizePlayoffOutcome, and every material transaction) only
   // needs to state what actually changed, not reconstruct the whole checkpoint from scratch.
+  // Review finding 8: a storage failure (quota exceeded, private-mode block) used to be swallowed
+  // silently -- the game kept running while its on-disk save fell further and further behind. Now
+  // it flips a visible warning, keeps the last envelope in memory for a manual backup download,
+  // and clears the warning on the next successful write.
+  let _saveOk = true;
+  let _lastGoodEnvelopeJSON = null;
+  function renderSaveWarning(){
+    const el = document.getElementById("saveWarning");
+    if(el) el.hidden = _saveOk;
+  }
   function saveActiveCareer(checkpointPatch){
     if(!store || !career) return;
+    const base = _lastCheckpoint || { phase:"regular_season", year: career.year, eventId:null, playoffRoundIndex:null };
+    const checkpoint = { ...base, year: career.year, ...(checkpointPatch||{}) };
+    let json;
     try{
-      const base = _lastCheckpoint || { phase:"regular_season", year: career.year, eventId:null, playoffRoundIndex:null };
-      const checkpoint = { ...base, year: career.year, ...(checkpointPatch||{}) };
+      json = JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(), checkpoint, career, build });
+    }catch(e){ json = null; }
+    try{
+      if(json==null) throw new Error("serialize failed");
+      store.setItem(activeCareerKey, json);
       _lastCheckpoint = checkpoint;
-      store.setItem(activeCareerKey, JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(), checkpoint, career, build }));
+      _lastGoodEnvelopeJSON = json;
+      if(!_saveOk){ _saveOk = true; renderSaveWarning(); }
+    }catch(e){
+      _saveOk = false;
+      renderSaveWarning();
+    }
+  }
+  function downloadSaveBackup(){
+    const json = _lastGoodEnvelopeJSON || (()=>{ try{ return JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(), checkpoint: _lastCheckpoint, career, build }); }catch(e){ return null; } })();
+    if(!json) return;
+    try{
+      const blob = new Blob([json], { type:"application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `diamondlab-${(career && career.name || "career").replace(/[^a-z0-9]+/gi,"_")}-${career ? career.year : ""}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=> URL.revokeObjectURL(url), 1000);
     }catch(e){}
   }
+  document.addEventListener("click", (e)=>{
+    if(e.target && e.target.id==="saveWarningExport") downloadSaveBackup();
+    if(e.target && e.target.id==="saveWarningRetry") saveActiveCareer();
+  });
   // Migration requirement #12: persist the migrated/repaired envelope immediately once it's built,
   // rather than waiting for gameplay's own next natural checkpoint (playing a season, a trade, a
   // signing...) -- otherwise a corrupted or pre-Wave-2A save's fix (a new schemaVersion, a rebuilt

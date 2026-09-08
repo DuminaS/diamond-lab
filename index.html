@@ -232,6 +232,12 @@
 
   <!-- CAREER SEASON LOOP (season card or event card render here) -->
   <section class="screen" id="screen-career">
+    <div id="saveWarning" role="alert" hidden>
+      <strong>Progress isn't saving.</strong>
+      <span id="saveWarningDetail">This browser is blocking or out of storage — your career is safe in memory, but close the tab and you'll lose everything since the last successful save.</span>
+      <button type="button" id="saveWarningExport">Download a backup</button>
+      <button type="button" id="saveWarningRetry">Try again</button>
+    </div>
     <div id="careerContent"></div>
   </section>
 

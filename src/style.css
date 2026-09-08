@@ -1182,3 +1182,12 @@
   .era-2020s .fa-offer{ background:#1a1c1f; border:1px solid #2f3336; border-radius:12px; }
   .era-2020s .fa-offer-head, .era-2020s .fa-offer-terms{ color:#e7e9ea; }
   .era-social-icons{ display:flex; gap:1.4rem; margin-top:1rem; padding-top:0.8rem; border-top:1px solid #2f3336; color:#71767b; font-size:0.85rem; }
+
+  /* Review finding 8: a visible "your progress isn't saving" banner (default hidden) */
+  #saveWarning{ margin: 0.6rem 0 0.4rem; padding: 0.7rem 0.9rem; border-radius: 8px;
+    background: #4a1d1d; color: #ffe6e6; border: 1.5px solid #7a2e2e; font-size: 0.88rem; line-height: 1.45; }
+  #saveWarning strong{ display: block; margin-bottom: 0.15rem; }
+  #saveWarning button{ margin-top: 0.5rem; margin-right: 0.5rem; font-family: var(--mono);
+    font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase; padding: 0.4rem 0.7rem;
+    background: #ffe6e6; color: #4a1d1d; border: none; border-radius: 4px; cursor: pointer; }
+  #saveWarning button:hover{ background: #fff; }
