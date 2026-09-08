@@ -3794,11 +3794,13 @@ import {
   // personal stat line) -- see missedGamesBackup/genericMissedGames below for how that split is
   // decided and reported back to generateSeason().
   function simulateRegularSeasonGames({ schedule, gamesPlayed, missedGamesBackup, genericMissedGames,
-      incumbentWinRate, incumbentId, incumbentName, effOverall, comp, ypa, tdRate, intRate, bbRate, attPerGame, perfMult, effRush, sackRate, age, decade }){
-    // Baseball reinterpretation of the slot names: comp = hits-per-PA, ypa = total-bases-per-PA,
-    // tdRate = HR-per-PA, intRate = K-per-PA, bbRate = BB-per-PA, sackRate = GIDP-per-PA, attPerGame
-    // = PA per game, effRush = stolen-base signal.
-    bbRate = bbRate || 0.08;
+      incumbentWinRate, incumbentId, incumbentName, effOverall, seasonTargets, sackRate, attPerGame, age, decade }){
+    // Game-authoritative (review fix): the win/loss/score is simulated for every game, THEN the
+    // player's season line (seasonTargets, computed from the era-calibrated rates in generateSeason)
+    // is distributed across the games he started -- with per-game caps (a HR can't exceed the hits
+    // he had that game or the runs his team scored) -- so `season == sum(game logs)` exactly. The
+    // returned totals are the real per-game sums, not the pre-distribution targets.
+    const t = seasonTargets || {};
     const mySlots = schedule.weeks
       .map((pairs, wIdx)=>{
         const pair = pairs.find(g=>g.a===career.teamId || g.b===career.teamId);
@@ -3807,114 +3809,92 @@ import {
           seriesId: pair.seriesId, gameInSeries: pair.gameInSeries, seriesLen: pair.seriesLen };
       })
       .filter(Boolean);
-    // Normally mySlots.length===schedule.gamesN exactly; clamp against it anyway so the rare
-    // odd-team-count shortfall (see scheduleGamesIntoWeeks) degrades gracefully into "one fewer
-    // game played" instead of a negative count.
     const totalMissed = clamp(mySlots.length - gamesPlayed, 0, mySlots.length);
     const missedIdxs = shuffle(mySlots.map((_,i)=>i)).slice(0, totalMissed);
     const incumbentCount = clamp(missedGamesBackup, 0, totalMissed);
     const incumbentIdxSet = new Set(missedIdxs.slice(0, incumbentCount));
     const missedIdxSet = new Set(missedIdxs);
-    const genericWinProb = clamp(0.5 + (career.teamStrength-65)*0.01, 0.12, 0.88);
-    // Ties QOL: two DIFFERENT probabilities for two different resolution mechanisms. The
-    // missed-game/generic-backup branch below rolls a plain win/loss coinflip with no score
-    // simulated first, exactly like simpleGameWinner -- it needs the UNCONDITIONAL tieProbability
-    // (this game is a tie, period). The real per-quarter branch (simulateGameScore) only checks for
-    // a tie once already level after regulation -- it needs the CONDITIONAL tieStayProbability, or
-    // the player's own real games would tie far less often than everyone else's at the "same" rate
-    // (see tieStayProbability's own comment for the empirical sweep behind this).
-    const tieProbFlat = tieProbability(career.year);
     const tieProbConditional = tieStayProbability(career.year);
-
     const myOff = regularSeasonOffenseGrade(effOverall, age, decade);
+
+    // ----- pass 1: every game's win/loss/score -----
     const games = [];
-    let tComp=0,tAtt=0,tYards=0,tTd=0,tInt=0,tSacks=0,tBb=0,tRushAtt=0,tRushYards=0,tRushTd=0,wins=0,ties=0,started=0,personalTies=0;
-    let backupWins=0, backupLosses=0, incumbentWins=0, incumbentLosses=0;
+    const startedGameIdx = [];
+    let wins=0, ties=0, personalTies=0, backupWins=0, backupLosses=0, incumbentWins=0, incumbentLosses=0;
     mySlots.forEach((slot, idx)=>{
       const oppId = slot.opponentId;
       const oppGrade = oppId===career.teamId ? career.teamStrength : (career.leagueStrength[oppId] ?? 60);
       const oppRival = rivalForTeam(oppId);
-      if(missedIdxSet.has(idx)){
-        // A generic backup (or the named incumbent, if this slot's the one covering him) plays
-        // this week instead -- team quality alone decides it, not this QB's skill, and no personal
-        // stat line gets attached. Still a real, scored entry on the shared schedule so the team's
-        // weekly board never shows a hole where a game should be.
-        const isIncumbent = incumbentIdxSet.has(idx);
-        const isTie = Math.random()<tieProbFlat;
-        const won = !isTie && Math.random() < (isIncumbent ? incumbentWinRate : genericWinProb);
-        if(isTie){ ties++; }
-        else if(isIncumbent){ if(won) incumbentWins++; else incumbentLosses++; }
-        else { if(won) backupWins++; else backupLosses++; }
-        let winnerScore, loserScore;
-        if(isTie){ const s = approxGameScore(Math.max(career.teamStrength,oppGrade), Math.min(career.teamStrength,oppGrade)); winnerScore = loserScore = Math.round((s.winnerScore+s.loserScore)/2); }
-        else ({ winnerScore, loserScore } = approxGameScore(won?career.teamStrength:oppGrade, won?oppGrade:career.teamStrength));
-        // Wave 2B: tag exactly WHO started this game -- the named incumbent (if this is one of his
-        // planned weeks) or nobody in particular (a generic missed game, e.g. injury/suspension
-        // coverage) -- so schedule cards and the box-score modal can show the real starter instead
-        // of silently assuming it was always the player. comp/att/yards/td/int stay 0 here; the
-        // incumbent's real stat line gets distributed onto exactly these tagged weeks once
-        // simulateRivalSeasons actually simulates him, later this same generateSeason() call (see
-        // applyStatLineToGames there).
-        games.push({ week: slot.week, seriesId: slot.seriesId, gameInSeries: slot.gameInSeries, seriesLen: slot.seriesLen,
-          opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
-          opponentGrade: Math.round(oppGrade), opponentQbId: oppRival?oppRival.id:null,
-          opponentQbName: oppRival?oppRival.name:null, opponentQbOverall: oppRival?rivalEffTalent(oppRival):null,
-          won: isTie?null:won, tie: isTie, myScore: isTie?winnerScore:(won?winnerScore:loserScore), oppScore: isTie?loserScore:(won?loserScore:winnerScore),
-          comp:0, att:0, yards:0, td:0, int:0, sacks:0, bb:0, rushAtt:0, rushYards:0, rushTd:0, startedByBackup:true,
-          qbId: isIncumbent ? incumbentId : null, qbName: isIncumbent ? incumbentName : null });
-        return;
-      }
-      started++;
       const oppOffense = opponentOffenseGrade(oppId, QB_INFLUENCE_REGULAR);
-      // Phase 16c: the specific arm the opponent runs out today (rotation turns over by week) is
-      // blended into the run suppression the player's bat faces -- an ace start is a tough night,
-      // a #5 start is a get-well game. Mean-preserving, no extra RNG.
-      const scoreSim = simulateGameScore(myOff, oppOffense, career.defense, tieProbConditional, career.year, false, opposingDefenseForGame(oppId, career.year, (slot.week||1)-1));
-      const won = scoreSim.won;
-      // ties (shared with the missed-games/incumbent-covered branch above, since season.teamTies
-      // needs every tie regardless of who was under center) is NOT the right subtrahend for
-      // personal `losses` below -- see personalTies.
-      if(scoreSim.tie){ ties++; personalTies++; } else if(won) wins++;
-      bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won: scoreSim.tie?false:won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
+      const missed = missedIdxSet.has(idx);
+      const isIncumbent = incumbentIdxSet.has(idx);
+      // Review fix #6: even a game the player misses is resolved by the same opponent-aware engine
+      // (the old branch used a team-strength-only win probability that ignored the opponent).
+      const myDefFor = missed
+        ? Math.round(clamp(opposingDefenseForGame(career.teamId, career.year, (slot.week||1)-1) ?? safeNum(career.defense,60), 20, 99))
+        : career.defense;
+      const scoreSim = simulateGameScore(missed ? clamp(58 + (career.teamStrength-65), 30, 96) : myOff,
+        oppOffense, myDefFor, tieProbConditional, career.year, false, opposingDefenseForGame(oppId, career.year, (slot.week||1)-1));
+      const isTie = !!scoreSim.tie, won = scoreSim.won;
+      if(isTie){ ties++; if(!missed) personalTies++; }
+      else if(!missed){ if(won) wins++; }
+      else if(isIncumbent){ if(won) incumbentWins++; else incumbentLosses++; }
+      else { if(won) backupWins++; else backupLosses++; }
+      if(!missed) bumpRivalry(oppRival, { divisionRival: divisionOf(career.teamId, career.year).teams.includes(oppId), won: isTie?false:won, close: Math.abs(scoreSim.myTotal-scoreSim.oppTotal)<=3 });
 
-      // A hitter's box line for this game. Per-game noise averages to 1.0x the season rate over a
-      // full slate, so summed game logs land on the same season totals -- this only adds texture.
-      // Deliberately NOT tied to this game's run total (unlike the old scoreboard-coupled TD rule):
-      // one bat's hits/total bases aren't the team's runs. The ONE hard exception is HR: a batter
-      // cannot hit more home runs in a game than his own team scored runs (each HR scores at least
-      // the batter), so gTd is capped at scoreSim.myTotal below.
-      const gAtt = Math.max(2, Math.round(attPerGame*(0.55+Math.random()*0.9)));   // PA
-      const gComp = clamp(Math.round(gAtt*clamp(comp*(0.35+Math.random()*1.3), 0, 0.9)*perfMult), 0, gAtt);   // hits
-      const gYards = Math.max(gComp, Math.round(gAtt*clamp(ypa*(0.3+Math.random()*1.55), 0, 3.2)*perfMult));   // total bases
-      const gInt = Math.max(0, Math.round(gAtt*clamp(intRate*(0.2+Math.random()*1.7), 0, 0.9)*(2-perfMult))); // strikeouts
-      const gBb = Math.max(0, Math.round(gAtt*clamp(bbRate*(0.25+Math.random()*1.6), 0, 0.7)));               // walks
-      const gSacks = Math.max(0, Math.round(gAtt*clamp(sackRate*(0.2+Math.random()*2.0), 0, 0.5)));           // GIDP
-      const gTd = clamp(Math.round(gAtt*clamp(tdRate*(0.15+Math.random()*2.2), 0, 0.5)*perfMult), 0, Math.min(Math.max(1,gComp), scoreSim.myTotal)); // HR — never more than the team's own runs
-
-      // Stolen bases: effRush is the SB signal. Attempts per game run ~0..0.9, success ~62-90%.
-      const gRushAttPerGame = clamp((effRush-58)*0.010, 0, 0.9);
-      const gRushAtt = Math.max(0, Math.round(gRushAttPerGame*(0.3+Math.random()*1.7)));
-      const gSbSuccess = clamp(0.62 + (effRush-60)*0.006, 0.45, 0.92);
-      const gRushYards = gRushAtt>0 ? Math.min(gRushAtt, Math.round(gRushAtt*gSbSuccess + (Math.random()<0.5?0:1))) : 0; // SB made
-      const gRushTd = 0;
-
-      tComp+=gComp; tAtt+=gAtt; tYards+=gYards; tTd+=gTd; tInt+=gInt; tSacks+=gSacks; tBb+=gBb;
-      tRushAtt+=gRushAtt; tRushYards+=gRushYards; tRushTd+=gRushTd;
-
-      games.push({ week: slot.week, seriesId: slot.seriesId, gameInSeries: slot.gameInSeries, seriesLen: slot.seriesLen,
-        opponentId: oppId, opponentName: teamNameAt(oppId, career.year),
-        opponentGrade: Math.round(oppGrade),
-        opponentQbId: oppRival ? oppRival.id : null,
-        opponentQbName: oppRival ? oppRival.name : null,
+      const entry = {
+        week: slot.week, seriesId: slot.seriesId, gameInSeries: slot.gameInSeries, seriesLen: slot.seriesLen,
+        opponentId: oppId, opponentName: teamNameAt(oppId, career.year), opponentGrade: Math.round(oppGrade),
+        opponentQbId: oppRival ? oppRival.id : null, opponentQbName: oppRival ? oppRival.name : null,
         opponentQbOverall: oppRival ? rivalEffTalent(oppRival) : null,
-        won, tie: !!scoreSim.tie, myScore: scoreSim.myTotal, oppScore: scoreSim.oppTotal,
-        // real inning-by-inning runs for the box-score line score (compact form)
+        won: isTie?null:won, tie: isTie, myScore: scoreSim.myTotal, oppScore: scoreSim.oppTotal,
         innings: { my: (scoreSim.quarters||[]).map(q=>q.myQ), opp: (scoreSim.quarters||[]).map(q=>q.oppQ) },
-        comp: gComp, att: gAtt, yards: gYards, td: gTd, int: gInt, sacks: gSacks, bb: gBb,
-        rushAtt: gRushAtt, rushYards: gRushYards, rushTd: gRushTd });
+        comp:0, att:0, yards:0, td:0, int:0, sacks:0, bb:0, rushAtt:0, rushYards:0, rushTd:0,
+      };
+      if(missed){
+        entry.startedByBackup = true;
+        entry.qbId = isIncumbent ? incumbentId : null;
+        entry.qbName = isIncumbent ? incumbentName : null;
+      } else {
+        startedGameIdx.push(games.length);
+      }
+      games.push(entry);
     });
+    const started = startedGameIdx.length;
+
+    // ----- pass 2: decompose the season line across the started games -----
+    let tComp=0,tAtt=0,tYards=0,tTd=0,tInt=0,tSacks=0,tBb=0,tRushAtt=0,tRushYards=0,tDbl=0,tTrip=0,tSingle=0;
+    if(started > 0){
+      const paG      = distributeAcrossGames(Math.max(started*2, Math.round(t.pa||0)), started);
+      const bbG      = distributeWithCaps(t.bb||0,      paG.map(p=> Math.max(0, p-1)));
+      const hitCapG  = paG.map((p,i)=> Math.max(0, p - bbG[i]));
+      const hitsG    = distributeWithCaps(t.hits||0,    hitCapG);
+      const kG       = distributeWithCaps(t.k||0,       paG.map((p,i)=> Math.max(0, p - hitsG[i] - bbG[i])));
+      // HR can't exceed the hits he had that game OR the runs his team scored (each HR scores >=1)
+      const hrCapG   = startedGameIdx.map((gi,i)=> Math.min(hitsG[i], games[gi].myScore));
+      const hrG      = distributeWithCaps(t.hr||0,      hrCapG);
+      const tripG    = distributeWithCaps(t.triples||0, hitsG.map((h,i)=> Math.max(0, h - hrG[i])));
+      const dblG     = distributeWithCaps(t.doubles||0, hitsG.map((h,i)=> Math.max(0, h - hrG[i] - tripG[i])));
+      const gidpG    = distributeWithCaps(Math.round((sackRate||0.02) * (t.pa||0)), paG.map(p=> Math.max(0, Math.floor(p*0.4))));
+      const sbAttG   = distributeWithCaps(t.sbAtt||0,   paG.map(()=> 2));
+      const sbMadeCap= sbAttG.slice();
+      const sbG      = distributeWithCaps(t.sb||0,      sbMadeCap);
+      startedGameIdx.forEach((gi,i)=>{
+        const g = games[gi];
+        const singles = Math.max(0, hitsG[i] - hrG[i] - tripG[i] - dblG[i]);
+        const tb = singles + 2*dblG[i] + 3*tripG[i] + 4*hrG[i];
+        g.att = paG[i]; g.comp = hitsG[i]; g.yards = tb; g.td = hrG[i]; g.int = kG[i];
+        g.doubles = dblG[i]; g.triples = tripG[i]; g.singles = singles;
+        g.sacks = gidpG[i]; g.bb = bbG[i];
+        g.rushAtt = sbAttG[i]; g.rushYards = Math.min(sbG[i], sbAttG[i]); g.rushTd = 0;
+        tAtt+=g.att; tComp+=g.comp; tYards+=g.yards; tTd+=g.td; tInt+=g.int;
+        tSacks+=g.sacks; tBb+=g.bb; tRushAtt+=g.rushAtt; tRushYards+=g.rushYards;
+        tDbl+=g.doubles; tTrip+=g.triples; tSingle+=g.singles;
+      });
+    }
     return { games, comp:tComp, att:tAtt, yards:tYards, td:tTd, int:tInt, sacks:tSacks, bb:tBb,
-      rushAtt:tRushAtt, rushYards:tRushYards, rushTd:tRushTd, wins, losses: started-wins-personalTies, ties,
+      rushAtt:tRushAtt, rushYards:tRushYards, rushTd:0, doubles:tDbl, triples:tTrip, singles:tSingle,
+      wins, losses: started-wins-personalTies, ties,
       backupWins, backupLosses, incumbentWins, incumbentLosses };
   }
 
@@ -4042,6 +4022,33 @@ import {
   function fmtOutsToIp(outs){
     outs = Math.max(0, Math.round(outs || 0));
     return `${Math.floor(outs/3)}.${outs%3}`;
+  }
+  // Distribute an integer `total` across games with natural game-to-game variance, but never
+  // letting any game exceed its own cap -- overflow spills deterministically into games that still
+  // have headroom, and if the caps can't hold the whole total the remainder is dropped (the
+  // returned array is authoritative; the caller sums it for the real season total). Used to
+  // decompose a season counting stat (HR, 2B, SB...) into a game log that ADDS UP exactly instead
+  // of sampling each game independently and hoping. One RNG draw per game (via
+  // distributeAcrossGames), same as the per-stat cost of the old independent sampler.
+  function distributeWithCaps(total, caps){
+    const n = caps.length;
+    if(n===0) return [];
+    const shares = distributeAcrossGames(Math.max(0, Math.round(total)), n);
+    // clamp down to caps, collecting the overflow
+    let overflow = 0;
+    for(let i=0;i<n;i++){
+      if(shares[i] > caps[i]){ overflow += shares[i] - caps[i]; shares[i] = caps[i]; }
+    }
+    // spill the overflow into games with headroom, round-robin
+    let guard = 0;
+    while(overflow > 0 && guard++ < 50000){
+      let placed = false;
+      for(let i=0;i<n && overflow>0;i++){
+        if(shares[i] < caps[i]){ shares[i]++; overflow--; placed = true; }
+      }
+      if(!placed) break; // no headroom anywhere -- remainder is dropped
+    }
+    return shares;
   }
   // Attaches per-game QB attribution + a plausible per-game stat line onto a slice of a team's real
   // game log (career.currentSeasonSchedules[teamId]) -- comp is derived from each game's own
@@ -8638,6 +8645,29 @@ import {
     const sackRate = clamp(0.022 - (effRush-60)*0.00035 + (isoRate>0.20 ? 0.003 : 0), 0.004, 0.05);
 
     const perfMult = 1 - perfPenalty*0.01;
+
+    // ---- Season batting-line TARGETS, computed here from the era-calibrated rates, then
+    // distributed across the real game log by simulateRegularSeasonGames so that
+    // `season == sum(game logs)` exactly (review finding 2: season HR / TB used to be re-derived
+    // from isoRate and diverged sharply from the per-game samples -- 14 HR on a season, 0 in the
+    // logs). The `est*` names are targets; the actual season line below reads the game-log sums. ----
+    const gpForLine = clamp(gamesPlayed, 0, 200);
+    const estPA0 = Math.max(0, Math.round(attPerGame * gpForLine));
+    const estBB0 = Math.round(estPA0 * bbRate);
+    const estHBP0 = Math.round(estPA0 * 0.009), estSF0 = Math.round(estPA0 * 0.006);
+    const estAB0 = Math.max(0, estPA0 - estBB0 - estHBP0 - estSF0);
+    const estHits0 = clamp(Math.round(estAB0 * avgRate * perfMult), 0, estAB0);
+    const estK0 = Math.max(0, Math.round(estPA0 * kRate * (2 - perfMult)));
+    const estPowerBases0 = Math.max(0, Math.round(isoRate * estAB0 * perfMult));
+    const estHrShare = clamp(0.44 + (effTd - neutralTd)*0.010 + (isoRate - 0.145)*0.9, 0.20, 0.74);
+    const estHR0 = clamp(Math.round(estPowerBases0 * estHrShare / 3), 0, Math.max(0, estHits0 - 3));
+    const estTriples0 = clamp(Math.round((effRush-64)*0.08 + Math.random()*2.2), 0, Math.max(0, Math.round((estHits0 - estHR0)*0.14)));
+    const estDoubles0 = clamp(Math.round(estPowerBases0 - 3*estHR0 - 2*estTriples0), 0, Math.min(62, Math.max(0, estHits0 - estHR0 - estTriples0)));
+    const estSbAtt0 = Math.max(0, Math.round(gpForLine * clamp((effRush-58)*0.010, 0, 0.9) * (0.4 + Math.random()*0.6)));
+    const estSB0 = Math.round(estSbAtt0 * clamp(0.62 + (effRush-60)*0.006, 0.45, 0.92));
+    const seasonTargets = { pa: estPA0, ab: estAB0, hits: estHits0, hr: estHR0, doubles: estDoubles0,
+      triples: estTriples0, bb: estBB0, k: estK0, hbp: estHBP0, sf: estSF0, sbAtt: estSbAtt0, sb: estSB0 };
+
     // the team's season doesn't stop when this QB is hurt — a generic backup covers the missed
     // games, playing off team quality alone (not this player's skill), so "team record" and "your
     // record as the starter" can and often do differ. Games missed specifically because a NAMED
@@ -8658,8 +8688,7 @@ import {
       schedule, gamesPlayed, missedGamesBackup, genericMissedGames, incumbentWinRate,
       incumbentId: career._backupUsagePlan ? career._backupUsagePlan.qbId : null,
       incumbentName: backupIncumbentName,
-      effOverall, comp, ypa, tdRate, intRate, bbRate, attPerGame, perfMult, effRush, sackRate,
-      age: career.age, decade,
+      effOverall, seasonTargets, sackRate, attPerGame, age: career.age, decade,
     });
     const gameLog = regSeason.games, wins = regSeason.wins, losses = regSeason.losses, ties = regSeason.ties||0;
     // Legacy slot names kept so the ~50 render sites still read: att=PA, comp=hits, yards=total
@@ -8669,27 +8698,21 @@ import {
       rushAtt = regSeason.rushAtt, rushYards = regSeason.rushYards, rushTd = regSeason.rushTd;
     const walks = regSeason.bb || 0;
 
-    // ---- Derive the full batting line ----
-    // The season's power output (isoRate*AB = extra bases beyond singles) is split into HR / 2B /
-    // 3B here rather than trusting the per-game HR slot, so ISO and HR can never disagree (an
-    // earlier pass produced .478-SLG / 0-HR seasons because the two were computed independently).
+    // ---- The full batting line: the SUM of the real game log (review finding 2) ----
+    // simulateRegularSeasonGames distributed the season targets above across the games he started,
+    // with per-game caps, and returned the actual per-game sums here. Nothing is re-derived from a
+    // rate, so the season card and the box scores always agree.
     const pa = attempts;
     const hbp = Math.round(pa*0.009), sf = Math.round(pa*0.006);
-    const ab = Math.max(0, pa - walks - hbp - sf);
-    const hits = clamp(completions, 0, ab);
+    // AB must hold at least the hits + strikeouts the game log actually recorded.
+    const ab = Math.max(0, pa - walks - hbp - sf, (regSeason.comp||0) + (regSeason.int||0));
+    const hits = regSeason.comp || 0;
     const strikeouts = interceptions;
-    const powerBases = Math.max(0, Math.round(isoRate * ab)); // extra bases: 2B + 2*3B + 3*HR
-    // What fraction of the power output is home runs vs. gap doubles. Rises with the HR-lean tool
-    // signal AND with raw ISO (a genuine slugger turns his extra-base hits into homers; a doubles
-    // machine spreads them into the gaps). Tuned so a .440-SLG / ~.155-ISO hitter lands ~20 HR /
-    // ~35 2B, not 6 HR / 80 2B.
-    const hrShare = clamp(0.44 + (effTd - neutralTd)*0.010 + (isoRate - 0.145)*0.9, 0.20, 0.74);
-    const hr = clamp(Math.round(powerBases * hrShare / 3), 0, Math.max(0, hits - 3));
-    const triples = clamp(Math.round((effRush-64)*0.08 + Math.random()*2.2), 0, Math.max(0, Math.round((hits-hr)*0.14)));
-    let doublesN = Math.round((powerBases - 3*hr - 2*triples));
-    doublesN = clamp(doublesN, 0, Math.min(62, Math.max(0, hits - hr - triples)));
-    const singles = Math.max(0, hits - hr - triples - doublesN);
-    const totalBases = singles + 2*doublesN + 3*triples + 4*hr;
+    const hr = regSeason.td;
+    const triples = regSeason.triples || 0;
+    const doublesN = regSeason.doubles || 0;
+    const singles = Math.max(0, (regSeason.singles!=null ? regSeason.singles : hits - hr - triples - doublesN));
+    const totalBases = yards; // = singles + 2*2B + 3*3B + 4*HR, summed per game
     const tbActual = totalBases;
     const sb = rushYards, cs = Math.max(0, rushAtt - rushYards);
     const avg = ab>0 ? hits/ab : 0;

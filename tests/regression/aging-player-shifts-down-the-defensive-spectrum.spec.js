@@ -10,8 +10,11 @@ const EASIER = { C: 3, SS: 3, "2B": 2, "3B": 2, CF: 3, LF: 1, RF: 1, "1B": 1, DH
 test("an aging player slides down the defensive spectrum", async ({ page }) => {
   test.setTimeout(600_000);
 
+  // Seeds whose 2000s career reaches its mid-30s at a premium position and takes the aging shift
+  // (SS->2B, LF->1B). The mechanic fires in ~1 career in 5, so these are hand-picked; the extras
+  // are fallbacks in case a future engine change moves the RNG.
   let anyMoved = false, seedsChecked = 0;
-  for (const seed of [3, 11, 24, 42]) {
+  for (const seed of [5, 37, 55, 3, 29, 1, 133]) {
     if (anyMoved && seedsChecked >= 2) break; // enough evidence; keep the suite fast
     seedsChecked++;
     await installSeededRandom(page, seed);
