@@ -460,3 +460,76 @@ The lineup age curve and the HOF by-position award weighting were reviewed and l
 by-position Silver Slugger field is if anything *harder* to win than the old top-N, and the age
 curve stays inside the retire-age band; neither justified a retune that would churn every seeded
 spec. **74 regression / 58 balance green.** Phase 15 merged to `main`.
+
+### Phase 16 — Pitchers: full staffs + the Pitcher career path  ✅ (solo; multiplayer pitcher deferred)
+
+Do for pitchers what Phase 15 did for hitters — every arm on every staff a real tracked character
+— **and** add a Pitcher career path chosen on the Showcase setup screen. Decisions (user): a full
+parallel pitcher pool + 12 pitching tools; staff depth = rotation + closer + 2 setup (~7–8/team);
+one path per career (no two-way); multiplayer both-players-same-path. Built engine-first so the
+user-facing fork was the last thing wired on. See `PHASE16_PLAN.md` for the full rollout.
+
+**16a — pure pitcher stat engine.** `src/data/pitchers.js` (~140 real historical arms, 7 decades,
+a 12-tool `pr` block + a `role`); `PITCH_ATTRIBUTES` (Stuff: Velocity / Fastball Life / Breaking
+Ball / Changeup · Command: Command / Deception / Sequencing / Pickoff & Hold · Makeup: Stamina /
+Poise / Composure / Durability) with per-era normalization; `src/sim/pitching.js` — `PITCH_LEAGUE`
++ `PITCH_STAT_CAL` era tables (grounded on real decade aggregates and record seasons), a convex
+talent→ERA+ response, `simulatePitcherLine` (GS/IP/W/L/ERA/WHIP/K/BB/HR/ERA+/FIP/SV/HLD/CG/SHO/QS),
+`fip`, `cyYoungScore`, a pitcher age curve. `PITCHER_OVERALL_WEIGHTS` + `pitcherOverall` in
+ratings.js; `evaluateProspect(picks, path)`. 12 new balance tests. Pure additions — nothing calls
+them yet, zero drift.
+
+**16b — the player's pitcher career.** `career.path` / `pitcherRole` (+ migration, defaults every
+existing save to batter), `career.totals.pitching`. `generateSeason()` delegates to a new
+`generatePitcherSeason()` for the pitcher path — reuses every shared piece (schedule,
+`resolvePlayoffs`, the whole league sim, events, wear) and swaps only the player's line:
+`simulatePitcherLine` + `simulatePitcherScheduleGames` (a per-week walk of the shared schedule;
+the ~32 weeks he starts get a real `simulateGameScore` where his start lifts the team's run
+prevention, every other week resolves on team quality; W/L/SV/QS/CG from actual outcomes), pitcher
+age curves (`CURVES.stuff/command/makeup`), a pitcher wear curve, light `developPitcherAttributes`.
+The season object carries a full pitching line + neutralized hitter aliases + `isPitching`. Season
+card / career-summary totals / season-by-season table branch to a pitcher line. Hitter path
+untouched (one delegation line) → zero seeded drift.
+
+**16c — league staffs as tracked entities.** `career.teamRotations[teamId]` (SP1–5, CL from 1975,
+2×SU) mirroring the Phase 15 lineup infra, all RNG-isolated: `spawnRotationArm`,
+`buildTeamRotationRoster`, `buildLeagueRotations` / `ensureLeagueRotations`, `simulateRotationSeasons`,
+`reconcileTeamRotations`. `staffRunPreventionGrade` + `recomputeStaffGrades` re-derive the
+`defense` grade from the real staff as a **minority (~30%) influence**, compressed toward average
+(two full roster-derived grades widened the win spread past the realistic band).
+`opposingDefenseForGame` — the arm on the mound today adjusts run suppression, strictly
+mean-preserving (deviation from the rotation's own average), applied to both hitter and pitcher
+game sims, no RNG. `SAVE_SCHEMA_VERSION` → 5.
+
+**16d — the fork + awards & Cooperstown** (4 commits). *(1)* The Hitter / Pitcher choice on the
+Showcase setup screen (two big silhouette buttons); `cs.path` → `build.path`/`pitcherRole` →
+`career.*`; pitcher Showcase (PITCHERS pool + the 12 tools + blind/classic + respins), pitcher
+grade labels ("Cy Young Build" / "Back-End Starter" / …), identity panel shows "Pitcher" with no
+position re-roll. Multiplayer forced to batter. *(2)* `simulateRotationSeasons` writes a compact
+per-arm season line (RNG-isolated); `resolveCyYoungAndPitchingTitles` — Cy Young (one per league),
+Reliever of the Year (1976+), the pitching Triple Crown, ERA / K / W / WHIP / Saves titles,
+All-Star staff reps; a pitcher Gold Glove (one per league); a full pitcher branch in
+`computeHofScore` (career ERA+ over real innings, Cy Youngs weighted like an MVP, a hard-capped
+IP/K/W or saves bulk term); award-ceremony Cy Young hero + Pitching Titles list. No `Math.random()`
+anywhere in the pitching-award path → hitter path unaffected. Three legacy specs updated for
+renamed/added labels ("Hitter OVR", the pitcher gold-glove count, "Pitcher" in an NL batting
+order). *(3)* Pitcher UI — `buildPitcherAnalyticsTabHTML` (FIP / ERA- / K-BB% / LOB% / a FIP-based
+pWAR estimate), `buildPitcherRivalProfileHTML`, the baseball card + career-recap share branch.
+*(4)* Rare gems — a seeded per-season roll for a no-hitter / perfect game / immaculate inning,
+scaled by ERA+ and K/9 — plus ~16 pitcher achievements (No-Hitter, Perfect Game, Cy Young
+Collection, Pitching Triple Crown, 300 Wins, 3,000 K, The Closer, 400 Saves, The Iron Arm, …).
+
+**16e — FA at staff scale + invariants + merge.** `rollRotationFreeAgency(year)` — the
+pitching-side twin of `rollLineupFreeAgency`: a per-offseason trickle of non-ace arms + relievers
+to clubs that upgrade at the same role, or retirement for the old/washed; RNG-isolated, swept by
+`reconcileTeamRotations`. `ensureLeagueRotations` guarantees a Pitcher-path player occupies a slot
+on his own staff. `validateLeagueState` gained the staff invariants (7–8 slots, no arm in two
+rotations, every slot a live registered non-retired pitcher). New specs:
+`pitcher-career-simulates-a-real-season`, `pitcher-path-fork-and-showcase`,
+`rotation-free-agency-and-staff-invariants`. **79 regression / 70 balance green.**
+
+*Deferred:* multiplayer on the Pitcher path — the 8-char match code is already at capacity
+(seed × 8 + decadeIndex packs into exactly 7 base32 data chars), so a clean path bit needs the
+seed space shrunk, its own test surface, and a Compare-screen pitcher rendering pass. Parallel
+Universe stays hitter-only (forced at `beginMultiplayerCombine`) until a dedicated follow-up.
+Also deferred: two-way (Ohtani) careers.
