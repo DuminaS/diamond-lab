@@ -1975,7 +1975,7 @@ import {
     // serialized, not the full historical-player object graph.
     const serial = picks.map(p=>({ attr:p.attr, key:p.key, value:p.value, decade:p.decade,
       playerName:p.player.name, playerTeam:p.player.team }));
-    const obj = { picks: serial, savedAt: Date.now() };
+    const obj = { picks: serial, savedAt: Date.now(), path: cs.path };
     _sessionLastBuild = obj;
     if(!store) return;
     try{ store.setItem("diamondlab.lastbuild", JSON.stringify(obj)); }catch(e){}
@@ -1999,8 +1999,9 @@ import {
     if(!el) return;
     const saved = loadLastBuildProfile();
     if(!saved || !saved.picks || !saved.picks.length){ el.style.display="none"; return; }
-    const score = computeCombineScore(saved.picks).score;
-    const g = gradeFor(score);
+    const savedPath = saved.path===PATH_PITCHER ? PATH_PITCHER : PATH_BATTER;
+    const score = evaluateProspect(saved.picks, savedPath).score;
+    const g = gradeFor(score, savedPath);
     el.style.display="flex";
     el.innerHTML = `Last build: <b>${score}</b> (${svgEscape(g.flavor)}) — saved ${relativeTimeAgo(saved.savedAt)} on this browser <button type="button" class="btn-ghost-inline" id="loadLastBuildBtn">Resume this build →</button>`;
     const btn = document.getElementById("loadLastBuildBtn");
@@ -2009,6 +2010,7 @@ import {
   function loadLastBuildIntoCombine(){
     const saved = loadLastBuildProfile();
     if(!saved || !saved.picks || !saved.picks.length) return;
+    cs.path = saved.path===PATH_PITCHER ? PATH_PITCHER : PATH_BATTER;
     cs.picks = saved.picks.map(sp=>({
       attr: sp.attr, key: sp.key, value: sp.value, decade: sp.decade,
       player: { name: sp.playerName, team: sp.playerTeam },
@@ -2068,6 +2070,7 @@ import {
     // actually chose. cs itself is declared further down but already initialized by the time any
     // click handler can call this.
     cs.mode = "classic";
+    cs.path = PATH_BATTER;
   }
   let _lastCheckpoint = null;
   // Pure -- never mutates `raw` in place (spreads into new objects instead), and never rolls fresh
@@ -2373,6 +2376,7 @@ import {
   const MAX_AD_RESPINS_PER_COMBINE = 3;
   let cs = {
     mode: "classic",
+    path: PATH_BATTER, // Phase 16: "batter" | "pitcher" -- chosen on the Showcase setup screen
     order: [],
     round: 0,
     picks: [],
@@ -2390,12 +2394,25 @@ import {
     classic: "Classic shows every rating up front. Pick with the numbers in front of you.",
     blind: "Blind hides the ratings. Pick on name, team, and reputation — the grade reveals after you choose.",
   };
+  const pathHelpText = {
+    batter: "Play a hitter's career: 162 games of at-bats, a batting line, Silver Sluggers and the MVP race.",
+    pitcher: "Play a pitcher's career: a rotation spot, ~32 starts a year, an ERA and a strikeout total, and the Cy Young race.",
+  };
   document.querySelectorAll(".mode-toggle button").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       document.querySelectorAll(".mode-toggle button").forEach(b=>{ b.classList.remove("active"); b.setAttribute("aria-checked","false"); });
       btn.classList.add("active"); btn.setAttribute("aria-checked","true");
       cs.mode = btn.dataset.mode;
       document.getElementById("modeHelp").textContent = modeHelpText[cs.mode];
+    });
+  });
+  document.querySelectorAll(".path-card").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      document.querySelectorAll(".path-card").forEach(b=>{ b.classList.remove("active"); b.setAttribute("aria-checked","false"); });
+      btn.classList.add("active"); btn.setAttribute("aria-checked","true");
+      cs.path = btn.dataset.path === PATH_PITCHER ? PATH_PITCHER : PATH_BATTER;
+      const h = document.getElementById("pathHelp");
+      if(h) h.textContent = pathHelpText[cs.path];
     });
   });
   // The Combine Setup screen's own toggle only updates cs.mode/its own visible "active" state when
@@ -2412,6 +2429,13 @@ import {
     });
     const helpEl = document.getElementById("modeHelp");
     if(helpEl) helpEl.textContent = modeHelpText[cs.mode] || modeHelpText.classic;
+    document.querySelectorAll(".path-card").forEach(b=>{
+      const active = b.dataset.path===cs.path;
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-checked", active?"true":"false");
+    });
+    const pathEl = document.getElementById("pathHelp");
+    if(pathEl) pathEl.textContent = pathHelpText[cs.path] || pathHelpText.batter;
   }
 
   function renderBestStrip(){
@@ -2431,7 +2455,7 @@ import {
   document.getElementById("combineSetupBackBtn").addEventListener("click", ()=>{ renderBestStrip(); renderLastBuildStrip(); renderActiveCareerStrip(); renderMultiplayerMatchesStrip(); showScreen("menu"); });
 
   function startCombine(){
-    cs.order = shuffle(ATTRIBUTES);
+    cs.order = shuffle(attributesForPath(cs.path));
     cs.round = 0;
     cs.picks = [];
     // Respins are a scarce resource for the WHOLE combine, not a per-round freebie: one respin of
@@ -2454,7 +2478,9 @@ import {
     document.getElementById("roundTotal").textContent = cs.order.length;
   }
 
-  function decadePool(decade){ return QBS.filter(p=>p.decade===decade); }
+  function decadePool(decade){
+    return (cs.path===PATH_PITCHER ? PITCHERS : QBS).filter(p=>p.decade===decade);
+  }
 
   function beginRound(){
     cs.currentDecade = pick(DECADES);
@@ -2467,7 +2493,7 @@ import {
   }
   function renderRound(){
     const attr = cs.order[cs.round];
-    document.getElementById("draftPosLabel").textContent = "Draft Showcase · " + (cs.mode==="blind" ? "Blind" : "Classic");
+    document.getElementById("draftPosLabel").textContent = (cs.path===PATH_PITCHER ? "Pitching Showcase · " : "Hitting Showcase · ") + (cs.mode==="blind" ? "Blind" : "Classic");
     document.getElementById("draftAttrLabel").textContent = attr.label;
     document.getElementById("roundNum").textContent = cs.round+1;
     document.getElementById("eraPill").textContent = cs.currentDecade;
@@ -2561,22 +2587,23 @@ import {
   // starters ever sniff a Pro Bowl nod, let alone Canton. More levels than before, too, so the
   // long middle of the distribution (most builds land somewhere in C/B territory) doesn't get
   // flattened into one bucket.
-  function gradeFor(score){
+  function gradeFor(score, path){
+    const P = path===PATH_PITCHER;
     if(score>=94) return {grade:"S",  flavor:"Inner-Circle Build"};
     if(score>=89) return {grade:"A+", flavor:"Cooperstown Build"};
-    if(score>=84) return {grade:"A",  flavor:"Silver Slugger Build"};
+    if(score>=84) return {grade:"A",  flavor: P?"Cy Young Build":"Silver Slugger Build"};
     if(score>=79) return {grade:"A-", flavor:"All-Star Build"};
     if(score>=74) return {grade:"B+", flavor:"Borderline All-Star"};
-    if(score>=69) return {grade:"B",  flavor:"Above-Average Regular"};
-    if(score>=63) return {grade:"C+", flavor:"Average Regular"};
-    if(score>=56) return {grade:"C",  flavor:"Below-Average Regular"};
-    if(score>=48) return {grade:"D+", flavor:"Fringe Regular"};
-    if(score>=40) return {grade:"D",  flavor:"Bench-Caliber"};
-    if(score>=32) return {grade:"D-", flavor:"Quad-A Bat"};
+    if(score>=69) return {grade:"B",  flavor: P?"Solid Mid-Rotation Arm":"Above-Average Regular"};
+    if(score>=63) return {grade:"C+", flavor: P?"Back-End Starter":"Average Regular"};
+    if(score>=56) return {grade:"C",  flavor: P?"Swingman / Spot Starter":"Below-Average Regular"};
+    if(score>=48) return {grade:"D+", flavor: P?"Bullpen Depth":"Fringe Regular"};
+    if(score>=40) return {grade:"D",  flavor: P?"Up-and-Down Arm":"Bench-Caliber"};
+    if(score>=32) return {grade:"D-", flavor: P?"Quad-A Arm":"Quad-A Bat"};
     return {grade:"F", flavor:"Roster Cut"};
   }
   function computeCombineScore(picks){
-    return evaluateProspect(picks);
+    return evaluateProspect(picks, cs.path);
   }
 
   let build = null; // {key: value, ...} — the finished prospect
@@ -2584,9 +2611,10 @@ import {
 
   function finishCombine(){
     const result = computeCombineScore(cs.picks);
-    const g = gradeFor(result.score);
+    const g = gradeFor(result.score, cs.path);
     lastCombine = { result, grade: g };
-    build = {};
+    build = { path: cs.path };
+    if(cs.path===PATH_PITCHER) build.pitcherRole = "SP";
     cs.picks.forEach(p=> build[p.key] = p.value);
     saveLastBuildProfile(cs.picks);
 
@@ -2594,7 +2622,7 @@ import {
     document.getElementById("resultGrade").innerHTML = `<b>${g.grade}</b>`;
     document.getElementById("resultFlavor").textContent = g.flavor;
     document.getElementById("resultBreakdown").innerHTML = `
-      Football OVR <b class="tabular">${result.footballOverall}</b><br>
+      ${cs.path===PATH_PITCHER ? "Pitcher" : "Hitter"} OVR <b class="tabular">${result.footballOverall}</b><br>
       Average <b class="tabular">${result.avg}</b><br>
       Balance penalty <b class="tabular">-${result.balancePenalty}</b><br>
       Floor bonus <b class="tabular">+${result.floorBonus}</b>`;
@@ -2637,7 +2665,7 @@ import {
 
   document.getElementById("shareBtn").addEventListener("click", ()=>{
     const lines = [
-      `DIAMOND LAB — hitter build`,
+      `DIAMOND LAB — ${cs.path===PATH_PITCHER ? "pitcher" : "hitter"} build`,
       `Showcase grade: ${lastCombine.result.score}/100 (${lastCombine.grade.grade} · ${lastCombine.grade.flavor})`,
       ...cs.picks.map(p=>`${p.attr}: ${p.player.name} (${p.decade}) — ${p.value}`),
       window.location.href,
@@ -2813,6 +2841,9 @@ import {
     currentMultiplayerContext = { matchId, slot, seed, decadeIndex };
     activeCareerKey = multiplayerSaveKey(matchId, slot);
     cs.mode = "blind";
+    // Phase 16: Parallel Universe is hitter-only for now (a cross-path greatness comparison on the
+    // Compare screen lands in 16e). Force the batter Showcase regardless of any solo path choice.
+    cs.path = PATH_BATTER;
     installSeededRandom(seed);
     startCombine();
   }
@@ -2948,6 +2979,7 @@ import {
     const collegeInput = document.getElementById("identityCollegeInput");
     const hometownValue = document.getElementById("identityHometownValue");
     const positionValue = document.getElementById("identityPositionValue");
+    const isPitcher = cs.path===PATH_PITCHER;
     if(!identity.name) identity.name = randomFullName();
     if(!identity.college) identity.college = randomCollege();
     if(!identity.hometown) identity.hometown = randomHometown();
@@ -2955,7 +2987,9 @@ import {
     nameInput.value = identity.name;
     collegeInput.value = identity.college;
     hometownValue.textContent = `${identity.hometown.city}, ${identity.hometown.state}`;
-    if(positionValue) positionValue.textContent = positionLabel(identity.position);
+    if(positionValue) positionValue.textContent = isPitcher ? "Pitcher" : positionLabel(identity.position);
+    const posReroll = document.getElementById("identityPositionRerollBtn");
+    if(posReroll) posReroll.style.display = isPitcher ? "none" : "";
     const dl = document.getElementById("collegeList");
     if(!dl.childElementCount) dl.innerHTML = COLLEGES.map(c=>`<option value="${c}"></option>`).join("");
   }
@@ -3217,10 +3251,12 @@ import {
     // blank name/college fields mean "randomize for me" — resolve that at the moment of
     // declaring for the draft, not just at panel-render time, so a deliberately cleared field
     // still gets a real value.
+    const isPitcherBuild = !!(build && build.path===PATH_PITCHER);
     const playerName = (identity.name||"").trim() || randomFullName();
     const playerCollege = (identity.college||"").trim() || randomCollege();
     const playerHometown = identity.hometown || randomHometown();
-    const playerPosition = identity.position || randomPosition();
+    // A pitcher's "position" is always P; a hitter picks (or is randomly assigned) a fielding spot.
+    const playerPosition = isPitcherBuild ? "P" : (identity.position || randomPosition());
     identity.name = playerName; identity.college = playerCollege; identity.hometown = playerHometown; identity.position = playerPosition;
 
     career = {
