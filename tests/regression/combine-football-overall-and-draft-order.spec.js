@@ -24,8 +24,10 @@ test("combine exposes football OVR and draft order influences destination", asyn
   await page.waitForSelector("#goProBtn", { timeout: 10_000 });
   const combineGrade = Number(await page.locator("#resultScore").textContent());
   const breakdown = await page.locator("#resultBreakdown").textContent();
-  const footballMatch = breakdown.match(/Football OVR\s+(\d+)/);
-  expect(footballMatch, "results must show the actual career-weighted football rating").toBeTruthy();
+  // Phase 16: the legacy "Football OVR" label is now "Hitter OVR" (a pitching build reads
+  // "Pitcher OVR"); it still carries the same career-weighted rating the draft slot keys off.
+  const footballMatch = breakdown.match(/Hitter OVR\s+(\d+)/);
+  expect(footballMatch, "results must show the actual career-weighted hitter rating").toBeTruthy();
   const footballOverall = Number(footballMatch[1]);
 
   await page.click("#goProBtn");

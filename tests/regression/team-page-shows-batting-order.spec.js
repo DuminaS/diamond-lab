@@ -31,7 +31,7 @@ test("team page + Team tab show a 9-man batting order, not a QB depth chart", as
   expect(lineup.length).toBe(9);
   expect(lineup.map(r => r.slot)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
   // real fielding positions, and the player himself is somewhere in it
-  const POS = ["Catcher", "First Base", "Second Base", "Third Base", "Shortstop", "Left Field", "Center Field", "Right Field", "Designated Hitter", "P"];
+  const POS = ["Catcher", "First Base", "Second Base", "Third Base", "Shortstop", "Left Field", "Center Field", "Right Field", "Designated Hitter", "Pitcher"];
   lineup.forEach(r => expect(POS).toContain(r.pos));
   expect(lineup.some(r => /\(you\)/.test(r.player)), "the player is in his own team's lineup").toBe(true);
 

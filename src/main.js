@@ -598,7 +598,7 @@ import {
     { key:"RF", label:"Right Field",   w:12, defWeight:0.7 },
     { key:"DH", label:"Designated Hitter", w:8, defWeight:0.0 },
   ];
-  function positionLabel(key){ const p = POSITIONS.find(x=>x.key===key); return p ? p.label : (key||"—"); }
+  function positionLabel(key){ const p = POSITIONS.find(x=>x.key===key); return p ? p.label : (key==="P" ? "Pitcher" : key==="SP" ? "Starting Pitcher" : key==="CL" ? "Closer" : (key||"—")); }
   // Silver Slugger and Gold Glove are per-position awards in real baseball (one of each per league
   // per position). The sim models a single hitter per club so it can't run a true by-position vote,
   // but it can name the position the winner actually played: season.awardPos maps an award label to
@@ -5857,6 +5857,95 @@ import {
     }
   }
 
+  // Phase 16d: the pitching awards -- Cy Young (one per league), Reliever of the Year (1976+),
+  // the pitching Triple Crown (lead the league in W, ERA, and K), the rate titles, and All-Star
+  // staff reps. Resolved the same comparative, league-wide way the hitting awards are, over the
+  // player (when he's on the Pitcher path) plus every rotation/bullpen entity with a real season.
+  function resolveCyYoungAndPitchingTitles(season, year){
+    const rows = [];
+    if(season && season.isPitching){
+      rows.push({ isMine:true, awards: season.awards, s: season, totals: career.totals, entity: null,
+        conf: conferenceOf(career.teamId, year) });
+    }
+    Object.values(career.qbsById||{}).forEach(r=>{
+      const s = (r.seasons||[]).find(x=>x.year===year && x.isPitching);
+      if(!s) return;
+      const t = TEAMS.find(x=>x.id===r.teamId);
+      if(t && t.start>year) return;
+      rows.push({ isMine:false, awards: s.awards, s, totals: r.totals, entity: r,
+        conf: conferenceOf(r.teamId, year) });
+    });
+    if(!rows.length) return;
+    const cyOf = r => r.s.cyScore != null ? r.s.cyScore : (r.s.cyYoungScore || 0);
+    const push = (r, label) => { if(!r.awards.includes(label)) r.awards.push(label); };
+    const markNotable = r => { if(r.entity) r.entity._notable = true; };
+
+    ["AFC","NFC"].forEach(conf=>{
+      const league = rows.filter(r=>r.conf===conf);
+      if(!league.length) return;
+      const starters = league.filter(r=> r.s.pitcherRole!=="CL" && (r.s.ip||0) >= 100);
+      const relievers = league.filter(r=> r.s.pitcherRole==="CL" || (r.s.sv||0) >= 12);
+
+      // Cy Young -- starters first; a truly dominant closer can win it (rare), so relievers are in
+      // the pool too but their cyScore already discounts workload.
+      const cyPool = starters.length ? starters.concat(relievers) : league;
+      if(cyPool.length){
+        const best = Math.max(...cyPool.map(cyOf));
+        const w = cyPool.find(r=> cyOf(r) === best);
+        if(w && best > 0){
+          push(w, "Cy Young");
+          const pt = w.totals.pitching || (w.totals.pitching = {});
+          pt.cyYoungs = (pt.cyYoungs||0) + 1;
+          markNotable(w);
+        }
+      }
+      // Reliever of the Year (1976+)
+      if(year >= 1976 && relievers.length){
+        const best = Math.max(...relievers.map(r=> (r.s.sv||0)*1.2 + cyOf(r)*0.5));
+        const w = relievers.find(r=> ((r.s.sv||0)*1.2 + cyOf(r)*0.5) === best);
+        if(w){ push(w, "Reliever of the Year"); markNotable(w); }
+      }
+
+      // Rate / counting titles among qualified starters (one per league). ERA is lowest-wins.
+      const qual = starters.filter(r=> (r.s.ip||0) >= 140);
+      const pool = qual.length ? qual : starters;
+      if(pool.length){
+        const titleLow = (get, label) => {
+          const v = Math.min(...pool.map(r=> get(r.s)));
+          const w = pool.find(r=> get(r.s) === v);
+          if(w) push(w, label);
+          return w;
+        };
+        const titleHigh = (get, label) => {
+          const v = Math.max(...pool.map(r=> get(r.s)||0));
+          if(!(v>0)) return null;
+          const w = pool.find(r=> (get(r.s)||0) === v);
+          if(w) push(w, label);
+          return w;
+        };
+        const eraW = titleLow(s=> s.era||99, "ERA Title");
+        const kW   = titleHigh(s=> s.k||0, "Strikeout Title");
+        const wW   = titleHigh(s=> s.w||0, "Wins Title");
+        titleLow(s=> s.whip||9, "WHIP Title");
+        // pitching Triple Crown -- same arm leads in W, ERA, and K
+        if(eraW && eraW===kW && eraW===wW) push(eraW, "Pitching Triple Crown");
+      }
+      // Saves title (relievers)
+      if(relievers.length){
+        const v = Math.max(...relievers.map(r=> r.s.sv||0));
+        if(v > 0){ const w = relievers.find(r=> (r.s.sv||0) === v); if(w) push(w, "Saves Title"); }
+      }
+
+      // All-Star staff reps -- the top ~5 arms per league by cyScore (or saves for a closer).
+      const reps = league.slice().sort((a,b)=> (b.s.pitcherRole==="CL"?(b.s.sv||0)*2:cyOf(b)) - (a.s.pitcherRole==="CL"?(a.s.sv||0)*2:cyOf(a)));
+      reps.slice(0, year<1970?3:year<1990?4:5).forEach(r=>{
+        if(!r.awards.includes("All-Star")){ r.awards.push("All-Star"); const pt=r.totals; if(pt) pt.proBowls = (pt.proBowls||0)+1; }
+      });
+    });
+
+    return rows.some(r=> r.isMine && r.awards.includes("Cy Young"));
+  }
+
   // Gold Glove: one winner per fielding position per league (a DH can't win one), decided by a
   // fielding score across the whole league -- a stored per-entity `glove` rating for a rival, and
   // the era-adjusted fielding tools (Arm always, plus Speed up the middle) for the player. Gated on
@@ -5890,6 +5979,24 @@ import {
       rows.push({ isMine:false, conf: conferenceOf(r.teamId, year), pos: r.position,
         score: entityFieldingScore(r), season: s, teamId: r.teamId });
     });
+    // Phase 16d: a pitcher Gold Glove too -- one per league among the rotation arms, off a stored
+    // fielding read (the entity's own PIK "Pickoff & Hold" tool for the player, a talent-scaled
+    // proxy for a rival).
+    const pRows = [];
+    if(season.isPitching && (season.gs||0) >= 15){
+      pRows.push({ isMine:true, conf: conferenceOf(career.teamId, year), season,
+        score: clamp(50 + (safeNum(build.PIK,55)-55)*0.7 + (safeNum(build.CMP,60)-60)*0.2, 20, 99), teamId: career.teamId });
+    }
+    Object.values(career.qbsById||{}).forEach(r=>{
+      if(!r.pitcher) return;
+      const s = (r.seasons||[]).find(x=>x.year===year && x.isPitching);
+      if(!s || (s.gs||0) < 15) return;
+      const t = TEAMS.find(x=>x.id===r.teamId);
+      if(t && t.start>year) return;
+      pRows.push({ isMine:false, conf: conferenceOf(r.teamId, year), season: s,
+        score: clamp(50 + (pitcherRivalEffTalent(r)-65)*0.35 + ((r.id.charCodeAt(5)||0)%13) - 6, 20, 95), teamId: r.teamId });
+    });
+
     ["AFC","NFC"].forEach(conf=>{
       FIELD_POSITIONS.forEach(pos=>{
         const at = rows.filter(x=>x.conf===conf && x.pos===pos);
@@ -5904,6 +6011,19 @@ import {
           recordLedgerEvent("award_won", { teamId: w.teamId, outcomeId: "Gold Glove" });
         }
       });
+      const pAt = pRows.filter(x=>x.conf===conf);
+      if(pAt.length>=2){
+        const w = pAt.sort((a,b)=> b.score-a.score)[0];
+        if(!w.season.awards) w.season.awards = [];
+        if(!w.season.awards.includes("Gold Glove")){
+          w.season.awards.push("Gold Glove");
+          (w.season.awardPos = w.season.awardPos || {})["Gold Glove"] = "P";
+          if(w.isMine){
+            career.transactions.push(`${year}: Wins a Gold Glove for his work on the mound.`);
+            recordLedgerEvent("award_won", { teamId: w.teamId, outcomeId: "Gold Glove" });
+          }
+        }
+      }
     });
   }
 
@@ -6386,7 +6506,8 @@ import {
         const e = career.qbsById[id];
         if(e && !e.retired && e.age>e.retireAge) retireQuarterback(id, "age");
       });
-      // age + drift the arms that kept a slot
+      // age + drift + (for starters and closers) a compact real season line so Cy Young and a
+      // rival pitcher's profile have something to read. Setup arms just age.
       arr.forEach((id, i)=>{
         if(id===USER_QB_ID) return;
         const e = career.qbsById[id];
@@ -6394,11 +6515,31 @@ import {
         e.rotationSlot = i+1; e.pitchRole = slots[i];
         if(e._agedYear === year) return; // shared entity guard
         e._agedYear = year;
+        const pitchRole = slots[i];
+        if(pitchRole !== "SU" && !(e.seasons||[]).some(s=>s.year===year)){
+          const gline = simulatePitcherLine({ talent: pitcherRivalEffTalent(e), age: e.age, decade,
+            role: pitchRole, teamGrade: career.leagueStrength[teamId] ?? 60, scale: ROTATION_STAT_SCALE });
+          const srow = {
+            year, age: e.age, teamId, position:"P", isPitching:true, pitcherRole: pitchRole,
+            games: gline.gp, gs: gline.gs, ip: gline.ip, w: gline.w, l: gline.l, sv: gline.sv,
+            k: gline.k, bbAllowed: gline.bb, era: gline.era, whip: gline.whip, eraPlus: gline.eraPlus,
+            fip: gline.fip, qs: gline.qs, cg: gline.cg, sho: gline.sho, rating: gline.eraPlus,
+            wins: gline.w, losses: gline.l, ties: 0, awards: [], cyScore: cyYoungScore(gline, decade),
+          };
+          e.seasons.push(srow);
+          const pt = e.totals.pitching || (e.totals.pitching = { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0 });
+          pt.gs += gline.gs; pt.gp += gline.gp; pt.ip = Math.round((pt.ip + gline.ip)*10)/10;
+          pt.w += gline.w; pt.l += gline.l; pt.sv += gline.sv; pt.k += gline.k; pt.bb += gline.bb;
+          pt.er += gline.er; pt.h += gline.h; pt.hr += gline.hr; pt.qs += gline.qs; pt.cg += gline.cg; pt.sho += gline.sho;
+          e.totals.games += gline.gp;
+        }
         e.age++;
         const drift = e.age<=26 ? randInt(-1,3) : e.age<=30 ? randInt(-2,2) : randInt(-4,1);
         e.talent = clamp(e.talent + drift, 18, 99);
       });
     });
+    // (trim/prune already ran in simulateLineupSeasons this same season; pitcher rows added here
+    // get swept by next season's pass, which iterates the whole registry.)
     });
   }
   // Sweep every staff of any slot gone stale (retired / missing / duplicate), same job
@@ -6704,7 +6845,10 @@ import {
   const SLIM_SEASON_KEYS = ["year","age","teamId","games","pa","ab","hits","doubles","triples","hr",
     "bb","hbp","sf","k","sb","cs","rbi","runs","avg","opsPlus","rating","awards",
     "proBowlScore","proBowlEligible","allProScore","allProEligible","mvpScore","mvpEligible",
-    "att","comp","yards","td","int","pct","position"];
+    "att","comp","yards","td","int","pct","position",
+    // Phase 16: pitcher line fields kept through the trim
+    "isPitching","pitcherRole","gs","ip","w","l","sv","hld","bbAllowed","hAllowed","hrAllowed",
+    "era","whip","eraPlus","fip","qs","cg","sho","cyScore","wins","losses"];
   function slimSeasonRow(s){
     const out = {};
     SLIM_SEASON_KEYS.forEach(k=>{ if(s[k]!==undefined) out[k] = s[k]; });
@@ -7870,6 +8014,7 @@ import {
       k: line.k, bbAllowed: line.bb, hAllowed: line.h, hrAllowed: line.hr, er: line.er,
       era: line.era, whip: line.whip, eraPlus: line.eraPlus, fip: line.fip,
       k9: line.k9, bb9: line.bb9, hr9: line.hr9, kbbRatio: line.kbbRatio,
+      cyScore: cyYoungScore({ ...line, w: pw, sv, role }, decade),
       rating, opsPlus: null,
       // neutral hitter aliases so shared standings/awards/render code never reads a NaN
       comp:0, att:0, pct:0, yards:0, td:0, int:0, sacks:0, rushAtt:0, rushYards:0, rushTd:0,
@@ -7902,6 +8047,7 @@ import {
     const mvp = resolveSeasonMVP(season, career.year);
     const { proBowl, allPro } = resolveSeasonAllProAndProBowl(season, career.year);
     resolveSeasonStatTitlesAndROY(season, career.year);
+    const cyYoung = resolveCyYoungAndPitchingTitles(season, career.year);
     { const _pd = POSITIONS.find(p=>p.key===career.position); if(_pd && _pd.defWeight>0 && (season.pa||0)>=380) Math.random(); }
     resolveGoldGlovesByPosition(season, career.year);
     (season.awards||[]).forEach(a=>{
@@ -7962,7 +8108,7 @@ import {
 
     checkAchievements();
     if(!career.peakSeason || rating > (career.peakSeason.rating||0)) career.peakSeason = season;
-    career.reputation = clamp(career.reputation + (mvp?8:0) + (allPro?4:0) + (proBowl?2:0)
+    career.reputation = clamp(career.reputation + (mvp?8:0) + (cyYoung?7:0) + (allPro?4:0) + (proBowl?2:0)
       + (winPct>=0.62?1:winPct<=0.34?-2:0) + (line.eraPlus>=140?2:line.eraPlus<=82?-2:0), 0, 100);
     career.gmRelationship = clamp((career.gmRelationship ?? 50) + (mvp?4:0) + (allPro?2:0) + (line.eraPlus>=125?2:line.eraPlus<=85?-3:0), 0, 100);
     career.fanSupport = clamp((career.fanSupport ?? 50) + (mvp?5:0) + (proBowl?2:0) + (line.eraPlus>=125?3:line.eraPlus<=85?-4:0), 0, 100);
@@ -8307,6 +8453,7 @@ import {
     const mvp = resolveSeasonMVP(season, career.year);
     const { proBowl, allPro } = resolveSeasonAllProAndProBowl(season, career.year);
     resolveSeasonStatTitlesAndROY(season, career.year);
+    resolveCyYoungAndPitchingTitles(season, career.year);
     // Drift guard: maybeAwardGoldGlove used to consume exactly one Math.random() here for an
     // eligible fielder before Gold Gloves became a deterministic by-position resolution (Phase
     // 15b). Preserving that one draw keeps every existing seeded career byte-identical.
@@ -11881,6 +12028,9 @@ import {
       att: season.att, pct: season.pct, yards: season.yards, td: season.td, int: season.int,
       rating: season.rating, rbi: season.rbi, hits: season.hits, sb: season.sb, awards: season.awards,
       position: career.position,
+      isPitching: !!season.isPitching, era: season.era, whip: season.whip, ip: season.ip,
+      w: season.w, l: season.l, sv: season.sv, k: season.isPitching ? season.k : undefined,
+      eraPlus: season.eraPlus, pitcherRole: season.pitcherRole,
     }];
     // Phase 15: every registry entity with a real season line for this year -- the full ~250-deep
     // field of tracked hitters, not just the one franchise face per team. The display boundary
@@ -11895,7 +12045,9 @@ import {
       if(t && t.start>year) return;
       rows.push({ name:r.name, teamId:r.teamId, age:s.age, mine:false, games:s.games, att:s.att, pct:s.pct,
         yards:s.yards, td:s.td, int:s.int, rating:s.rating, rbi:s.rbi, hits:s.hits, sb:s.sb, awards:s.awards,
-        isRival:r.isRival, id:r.id, position:r.position });
+        isRival:r.isRival, id:r.id, position: s.isPitching ? "P" : r.position,
+        isPitching: !!s.isPitching, era: s.era, whip: s.whip, ip: s.ip, w: s.w, l: s.l, sv: s.sv,
+        k: s.isPitching ? s.k : undefined, eraPlus: s.eraPlus, pitcherRole: s.pitcherRole });
     });
     rows.sort((a,b)=> b.rating-a.rating);
     return rows;
@@ -11951,6 +12103,10 @@ import {
     const roy = rows.filter(r=>r.awards.includes("Rookie of the Year"));
     const hankAaron = rows.filter(r=>r.awards.includes("Hank Aaron Award"));
     const comeback = rows.filter(r=>r.awards.includes("Comeback Player of the Year"));
+    const cyYoung = rows.filter(r=>r.awards.includes("Cy Young"));
+    const PITCH_TITLE_LABELS = ["Pitching Triple Crown","Reliever of the Year","ERA Title","Strikeout Title","Wins Title","WHIP Title","Saves Title"];
+    const pitchTitleRows = rows.filter(r=> PITCH_TITLE_LABELS.some(l=> r.awards.includes(l)) && !r.awards.includes("Cy Young"));
+    const pStatLine = r => `${r.w||0}-${r.l||0} · ${(r.era||0).toFixed(2)} ERA · ${(r.whip||0).toFixed(2)} WHIP · ${r.k||0} K${(r.sv||0)>0?` · ${r.sv} SV`:""}`;
 
     const statLine = r => `${r.td} HR · ${r.rbi!=null?r.rbi+" RBI · ":""}${(r.pct||0).toFixed(3).replace(/^0/,"")} AVG · ${Math.round(r.rating)} OPS+`;
     const rowLine = r => `${svgEscape(r.name)}${r.mine?" (you)":""} — ${svgEscape(teamNameAt(r.teamId, year))} — ${statLine(r)}`;
@@ -11961,7 +12117,7 @@ import {
       const seasonRowFor = r => (r.mine ? season : (career.qbsById[r.id]||{}).seasons?.find(s=>s.year===year)) || {};
       const posOf = r => (seasonRowFor(r).awardPos||{})[label] || r.position || "?";
       const leagues = [["AL","AFC"],["NL","NFC"]].map(([lg,conf])=>{
-        const lines = FIELD_POSITIONS.concat(["DH"]).map(pos=>{
+        const lines = FIELD_POSITIONS.concat(label==="Gold Glove" ? ["DH","P"] : ["DH"]).map(pos=>{
           const w = list.find(r=> conferenceOf(r.teamId, year)===conf && posOf(r)===pos);
           return w ? `<li class="${w.mine?"me":""}"><b>${svgEscape(positionLabel(pos))}</b> — ${svgEscape(w.name)}${w.mine?" (you)":""} <span style="color:var(--ink-muted);">${svgEscape(teamNameAt(w.teamId, year))}</span></li>` : "";
         }).filter(Boolean).join("");
@@ -11996,8 +12152,25 @@ import {
         <p>Nobody made the cut league-wide this year.</p>
       </div>`;
 
+    const cyYoungHtml = cyYoung.length ? `
+      <div class="award-hero">
+        <div class="award-hero-label">${year} Cy Young Award${cyYoung.length>1?"s":""}</div>
+        ${cyYoung.map(r=>`
+          <div class="award-hero-name">${svgEscape(r.name)}${r.mine?" (you)":""}</div>
+          <div class="award-hero-sub">${svgEscape(teamNameAt(r.teamId, year))} · ${conferenceOf(r.teamId, year)==="AFC"?"AL":"NL"}</div>
+          <div class="award-hero-stat">${pStatLine(r)}</div>
+        `).join('<div style="height:0.6rem;"></div>')}
+      </div>` : "";
+    const pitchTitlesHtml = pitchTitleRows.length ? `
+      <div class="award-list-section">
+        <h4>Pitching Titles <span class="award-count">${pitchTitleRows.length}</span></h4>
+        <ul class="award-list">${pitchTitleRows.map(r=>`<li class="${r.mine?"me":""}">${svgEscape(r.name)}${r.mine?" (you)":""} <span style="color:var(--ink-muted);">${svgEscape(teamNameAt(r.teamId, year))}</span> — ${r.awards.filter(a=>PITCH_TITLE_LABELS.includes(a)).join(", ")} <span style="color:var(--ink-muted);">(${pStatLine(r)})</span></li>`).join("")}</ul>
+      </div>` : "";
+
     return `<div class="award-ceremony">
         ${mvpHtml}
+        ${cyYoungHtml}
+        ${pitchTitlesHtml}
         ${roy.length ? listSection("Rookie of the Year", roy) : ""}
         ${hankAaron.length ? listSection("Hank Aaron Award", hankAaron) : ""}
         ${comeback.length ? listSection("Comeback Player of the Year", comeback) : ""}
@@ -13894,6 +14067,55 @@ import {
   function computeHofScore(totals, seasonLog, exitReason, pedStrikes=0){
     const t = totals;
     const seasons = seasonLog.length;
+
+    // Phase 16d: a pitcher's Cooperstown case is judged on run prevention (career ERA+ over real
+    // innings), the hardware (Cy Youngs weigh like an MVP), and a hard-capped nod to bulk (IP / K /
+    // wins for a starter, saves for a reliever) -- the mound analogue of the hitter formula below.
+    const pit = t.pitching;
+    if((pit && (pit.ip||0) > 30) || seasonLog.some(s=>s.isPitching)){
+      const p = pit || {};
+      const careerEra = (p.ip||0) > 0 ? 9*(p.er||0)/p.ip : 5.0;
+      let lgW=0, lgIp=0;
+      seasonLog.forEach(s=>{ if(!s.isPitching) return; const d = s.decade || decadeForYear(s.year);
+        lgW += ((PITCH_LEAGUE[d]||PITCH_LEAGUE["2000s"]).era) * (s.ip||0); lgIp += (s.ip||0); });
+      const lgEra = lgIp>0 ? lgW/lgIp : 4.15;
+      const careerEraPlus = careerEra>0 ? lgEra*100/careerEra : 100;
+      const pitchSeasons = seasonLog.filter(s=>s.isPitching);
+      const reliever = pitchSeasons.length>0 && pitchSeasons.slice(-5).every(s=> s.pitcherRole==="CL" || (s.gs||0) < 8);
+      const cyYoungs = p.cyYoungs||0;
+      const qualityScore = (careerEraPlus - 100 - 4) * 3.4;
+      const accoladeScore = cyYoungs*30 + t.mvps*32 + t.rings*20 + t.proBowls*3.2;
+      const volumeScore = reliever
+        ? clamp((p.sv||0)/12 + (p.k||0)/230 + Math.min(seasons,16)*1.1, 0, 46)
+        : clamp((p.ip||0)/95 + (p.k||0)/245 + (p.w||0)*0.22 + (p.sho||0)*0.7, 0, 52);
+      const longevityScore = Math.min(seasons,16)*1.6;
+      const pedPenalty = pedStrikes > 0 ? (35 + (pedStrikes-1)*25) : 0;
+      const score = qualityScore + accoladeScore + volumeScore + longevityScore - pedPenalty;
+      if(exitReason==="waived" && score<60) return {score, tier:"Out of the League", note:`Released after ${seasons} season${seasons===1?"":"s"} that never quite came together. The phone stopped ringing.`};
+      const PTIERS = [
+        { min:150, seasons:10, minStars:4, ringsRoute:3, cyRoute:3, tier:"First-Ballot Hall of Famer", note:"The bronze plaque in Cooperstown is a formality at this point." },
+        { min:100, seasons:8,  minStars:2, cyRoute:1, tier:"Hall of Famer", note:"A career the writers won't be able to leave off the ballot." },
+        { min:65,  seasons:0,  minStars:0, tier:"Hall of Very Good", note:"A borderline case — the kind that sparks arguments every January." },
+        { min:35,  seasons:0,  minStars:0, tier:"Longtime Regular", note:"Not a legend, but a rotation could pencil him in for a long time." },
+        { min:12,  seasons:0,  minStars:0, tier:"Journeyman", note:"A real big-league career, bouncing between rotations and bullpens." },
+        { min:-Infinity, seasons:0, minStars:0, tier:"Cup of Coffee", note:"The uniform barely got dirty, but you made it to the show." },
+      ];
+      const pedTierCap = pedStrikes >= 2 ? "Longtime Regular" : pedStrikes === 1 ? "Hall of Very Good" : null;
+      const capIdx = pedTierCap ? PTIERS.findIndex(x=>x.tier===pedTierCap) : -1;
+      for(let ti=0; ti<PTIERS.length; ti++){
+        const tier = PTIERS[ti];
+        if(capIdx >= 0 && ti < capIdx) continue;
+        const gateMet = t.proBowls>=(tier.minStars||0) || (tier.ringsRoute && t.rings>=tier.ringsRoute) || (tier.cyRoute && cyYoungs>=tier.cyRoute);
+        if(score>=tier.min && seasons>=tier.seasons && gateMet){
+          if(tier.tier==="Hall of Famer" && t.proBowls<=2 && cyYoungs===0 && t.mvps===0 && t.rings===0){
+            return { score, tier: tier.tier, note:"A compiler's case more than a slam dunk — a long, steady résumé without a signature peak or a stacked trophy case. The kind of induction that's still argued about after the bust goes up." };
+          }
+          return { score, ...tier };
+        }
+      }
+      return { score, ...PTIERS[PTIERS.length-1] };
+    }
+
     // Quality first: career rate (passer rating), then accolades, then a HARD-CAPPED nod to volume.
     // Sheer longevity piling up garbage-time yardage should never outrank real accolades and efficiency —
     // a 20-season .500 game manager is a "Longtime Regular", not a Hall of Famer, no matter the counting stats.

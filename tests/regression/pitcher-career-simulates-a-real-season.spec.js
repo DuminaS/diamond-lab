@@ -63,6 +63,25 @@ test("a starting-pitcher career simulates era-realistic seasons and keeps the wh
   expect(fc.totals.pitching.ip).toBeGreaterThan(seasons.reduce((a, s) => a + s.ip, 0) - 2);
   expect(fc.totals.pitching.k).toBeGreaterThan(400);
 
+  // pitching awards resolve every year -- exactly one Cy Young per league, plus rate titles
+  const years = [...new Set(seasons.map(s => s.year))];
+  for (const y of years) {
+    const rowsThisYear = [];
+    Object.values(fc.qbsById || {}).forEach(e => (e.seasons || []).forEach(s => { if (s.year === y && s.isPitching) rowsThisYear.push(s); }));
+    fc.seasonLog.forEach(s => { if (s.year === y && s.isPitching) rowsThisYear.push(s); });
+    const cyWinners = rowsThisYear.filter(s => (s.awards || []).includes("Cy Young"));
+    expect(cyWinners.length, `Cy Young winners in ${y}`).toBeGreaterThanOrEqual(1);
+    expect(cyWinners.length, `Cy Young winners in ${y} (<= 1 per league)`).toBeLessThanOrEqual(2);
+    const eraTitles = rowsThisYear.filter(s => (s.awards || []).includes("ERA Title"));
+    expect(eraTitles.length, `ERA titles in ${y}`).toBeGreaterThanOrEqual(1);
+    expect(eraTitles.length).toBeLessThanOrEqual(2);
+    const kTitles = rowsThisYear.filter(s => (s.awards || []).includes("Strikeout Title"));
+    expect(kTitles.length, `strikeout titles in ${y}`).toBeGreaterThanOrEqual(1);
+  }
+  // this ace build should collect some hardware over 9 seasons
+  const myHardware = seasons.flatMap(s => s.awards || []);
+  expect(myHardware.some(a => /Cy Young|ERA Title|Strikeout Title|All-Star|Wins Title/.test(a)), `won something: ${myHardware}`).toBe(true);
+
   // the shared league model is untouched by the pitcher path
   expect(Object.keys(fc.qbsById || {}).length, "league registry still populated").toBeGreaterThan(120);
   const lineupTeams = Object.keys(fc.teamLineups || {});
