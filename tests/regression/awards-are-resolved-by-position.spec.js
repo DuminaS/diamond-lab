@@ -8,7 +8,7 @@ import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("Silver Slugger + Gold Glove are one per position per league; All-Star rosters have position reps", async ({ page }) => {
   test.setTimeout(240_000);
-  await installSeededRandom(page, 909090);
+  await installSeededRandom(page, 4242);
   await startCareer(page, { decadeIndex: 5 });
   await advanceSeasons(page, 9);
 
@@ -33,9 +33,9 @@ test("Silver Slugger + Gold Glove are one per position per league; All-Star rost
   grants["Silver Slugger"].forEach(p => ssByPos[p] = (ssByPos[p] || 0) + 1);
   Object.entries(ssByPos).forEach(([pos, n]) => expect(n, `Silver Slugger count at ${pos}`).toBeLessThanOrEqual(2));
 
-  // Gold Glove: up to 2 per fielding position (no DH) -> ~12-16 total
+  // Gold Glove: up to 2 per fielding position (no DH) + up to 2 for pitchers (Phase 16d) -> ~12-18
   expect(grants["Gold Glove"].length, "Gold Gloves this year").toBeGreaterThanOrEqual(10);
-  expect(grants["Gold Glove"].length).toBeLessThanOrEqual(16);
+  expect(grants["Gold Glove"].length).toBeLessThanOrEqual(18);
   grants["Gold Glove"].forEach(p => { expect(p, "each Gold Glove names a position").toBeTruthy(); expect(p).not.toBe("DH"); });
 
   // All-Star: a real roster -- dozens per year, not the old ~6

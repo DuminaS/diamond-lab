@@ -67,6 +67,25 @@
     </div>
     <p class="mode-help" id="modeHelp">Classic shows every rating up front. Pick with the numbers in front of you.</p>
 
+    <div class="section-label" style="margin-top:1.5rem;">Career path</div>
+    <div class="path-choice" role="radiogroup" aria-label="Career path">
+      <button type="button" class="path-card active" data-path="batter" role="radio" aria-checked="true">
+        <svg viewBox="0 0 120 120" aria-hidden="true" class="path-art">
+          <path fill="currentColor" d="M74 12c6 0 11 5 11 11s-5 11-11 11-11-5-11-11 5-11 11-11zM103 27c2-2 5-2 7 0s2 5 0 7L75 76c3 4 4 9 3 14l-6 22c-1 4-5 6-9 5s-6-5-5-9l5-19-15 14-10 26c-2 4-6 6-10 4s-5-6-3-10l11-29c1-2 2-4 4-5l24-22 6-24c1-4 3-7 6-9z"/>
+        </svg>
+        <span class="path-name">Hitter</span>
+        <span class="path-sub">Everyday bat — power, contact, plate discipline</span>
+      </button>
+      <button type="button" class="path-card" data-path="pitcher" role="radio" aria-checked="false">
+        <svg viewBox="0 0 120 120" aria-hidden="true" class="path-art">
+          <path fill="currentColor" d="M52 10c6 0 11 5 11 11s-5 11-11 11-11-5-11-11 5-11 11-11zM40 40c3-3 7-4 11-3l20 6c3 1 6 3 7 6l9 17 15 6c4 2 6 6 4 10s-6 5-10 4l-18-7c-2-1-4-3-5-5l-6-11-9 12 10 20c1 2 1 5 0 7l-13 26c-2 4-6 5-10 3s-5-6-3-10l11-22-11-22c-1-2-1-4-1-6l3-19c0-4 2-7 5-10z"/>
+        </svg>
+        <span class="path-name">Pitcher</span>
+        <span class="path-sub">Rotation arm — velocity, command, breaking stuff</span>
+      </button>
+    </div>
+    <p class="mode-help" id="pathHelp">Play a hitter's career: 162 games of at-bats, a batting line, Silver Sluggers.</p>
+
     <div class="section-label" style="margin-top:1.5rem;">Key Moments <span class="km-beta-tag">Beta</span></div>
     <label class="km-toggle-row" for="keyMomentsToggle">
       <input type="checkbox" id="keyMomentsToggle">
@@ -177,7 +196,7 @@
         </div>
       </div>
       <div class="identity-fields">
-        <div class="id-field">
+        <div class="id-field" id="identityPositionField">
           <label>Position</label>
           <div class="id-hometown">
             <span class="id-hometown-value" id="identityPositionValue">—</span>

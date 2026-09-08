@@ -117,6 +117,19 @@
   .mode-toggle button + button{ border-left: 1.5px solid var(--line-strong); }
   .mode-toggle button.active{ background: var(--field); color: var(--field-ink); }
   .mode-help{ font-size: 0.85rem; color: var(--ink-muted); margin-top: 0.6rem; max-width: 60ch; }
+  /* Phase 16: the Hitter / Pitcher career-path choice on the Showcase setup screen */
+  .path-choice{ display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; max-width: 30rem; }
+  .path-card{
+    display: flex; flex-direction: column; align-items: center; text-align: center; gap: 0.35rem;
+    background: var(--surface); border: 1.5px solid var(--line-strong); border-radius: 8px;
+    padding: 1rem 0.8rem 0.9rem; cursor: pointer; color: var(--ink-muted); transition: border-color .12s, background .12s, color .12s;
+  }
+  .path-card:hover{ border-color: var(--field); }
+  .path-card.active{ background: var(--field); color: var(--field-ink); border-color: var(--field); }
+  .path-art{ width: 3.4rem; height: 3.4rem; color: currentColor; }
+  .path-name{ font-family: var(--mono); font-size: 0.9rem; letter-spacing: 0.06em; text-transform: uppercase; }
+  .path-sub{ font-size: 0.72rem; line-height: 1.25; opacity: 0.82; }
+  @media (max-width: 420px){ .path-choice{ grid-template-columns: 1fr; } }
   .km-beta-tag{ font-family: var(--mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--leather); border: 1px solid var(--line-strong); border-radius: 999px; padding: 0.05rem 0.4rem; margin-left: 0.4rem; vertical-align: middle; }
   .km-toggle-row{ display:flex; align-items:flex-start; gap: 0.6rem; cursor:pointer; font-size: 0.9rem; margin-top: 0.4rem; }
   .km-toggle-row input{ margin-top: 0.2rem; width: 1.05rem; height: 1.05rem; accent-color: var(--field); flex-shrink:0; cursor:pointer; }
