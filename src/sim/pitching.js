@@ -75,19 +75,27 @@ export function pitcherPrimeMultiplier(age) {
 // The core: an age/era-adjusted rate expectation for a given talent edge over neutral (65). Returns
 // per-9 rates plus the implied ERA+ and ERA. `scale` compresses the raw edge (1 for the player's
 // own precise build, ROTATION_STAT_SCALE for a talent-scalar entity).
-export function pitcherExpectedRates(talent, age, decade, scale = 1) {
+// `facets` (optional) gives the tool groups direct, individual responsibilities instead of
+// collapsing them all into one `talent` scalar (review finding 9): { stuff } drives K/9 and
+// contact quality (H/9, HR/9), { command } drives BB/9. Each facet defaults to `talent`, so a
+// caller that only has a talent scalar (every rival) gets exactly the old behavior. ERA+ still
+// blends everything (it's the overall).
+export function pitcherExpectedRates(talent, age, decade, scale = 1, facets = null) {
   const lg = PITCH_LEAGUE[decade] || PITCH_LEAGUE["2000s"];
   const cal = PITCH_STAT_CAL[decade] || PITCH_STAT_CAL["2000s"];
-  const edge = (Number(talent) - 65) * pitcherPrimeMultiplier(age) * scale;
+  const aged = pitcherPrimeMultiplier(age) * scale;
+  const edge = (Number(talent) - 65) * aged;
+  const stuffEdge = ((facets && Number.isFinite(facets.stuff) ? facets.stuff : talent) - 65) * aged;
+  const cmdEdge = ((facets && Number.isFinite(facets.command) ? facets.command : talent) - 65) * aged;
   const eraPlusDelta = edge >= 0
     ? ERA_PLUS_UP_K * Math.pow(edge, ERA_PLUS_UP_P)
     : -ERA_PLUS_DOWN_K * Math.pow(-edge, ERA_PLUS_DOWN_P);
   const eraPlus = clamp(100 + eraPlusDelta, 28, 320);
   const era = clamp(lg.era * 100 / eraPlus, cal.eraLo, cal.eraHi);
-  const k9 = clamp(lg.k9 + edge * (edge >= 0 ? cal.k9.up : cal.k9.down), cal.k9.lo, cal.k9.hi);
-  const bb9 = clamp(lg.bb9 - edge * (edge >= 0 ? cal.bb9.up : cal.bb9.down), cal.bb9.lo, cal.bb9.hi);
-  const hr9 = clamp(lg.hr9 - edge * (edge >= 0 ? cal.hr9.up : cal.hr9.down), cal.hr9.lo, cal.hr9.hi);
-  const h9 = clamp(lg.h9 - edge * (edge >= 0 ? cal.h9.up : cal.h9.down), cal.h9.lo, cal.h9.hi);
+  const k9 = clamp(lg.k9 + stuffEdge * (stuffEdge >= 0 ? cal.k9.up : cal.k9.down), cal.k9.lo, cal.k9.hi);
+  const bb9 = clamp(lg.bb9 - cmdEdge * (cmdEdge >= 0 ? cal.bb9.up : cal.bb9.down), cal.bb9.lo, cal.bb9.hi);
+  const hr9 = clamp(lg.hr9 - stuffEdge * (stuffEdge >= 0 ? cal.hr9.up : cal.hr9.down), cal.hr9.lo, cal.hr9.hi);
+  const h9 = clamp(lg.h9 - stuffEdge * (stuffEdge >= 0 ? cal.h9.up : cal.h9.down), cal.h9.lo, cal.h9.hi);
   const whip = (bb9 + h9) / 9;
   return { eraPlus, era, k9, bb9, hr9, h9, whip };
 }
@@ -104,9 +112,9 @@ export function fip(k, bb, hr, ip, decade) {
 // Math.random so a caller can pass a seeded stream. `availabilityShare` in (0,1] scales the
 // workload down for a partial season (injury, call-up, demotion). Returns raw counting stats plus
 // the standard rate stats and the award-relevant indices.
-export function simulatePitcherLine({ talent, age, decade, role = "SP", teamGrade = 65, random = Math.random, availabilityShare = 1, scale = 1 } = {}) {
+export function simulatePitcherLine({ talent, age, decade, role = "SP", teamGrade = 65, random = Math.random, availabilityShare = 1, scale = 1, facets = null } = {}) {
   const lg = PITCH_LEAGUE[decade] || PITCH_LEAGUE["2000s"];
-  const exp = pitcherExpectedRates(talent, age, decade, scale);
+  const exp = pitcherExpectedRates(talent, age, decade, scale, facets);
 
   // bell-shaped season swing, mean 0, in [-1,1] (three-uniform average -- same technique as the
   // hitter path's performanceIndexRoll)
@@ -122,12 +130,15 @@ export function simulatePitcherLine({ talent, age, decade, role = "SP", teamGrad
   const hr9 = clamp(exp.hr9 * (2 - swingMult), cal.hr9.lo, cal.hr9.hi);
   const h9 = clamp(exp.h9 * (2 - swingMult), cal.h9.lo, cal.h9.hi);
 
-  const dur = clamp(0.7 + (talent - 65) * 0.004, 0.55, 1.05); // stand-in until DUR tool is threaded through
+  // Durability -> availability (how many starts stay healthy); Stamina -> depth per start.
+  const durTool = facets && Number.isFinite(facets.durability) ? facets.durability : talent;
+  const stamTool = facets && Number.isFinite(facets.stamina) ? facets.stamina : talent;
+  const dur = clamp(0.7 + (durTool - 65) * 0.005, 0.5, 1.08);
   let gs = 0, gp = 0, ip = 0, sv = 0, hld = 0, cg = 0, sho = 0, qs = 0;
 
   if (role === "SP") {
     gs = Math.round(clamp(lg.startsFull * dur, 6, 38) * availabilityShare);
-    const ipPerStart = clamp(lg.ipPerStart + (talent - 65) * 0.02, 4.4, 8.2);
+    const ipPerStart = clamp(lg.ipPerStart + (stamTool - 65) * 0.022 + (talent - 65) * 0.006, 4.2, 8.4);
     ip = Math.round(gs * ipPerStart * 10) / 10;
     gp = gs;
     cg = Math.round(clamp(gs * lg.cgRate * (0.5 + (talent - 65) * 0.03), 0, gs));

@@ -140,6 +140,26 @@ test("cyYoungScore ranks an ace's season over a compiler's and a closer's elite 
   assert.ok(cyYoungScore(closer, "2010s") > 0, "an elite closer scores positively");
 });
 
+test("tool facets give power arms, command specialists and workhorses distinct profiles (finding 9)", () => {
+  const base = { age: 28, decade: "2010s" };
+  // same ~85 overall, three identities
+  const power = pitcherExpectedRates(85, 28, "2010s", 1, { stuff: 96, command: 74 });
+  const control = pitcherExpectedRates(85, 28, "2010s", 1, { stuff: 74, command: 96 });
+  const scalar = pitcherExpectedRates(85, 28, "2010s", 1, null);
+  assert.ok(power.k9 > control.k9 + 1.5, `power K/9 ${power.k9.toFixed(1)} vs control ${control.k9.toFixed(1)}`);
+  assert.ok(control.bb9 < power.bb9 - 0.6, `control BB/9 ${control.bb9.toFixed(2)} vs power ${power.bb9.toFixed(2)}`);
+  // a talent-scalar caller (every rival) is unchanged
+  assert.ok(Math.abs(scalar.k9 - pitcherExpectedRates(85, 28, "2010s").k9) < 1e-9);
+
+  // stamina -> deeper starts; durability -> more of them
+  const workhorse = simulatePitcherLine({ talent: 85, age: 29, decade: "1990s", role: "SP", teamGrade: 70,
+    facets: { stuff: 85, command: 85, stamina: 97, durability: 95 }, random: mulberry32(3) });
+  const fragile = simulatePitcherLine({ talent: 85, age: 29, decade: "1990s", role: "SP", teamGrade: 70,
+    facets: { stuff: 85, command: 85, stamina: 55, durability: 55 }, random: mulberry32(3) });
+  assert.ok(workhorse.ip > fragile.ip + 25, `workhorse IP ${workhorse.ip} vs fragile ${fragile.ip}`);
+  assert.ok(workhorse.gs >= fragile.gs, `workhorse GS ${workhorse.gs} vs fragile ${fragile.gs}`);
+});
+
 test("evaluateProspect scores a pitching build on pitcher weights, not hitter weights", () => {
   // a build that's all command/stuff, nothing else
   const picks = Object.keys(PITCHER_OVERALL_WEIGHTS).map(key => ({

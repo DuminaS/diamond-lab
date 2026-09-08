@@ -8220,6 +8220,20 @@ import {
   function pitcherTalentNow(age){
     return clamp(Math.round(pitcherOverall(pitcherEffectiveBuild(age))), 15, 99);
   }
+  // Review finding 9: the tool GROUPS drive distinct outcomes instead of collapsing to one number.
+  // stuff -> strikeouts + contact quality; command -> walks; stamina -> innings per start;
+  // durability -> availability. A power-arm, a command specialist and a workhorse now look
+  // statistically different even at the same overall.
+  function pitcherFacets(age){
+    const eff = pitcherEffectiveBuild(age);
+    const g = keys => clamp(Math.round(keys.reduce((s,k)=> s + (eff[k]||65), 0) / keys.length), 15, 99);
+    return {
+      stuff:      g(["VELO","BRK","FBL","CHG"]),
+      command:    g(["CMD","SEQ","TUN","PIK"]),
+      stamina:    clamp(Math.round(eff.STM || 65), 15, 99),
+      durability: clamp(Math.round(eff.DUR || 65), 15, 99),
+    };
+  }
   // The 0-99 "how much the player lifts his team" number resolvePlayoffs / the shared game sim
   // read. For a pitcher this stands in on the offense side as a first approximation of "an ace
   // wins games"; 16d routes pitching properly to the run-prevention side.
@@ -8229,10 +8243,15 @@ import {
   }
 
   // Light pitcher development: a per-season nudge on the 12 tools, shaped by the tool group's age
-  // profile, scaled by workload and coaching. Mutates `build` in place, same contract as
-  // developAttributes. (A fuller model -- earned breakthroughs, bust risk -- is a later pass.)
+  // profile, scaled by workload and coaching, AND by the selected development plan's growth/decline
+  // multipliers (review finding 10 -- the plan choice was previously ignored on this path). The
+  // hitter plan groups map onto the pitching groups: physical->stuff, hitting->command,
+  // mental->makeup. `mechanics` sharpens command, `athletic` adds velocity/movement, `film`
+  // builds makeup, `recovery` slows everything but blunts decline, `balanced` is even.
+  const PITCH_PLAN_GROUP = { stuff:"physical", command:"hitting", makeup:"mental" };
   function developPitcherAttributes(season){
     if(career.age > 41) return;
+    const plan = developmentPlanFor(career.developmentPlan) || { growth:{physical:1,hitting:1,mental:1}, decline:{physical:1,hitting:1,mental:1} };
     const reps = clamp((season.games||0) / (career.pitcherRole==="SP" ? 30 : 58), 0.25, 1.15);
     const coachMult = clamp(0.82 + (safeNum(career.coaching,60)-60)*0.006, 0.7, 1.28);
     PITCH_ATTR_KEYS.forEach(k=>{
@@ -8241,7 +8260,9 @@ import {
       const base = grp==="stuff"   ? (career.age<=25 ? 0.65 : career.age<=28 ? 0.05 : -0.95)
                  : grp==="command" ? (career.age<=30 ? 0.72 : career.age<=34 ? 0.18 : -0.5)
                  :                    (career.age<=31 ? 0.4  : -0.35);
-      const delta = base * reps * coachMult * (0.55 + Math.random()*0.95);
+      const pg = PITCH_PLAN_GROUP[grp] || "mental";
+      const planMult = base >= 0 ? (plan.growth[pg] ?? 1) : (plan.decline[pg] ?? 1);
+      const delta = base * planMult * reps * coachMult * (0.55 + Math.random()*0.95);
       build[k] = clamp(Math.round(build[k] + delta), 15, 99);
     });
   }
@@ -8416,7 +8437,7 @@ import {
     // the season aggregate (rate stats + workload); the schedule walk below is the source of truth
     // for W/L/SV/QS since those track the actual game outcomes.
     const line = simulatePitcherLine({ talent, age: career.age, decade, role,
-      teamGrade: safeNum(career.teamStrength, 62), availabilityShare });
+      teamGrade: safeNum(career.teamStrength, 62), availabilityShare, facets: pitcherFacets(career.age) });
     const perfPenalty = injuryPerfPenalty;
     if(perfPenalty){ line.era = Math.round(line.era * (1 + perfPenalty*0.012) * 100)/100; line.eraPlus = Math.round((PITCH_LEAGUE[decade]||PITCH_LEAGUE["2000s"]).era * 100 / Math.max(0.5, line.era)); }
 
