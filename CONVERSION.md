@@ -613,7 +613,40 @@ deploy workflow now gates on the full test suite.
 - **Contrast.** The offseason-program status boxes (dark-on-dark inside the light era themes) use a
   theme-neutral panel and inherit text colour; "Simulate Next Round" is a solid high-contrast button.
 
-Still open: an interactive short-rest / pitch-count choice and starter↔reliever usage (finding 7);
-the larger structural items the review raised (extracting game resolution and stat aggregation out
-of the 15k-line `src/main.js`; retiring the football-shaped legacy aliases behind canonical
-fields).
+**Fourth pass — second review of `c067977` (follow-up findings):**
+- **Hitter game-log distribution (High).** `distributeWithCaps` rounded a small season total (12
+  HR) to zero in every game and then front-filled the remainder from game 1 — "all 12 HR in the
+  first 12 games", a 162-game hitting streak. Replaced with a proper **multinomial allocation**:
+  each discrete event is dropped into a game chosen at random, weighted by that game's remaining
+  headroom, so real hitless games / multi-hit games / the odd multi-HR game appear and the season
+  total is still exact. (`distributeAcrossGames` is unchanged — it still smooths the PA/AB
+  denominators, where low variance is correct.)
+- **Key Moment could leave a postseason game tied-and-lost (High).** A successful swing that
+  changed the 7th-inning score left the pre-swing extra innings in place and could read `2–2,
+  won:false`. `applyKeyMomentSwing` now carries the swing through the 9th, **drops every stale
+  extra frame**, and re-derives the result: decided in regulation → done; level after nine → replay
+  fair extra frames (scoreForInning + walk-off trim) until someone leads. A postseason game can
+  never stand tied.
+- **Emergency backup omitted unsaved progress (High).** `downloadSaveBackup` preferred the last
+  *persisted* envelope; after a good save + a later failure it exported the previous year. It now
+  serializes the **current** `career`/`build` first (`serializeCareerEnvelope`), falling back to
+  the last clean serialization only if the live one won't build.
+- **Storage blocked at startup failed silently (High).** `saveActiveCareer` returned early when
+  `store` was null. It now runs the same try/catch and flips the visible warning.
+- **Perfect game contradicted the scoreboard / counters (High).** The gem post-pass rewrote only
+  the pitcher's line. It now forces the whole game consistent — 9 innings, opponent held scoreless,
+  a win, line score re-spread — and re-derives that game's CG / SHO / QS contribution.
+- **Backup import validation (Medium).** `restoreSaveFromFile` now checks `seasonLog` is an array
+  and `build` exists, **dry-runs `migrateSaveEnvelope` on a copy**, and stashes the prior save under
+  `…activeCareer.prerestore` before overwriting.
+- **Pitcher save migration (Medium).** `migratePitcherPathDefaults` now backfills `ipOuts` on
+  every pitching **season and pitched game**, not just the career total (old decimal-tenth `ip`
+  values were showing as `0.0`).
+- **Postseason fatigue (Medium).** Fatigue now feeds **run prevention** (`myDef`) before the game
+  is simulated, not just the box-score line, and `career._postseasonStarts` carries workload
+  across series (reset each October in `resolvePlayoffs`).
+
+Still open: player vs. AI pitching use different accounting models (finding 6 — needs the shared
+accounting extraction); an interactive short-rest / pitch-count choice and starter↔reliever usage
+(finding 7); extracting game resolution + stat aggregation + the save envelope out of the ~16k-line
+`src/main.js`; retiring the football-shaped legacy aliases behind canonical fields.

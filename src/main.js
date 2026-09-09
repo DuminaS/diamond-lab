@@ -2224,6 +2224,27 @@ import {
       // pitcher-sim rewrite; back it out of the old real-number `ip` for a pre-existing save.
       if(p.ipOuts==null) p.ipOuts = Math.round((p.ip||0) * 3);
     }
+    // The updated schedule / box-score views read `ipOuts` off each pitching SEASON and each
+    // pitched GAME, not just the career total -- an old save has those only as the approximate
+    // decimal-tenth `ip`, which those views render as 0.0. Back them out too. `.1`/`.2` in an old
+    // ip value is one/two outs; anything else is treated as a real innings number.
+    const ipToOuts = ip => {
+      if(ip==null) return null;
+      const s = String(ip);
+      const m = /^(\d+)\.([12])$/.exec(s);
+      if(m) return (+m[1])*3 + (+m[2]);
+      const r = Number(ip);
+      return Number.isFinite(r) ? Math.round(r*3) : null;
+    };
+    (careerObj.seasonLog||[]).forEach(sn=>{
+      if(!sn || !sn.isPitching) return;
+      if(sn.ipOuts==null){ const o = ipToOuts(sn.ip); if(o!=null) sn.ipOuts = o; }
+      (sn.gameLog||[]).forEach(g=>{
+        if(!g || !g.pitched || g.ipOuts!=null) return;
+        const o = ipToOuts(g.ip);
+        if(o!=null){ g.ipOuts = o; g.ip = fmtOutsToIp(o); }
+      });
+    });
   }
   function migrateTiesDefaults(careerObj){
     if(!careerObj) return;
@@ -2286,32 +2307,43 @@ import {
   // it flips a visible warning, keeps the last envelope in memory for a manual backup download,
   // and clears the warning on the next successful write.
   let _saveOk = true;
-  let _lastGoodEnvelopeJSON = null;
+  let _lastGoodEnvelopeJSON = null;       // the last envelope that was actually WRITTEN to storage
+  let _lastSerializedEnvelopeJSON = null; // the last envelope that stringified cleanly (write may have failed)
   function renderSaveWarning(){
     const el = document.getElementById("saveWarning");
     if(el) el.hidden = _saveOk;
   }
+  function serializeCareerEnvelope(checkpoint){
+    try{
+      return JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(),
+        checkpoint: checkpoint || _lastCheckpoint || { phase:"regular_season", year: career && career.year, eventId:null, playoffRoundIndex:null },
+        career, build });
+    }catch(e){ return null; }
+  }
   function saveActiveCareer(checkpointPatch){
-    if(!store || !career) return;
+    if(!career) return;
     const base = _lastCheckpoint || { phase:"regular_season", year: career.year, eventId:null, playoffRoundIndex:null };
     const checkpoint = { ...base, year: career.year, ...(checkpointPatch||{}) };
-    let json;
+    const json = serializeCareerEnvelope(checkpoint);
+    // Keep the newest clean serialization for a manual export EVEN IF the write fails or storage
+    // is unavailable -- that's the progress the "Export a backup" button has to be able to rescue.
+    if(json != null) _lastSerializedEnvelopeJSON = json;
     try{
-      json = JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(), checkpoint, career, build });
-    }catch(e){ json = null; }
-    try{
-      if(json==null) throw new Error("serialize failed");
+      if(!store) throw new Error("storage unavailable");   // review: this used to return silently
+      if(json == null) throw new Error("serialize failed");
       store.setItem(activeCareerKey, json);
       _lastCheckpoint = checkpoint;
       _lastGoodEnvelopeJSON = json;
       if(!_saveOk){ _saveOk = true; renderSaveWarning(); }
     }catch(e){
-      _saveOk = false;
-      renderSaveWarning();
+      if(_saveOk){ _saveOk = false; renderSaveWarning(); }
     }
   }
   function downloadSaveBackup(){
-    const json = _lastGoodEnvelopeJSON || (()=>{ try{ return JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(), checkpoint: _lastCheckpoint, career, build }); }catch(e){ return null; } })();
+    // Prefer the CURRENT in-memory progress -- the whole point of this button (it only shows once a
+    // save has failed) is to rescue work that ISN'T on disk. Fall back to the last clean
+    // serialization, then the last actually-persisted envelope, only if the live one won't build.
+    const json = serializeCareerEnvelope() || _lastSerializedEnvelopeJSON || _lastGoodEnvelopeJSON;
     if(!json) return;
     try{
       const blob = new Blob([json], { type:"application/json" });
@@ -2331,12 +2363,23 @@ import {
     reader.onload = ()=>{
       let env;
       try{ env = JSON.parse(String(reader.result)); }catch(e){ onResult && onResult(false, "That file isn't valid JSON."); return; }
-      if(!env || typeof env!=="object" || !env.career || !env.career.seasonLog){
+      if(!env || typeof env!=="object" || !env.career || typeof env.career!=="object"
+         || !Array.isArray(env.career.seasonLog) || !env.build || typeof env.build!=="object"){
         onResult && onResult(false, "That doesn't look like a Diamond Lab save."); return;
       }
+      if(env.schemaVersion==null) env.schemaVersion = SAVE_SCHEMA_VERSION;
+      // Dry-run the migrate/resume path on a throwaway copy -- a file that parses but can't migrate
+      // (or migrates to something with no season history) must not replace a working save.
       try{
-        if(env.schemaVersion==null) env.schemaVersion = SAVE_SCHEMA_VERSION;
+        const probe = migrateSaveEnvelope(JSON.parse(JSON.stringify(env)));
+        if(!probe || !probe.career || !Array.isArray(probe.career.seasonLog)) throw new Error("no career after migrate");
+      }catch(e){ onResult && onResult(false, "That save can't be loaded by this version."); return; }
+      if(!store){ onResult && onResult(false, "Storage is unavailable, so a restore can't be saved."); return; }
+      let prior = null;
+      try{ prior = store.getItem(SOLO_ACTIVE_CAREER_KEY); }catch(e){}
+      try{
         store.setItem(SOLO_ACTIVE_CAREER_KEY, JSON.stringify(env));
+        if(prior!=null){ try{ store.setItem(SOLO_ACTIVE_CAREER_KEY + ".prerestore", prior); }catch(e){} }
       }catch(e){ onResult && onResult(false, "Couldn't write the restored save (storage is full or blocked)."); return; }
       onResult && onResult(true, "");
       location.reload();
@@ -4153,30 +4196,44 @@ import {
     outs = Math.max(0, Math.round(outs || 0));
     return `${Math.floor(outs/3)}.${outs%3}`;
   }
-  // Distribute an integer `total` across games with natural game-to-game variance, but never
-  // letting any game exceed its own cap -- overflow spills deterministically into games that still
-  // have headroom, and if the caps can't hold the whole total the remainder is dropped (the
-  // returned array is authoritative; the caller sums it for the real season total). Used to
-  // decompose a season counting stat (HR, 2B, SB...) into a game log that ADDS UP exactly instead
-  // of sampling each game independently and hoping. One RNG draw per game (via
-  // distributeAcrossGames), same as the per-stat cost of the old independent sampler.
+  // Scatter an exact run total across n innings (a few 1s and the odd 2) so a rewritten line score
+  // still sums to the final -- used when the pitcher-gem post-pass forces a game to 9 innings.
+  function spreadRunsOverInnings(total, n){
+    const arr = new Array(Math.max(1,n)).fill(0);
+    let left = Math.max(0, Math.round(total || 0)), guard = 0;
+    while(left > 0 && guard++ < 500){
+      const i = Math.floor(Math.random()*arr.length);
+      const add = Math.min(left, 1 + (Math.random()<0.25 ? 1 : 0));
+      arr[i] += add; left -= add;
+    }
+    return arr;
+  }
+  // Decompose a season counting stat (HR, 2B, K, SB...) into a game log that ADDS UP to the exact
+  // season total. Each of the `total` discrete events is dropped into a game chosen at random,
+  // weighted by that game's remaining headroom (`caps[i] - already placed`), so a 5-at-bat game is
+  // likelier to catch a hit than a 3-at-bat one and no game can ever exceed its cap. This is a
+  // proper multinomial allocation, NOT a smooth per-game share: it produces real hitless games,
+  // multi-hit games and the occasional multi-HR game instead of handing every game a near-identical
+  // slice (the old distributeAcrossGames-then-round approach rounded a small total like 12 HR to
+  // zero everywhere and then dumped the whole remainder into the opening games -- "all 12 HR in the
+  // first 12 games", a 162-game hitting streak). If the caps genuinely can't hold the whole total
+  // the leftover is dropped; the returned array is authoritative and the caller sums it.
   function distributeWithCaps(total, caps){
     const n = caps.length;
-    if(n===0) return [];
-    const shares = distributeAcrossGames(Math.max(0, Math.round(total)), n);
-    // clamp down to caps, collecting the overflow
-    let overflow = 0;
-    for(let i=0;i<n;i++){
-      if(shares[i] > caps[i]){ overflow += shares[i] - caps[i]; shares[i] = caps[i]; }
-    }
-    // spill the overflow into games with headroom, round-robin
-    let guard = 0;
-    while(overflow > 0 && guard++ < 50000){
-      let placed = false;
-      for(let i=0;i<n && overflow>0;i++){
-        if(shares[i] < caps[i]){ shares[i]++; overflow--; placed = true; }
+    const shares = new Array(n).fill(0);
+    total = Math.max(0, Math.round(total || 0));
+    if(n === 0 || total === 0) return shares;
+    const room = new Array(n);
+    let pool = 0;
+    for(let i=0;i<n;i++){ room[i] = Math.max(0, Math.floor(caps[i])); pool += room[i]; }
+    let toPlace = Math.min(total, pool);
+    while(toPlace > 0 && pool > 0){
+      let r = Math.random() * pool;
+      for(let i=0;i<n;i++){
+        if(room[i] === 0) continue;
+        r -= room[i];
+        if(r <= 0){ shares[i]++; room[i]--; pool--; toPlace--; break; }
       }
-      if(!placed) break; // no headroom anywhere -- remainder is dropped
     }
     return shares;
   }
@@ -5805,13 +5862,18 @@ import {
     const myOff = isPitcher
       ? clamp(safeNum(lineupOffenseGrade(career.teamId, season.year), 58 + (safeNum(career.teamStrength,62)-65)), 30, 96)
       : playoffOffenseGrade(round._rawEffOverall, season);
+    // Fatigue: a 2nd/3rd start in the same series (short rest) bites hardest; carrying a heavy
+    // workload in from earlier rounds bites a little too. This now feeds RUN PREVENTION -- so a
+    // tired ace genuinely makes his team likelier to lose, not just post an uglier line -- as well
+    // as the box-score generator below (review finding 8).
+    const priorStartsThisSeries = (round.games||[]).filter(x=> x && x.box && x.box.pitched).length;
+    const priorStartsThisRun = career._postseasonStarts || 0;
+    const fatigue = myStart
+      ? clamp(1 - priorStartsThisSeries*0.13 - Math.max(0, priorStartsThisRun - priorStartsThisSeries)*0.04, 0.6, 1)
+      : 1;
     const myDef = myStart
-      ? Math.round(clamp(safeNum(career.defense,60)*0.4 + pitcherPlayoffRunPrevention(season)*0.6, 20, 99))
+      ? Math.round(clamp((safeNum(career.defense,60)*0.4 + pitcherPlayoffRunPrevention(season)*0.6) * (0.8 + 0.2*fatigue), 20, 99))
       : career.defense;
-    // Fatigue: a 2nd (or 3rd) start in the same series -- often on short rest in October -- is a
-    // shorter, less sharp outing.
-    const priorStarts = (round.games||[]).filter(x=> x && x.box && x.box.pitched).length;
-    const fatigue = myStart && priorStarts>0 ? clamp(1 - priorStarts*0.12, 0.7, 1) : 1;
     const g = simulateGameScore(myOff, oppOffense, myDef, null, season.year, true, opponentDefenseGrade(round.oppId));
     const game = {
       myScore: g.myTotal, oppScore: g.oppTotal, won: g.won, quarters: g.quarters,
@@ -5823,6 +5885,7 @@ import {
       _offOverall: myOff, _defOverall: round._defOverall, _defOffense: round._defOffense, _oppQbId: round._oppQbId,
     };
     round.games[gameIdx] = game;
+    if(myStart) career._postseasonStarts = (career._postseasonStarts || 0) + 1;
     return game;
   }
   // A pitching box line for one playoff start, derived FROM the game (ER never exceeds the runs
@@ -5932,6 +5995,7 @@ import {
   }
 
   function resolvePlayoffs(effOverall, season, schedule){
+    career._postseasonStarts = 0; // pitcher workload for THIS October (see ensurePlayoffGame fatigue)
     const { seeded, results, format, divisions } = simulateLeagueStandings(season, schedule);
     season.leagueStandings = { results, seeded, format, divisions };
     const year = season.year;
@@ -8491,12 +8555,21 @@ import {
         .sort((a,b)=> (a.er-b.er) || (b.ipOuts-a.ipOuts))[0];
       if(cand){
         const before = { h: cand.h, er: cand.er, bb: cand.bbAllowed, hr: cand.hrAllowed, k: cand.k, outs: cand.ipOuts };
-        if(gemType==="Perfect Game"){
-          cand.ipOuts = 27; cand.ip = "9.0"; cand.h = 0; cand.bbAllowed = 0; cand.er = 0; cand.hrAllowed = 0;
-          cand.k = clamp(cand.k, 6, 15); cand.decision = "W"; cand.gem = "Perfect Game";
-        } else if(gemType==="No-Hitter"){
-          cand.ipOuts = Math.max(cand.ipOuts, 27); cand.ip = fmtOutsToIp(cand.ipOuts); cand.h = 0; cand.er = 0; cand.hrAllowed = 0;
-          cand.bbAllowed = clamp(cand.bbAllowed, 0, 4); cand.k = clamp(cand.k, 4, 15); cand.decision = "W"; cand.gem = "No-Hitter";
+        const candInnCount = Math.max(9, (cand.innings && cand.innings.my ? cand.innings.my.length : 9));
+        const wasCG = before.outs >= candInnCount*3;
+        const wasSHO = wasCG && before.er === 0;
+        const wasQS = before.outs >= 18 && before.er <= 3;
+        if(gemType==="Perfect Game" || gemType==="No-Hitter"){
+          // Make the WHOLE game consistent with the feat, not just the pitcher's line: 9 innings,
+          // opponent held scoreless, a win -- so the scoreboard, the box and the CG/SHO/QS counters
+          // can't contradict the highlight (review).
+          cand.oppScore = 0;
+          cand.myScore = Math.max(1, cand.myScore||0);
+          cand.tie = false; cand.won = true; cand.decision = "W";
+          cand.innings = { my: spreadRunsOverInnings(cand.myScore, 9), opp: new Array(9).fill(0) };
+          cand.ipOuts = 27; cand.ip = "9.0"; cand.h = 0; cand.er = 0; cand.hrAllowed = 0;
+          if(gemType==="Perfect Game"){ cand.bbAllowed = 0; cand.k = clamp(cand.k, 6, 15); cand.gem = "Perfect Game"; }
+          else { cand.bbAllowed = clamp(cand.bbAllowed, 0, 4); cand.k = clamp(cand.k, 4, 15); cand.gem = "No-Hitter"; }
         } else { // Immaculate Inning -- a 9-pitch, 3-K frame inside an otherwise ordinary start
           cand.k = Math.max(cand.k, 3); cand.gem = "Immaculate Inning";
         }
@@ -8506,6 +8579,12 @@ import {
         bbTot  += (cand.bbAllowed - before.bb);
         hrTot  += (cand.hrAllowed - before.hr);
         kTot   += (cand.k - before.k);
+        // re-derive this game's contribution to the workhorse counters after the rewrite
+        if(gemType==="Perfect Game" || gemType==="No-Hitter"){
+          cg  += 1 - (wasCG ? 1 : 0);
+          sho += 1 - (wasSHO ? 1 : 0);
+          qs  += 1 - (wasQS ? 1 : 0);
+        }
         highlight = { type: gemType, year: career.year, opponent: cand.opponentName, opponentId: cand.opponentId,
           week: cand.week, line: `${fmtOutsToIp(cand.ipOuts)} IP, ${cand.h} H, ${cand.bbAllowed} BB, ${cand.k} K` };
       }
@@ -14218,38 +14297,51 @@ import {
     const swingInn = round.quarters[KM_SWING_INNING_IDX] || round.quarters[round.quarters.length-1];
     swingInn.myTotal += dMy; swingInn.oppTotal += dOpp;
     swingInn.myQ = (swingInn.myQ||0) + dMy; swingInn.oppQ = (swingInn.oppQ||0) + dOpp;
-    // every inning after the swing carries the new running total forward
-    for(let i=KM_SWING_INNING_IDX+1; i<round.quarters.length; i++){
-      round.quarters[i].myTotal += dMy; round.quarters[i].oppTotal += dOpp;
-    }
-    round.myScore += dMy; round.oppScore += dOpp;
 
-    const lastInn = round.quarters[round.quarters.length-1];
     const hadExtras = round.quarters.length > REGULATION_INNINGS;
-    const stillTied = lastInn.myTotal === lastInn.oppTotal;
     let otNote = "";
 
-    if(hadExtras && !stillTied){
-      // The game used to need extra innings; this at-bat just decided it in regulation. Drop the
-      // extra frames that never had to happen and re-sync the score off the 9th.
-      round.quarters.length = REGULATION_INNINGS;
-      const nine = round.quarters[REGULATION_INNINGS-1];
-      round.myScore = nine.myTotal; round.oppScore = nine.oppTotal;
-      otNote = "That decided it in nine — no extra innings needed after all.";
-    } else if(!hadExtras && stillTied){
-      // The game used to end in nine; this at-bat just tied it back up. Play a fair extra frame:
-      // a good read that only manages to tie sends it to extras and wins there; a blown read that
-      // ties it up hands the other side the walk-off chance.
-      let exMy=0, exOpp=0;
-      if(good) exMy = 1;
-      else if(Math.random() < 0.5 + ((round._offOverall??65)-(round._defOffense??round._defOverall??65))*0.01) exMy = 1;
-      else exOpp = 1;
-      round.quarters.push({ q:"10", myQ: exMy, oppQ: exOpp, myTotal: lastInn.myTotal+exMy, oppTotal: lastInn.oppTotal+exOpp });
-      round.myScore = lastInn.myTotal+exMy; round.oppScore = lastInn.oppTotal+exOpp;
-      otNote = good ? "Tied it up, then won it in extras." : "Tied it up, but they walked it off in extras.";
-    } else if(hadExtras && stillTied){
-      round.myScore = lastInn.myTotal;
-      round.oppScore = lastInn.oppTotal;
+    // The swing lands entering the 7th, so it changes the REGULATION line. Any extra innings that
+    // were played off the pre-swing sim are now invalid -- carry the swing through the rest of the
+    // 9, drop every stale extra frame, then re-derive the result FRESH from the swung 9-inning
+    // score (review: a successful swing must never leave a postseason game tied-and-lost).
+    const regEnd = Math.min(REGULATION_INNINGS, round.quarters.length);
+    for(let i=KM_SWING_INNING_IDX+1; i<regEnd; i++){
+      round.quarters[i].myTotal += dMy; round.quarters[i].oppTotal += dOpp;
+    }
+    round.quarters.length = regEnd;
+
+    const nine = round.quarters[round.quarters.length-1];
+    let my = nine.myTotal, opp = nine.oppTotal;
+
+    if(my !== opp){
+      round.myScore = my; round.oppScore = opp;
+      if(hadExtras) otNote = "That decided it in nine — no extra innings needed after all.";
+    } else {
+      // Level after nine. A postseason game can never stand tied, so play fair extra frames until
+      // someone leads at the end of one -- same scoreForInning model / walk-off trim the main sim
+      // uses. A "good" read that only managed to tie still gets the first-frame edge.
+      const off = round._offOverall ?? 65;
+      const def = round._defOffense ?? round._defOverall ?? 65;
+      let inn = REGULATION_INNINGS, firstPass = true;
+      while(my === opp && inn < 18){
+        inn++;
+        let exMy = scoreForInning(off, def).pts + (Math.random()<0.12 ? 1 : 0);
+        let exOpp = scoreForInning(def, off).pts + (Math.random()<0.12 ? 1 : 0);
+        if(firstPass && good && exMy===0 && exOpp===0) exMy = 1;
+        firstPass = false;
+        if(opp <= my && opp + exOpp > my) exOpp = (my - opp) + 1; // home walk-off is exactly the winning run
+        my += exMy; opp += exOpp;
+        round.quarters.push({ q:String(inn), myQ:exMy, oppQ:exOpp, myTotal:my, oppTotal:opp });
+      }
+      if(my === opp){
+        if(Math.random() < 0.5 + (off-def)*0.01) my++; else opp++;
+        const last = round.quarters[round.quarters.length-1]; last.myTotal = my; last.oppTotal = opp;
+      }
+      round.myScore = my; round.oppScore = opp;
+      otNote = my > opp
+        ? (good ? "Tied it up, then won it in extras." : "Fought back to tie, and stole it in extras.")
+        : (good ? "Tied it up, but came up short in extras." : "Tied it up, and they walked it off in extras.");
     }
 
     // keep the box score's HR count consistent with a homer-type swing in the player's own favor,

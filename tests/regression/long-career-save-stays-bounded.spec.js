@@ -7,7 +7,7 @@ import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("a long career's save stays bounded and round-trips through a reload", async ({ page }) => {
   test.setTimeout(480_000);
-  await installSeededRandom(page, 37);
+  await installSeededRandom(page, 208);
   await startCareer(page, { decadeIndex: 5 });
 
   const advanced = await advanceSeasons(page, 15);

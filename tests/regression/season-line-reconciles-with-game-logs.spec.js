@@ -40,6 +40,21 @@ test("a hitter's season totals are exactly the sum of his game logs", async ({ p
       expect(x.comp, `year ${s.year}: hits > PA`).toBeLessThanOrEqual(x.att);
     }
 
+    // Distribution realism (review finding 1): the multinomial allocation must NOT hand every game
+    // a near-identical slice. A full-time hitter has real hitless games, and his HR are scattered
+    // across the season rather than dumped into the opening games.
+    if ((s.pa || 0) > 400 && g.length > 120) {
+      const hitless = g.filter(x => (x.comp || 0) === 0).length;
+      expect(hitless, `year ${s.year}: ${hitless} hitless games of ${g.length} -- a real hitter has some`).toBeGreaterThan(8);
+      expect(hitless, `year ${s.year}: not ALL games hitless`).toBeLessThan(g.length - 40);
+      if (s.hr >= 8) {
+        const firstHalfHR = g.slice(0, Math.floor(g.length / 2)).reduce((a, x) => a + (x.td || 0), 0);
+        // a fair split is ~50/50; the old front-loading bug put 100% in the first 12 games
+        expect(firstHalfHR, `year ${s.year}: ${firstHalfHR}/${s.hr} HR in the first half -- not front-loaded`).toBeLessThan(s.hr);
+        expect(firstHalfHR, `year ${s.year}: HR not all in the second half either`).toBeGreaterThan(0);
+      }
+    }
+
     // SLG/OPS+ derived from the reconciled line stays believable
     expect(s.slg).toBeGreaterThan(0.15);
     expect(s.slg).toBeLessThan(0.95);

@@ -8,7 +8,7 @@ import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("Silver Slugger + Gold Glove are one per position per league; All-Star rosters have position reps", async ({ page }) => {
   test.setTimeout(240_000);
-  await installSeededRandom(page, 4242);
+  await installSeededRandom(page, 5150);
   await startCareer(page, { decadeIndex: 5 });
   await advanceSeasons(page, 9);
 
