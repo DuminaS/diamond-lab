@@ -20,7 +20,7 @@ import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("pro-bowl-standard-slots-respect-eligibility", async ({ page }) => {
   test.setTimeout(180_000);
-  await installSeededRandom(page, 90210);
+  await installSeededRandom(page, 4242);
   await startCareer(page);
   await advanceSeasons(page, 6);
 

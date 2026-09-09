@@ -22,10 +22,16 @@ const freezePlan = plan => Object.freeze({
 // One offseason buys one program. The multipliers only affect positive ordinary
 // development; decline has its own table so, for example, Recovery can protect
 // an older player's body without also becoming the best way to gain ratings.
+// `pitcherLabel` / `pitcherSummary` (Phase 16 review finding 10): the same six programs, worded
+// for a pitcher. developPitcherAttributes maps physical->stuff, hitting->command, mental->makeup,
+// so "Hitting Lab" (hitting x1.40) is a pitcher's Command Lab, "Athletic Camp" (physical x1.55) is
+// his Velocity Program, and "Video Room" (mental x1.50) is his Sequencing Room.
 export const DEVELOPMENT_PLANS = Object.freeze({
   balanced: freezePlan({
     id: "balanced", label: "Balanced Program", icon: "BAL",
     summary: "No shortcuts and no major weakness: steady work across the whole game.",
+    pitcherLabel: "Balanced Program",
+    pitcherSummary: "No shortcuts and no major weakness: steady work on stuff, command, and holding up.",
     growth: { physical: 1, hitting: 1, mental: 1 },
     decline: { physical: 1, hitting: 1, mental: 1 },
     injuryRisk: 1, wearDelta: 0, chemistryDelta: 1,
@@ -34,6 +40,8 @@ export const DEVELOPMENT_PLANS = Object.freeze({
   mechanics: freezePlan({
     id: "mechanics", label: "Hitting Lab", icon: "HIT",
     summary: "Accelerate cage work on power and contact, but sacrifice athletic and mental-development time.",
+    pitcherLabel: "Command Lab",
+    pitcherSummary: "Bullpen work on repeating the delivery and locating -- fewer walks and better sequencing -- at the cost of velocity and makeup work.",
     growth: { physical: 0.70, hitting: 1.40, mental: 0.85 },
     decline: { physical: 1, hitting: 0.95, mental: 1 },
     injuryRisk: 1.04, wearDelta: 1, chemistryDelta: -3,
@@ -43,6 +51,8 @@ export const DEVELOPMENT_PLANS = Object.freeze({
   film: freezePlan({
     id: "film", label: "Video Room", icon: "IQ",
     summary: "Build pitch recognition, plate approach, and clutch processing while physical work takes a back seat.",
+    pitcherLabel: "Sequencing Room",
+    pitcherSummary: "Study hitters and build poise, sequencing, and composure in big spots while the physical work takes a back seat.",
     growth: { physical: 0.65, hitting: 0.80, mental: 1.50 },
     decline: { physical: 1, hitting: 0.95, mental: 0.85 },
     injuryRisk: 0.96, wearDelta: -1, chemistryDelta: -2,
@@ -52,6 +62,8 @@ export const DEVELOPMENT_PLANS = Object.freeze({
   athletic: freezePlan({
     id: "athletic", label: "Athletic Camp", icon: "PHY",
     summary: "Chase bat speed, arm, and foot-speed gains through a harder workload with real injury and wear costs.",
+    pitcherLabel: "Velocity Program",
+    pitcherSummary: "Chase velocity and sharper breaking stuff through a harder workload -- with real arm-injury and wear costs.",
     growth: { physical: 1.55, hitting: 0.70, mental: 0.65 },
     decline: { physical: 1.15, hitting: 1, mental: 1 },
     injuryRisk: 1.18, wearDelta: 4, chemistryDelta: -4,
@@ -61,6 +73,8 @@ export const DEVELOPMENT_PLANS = Object.freeze({
   chemistry: freezePlan({
     id: "chemistry", label: "Clubhouse Camp", icon: "TEAM",
     summary: "Trade individual growth for timing, trust, and a small on-field team edge this season.",
+    pitcherLabel: "Clubhouse Camp",
+    pitcherSummary: "Trade individual growth for defensive trust behind you and a small on-field team edge this season.",
     growth: { physical: 0.80, hitting: 0.80, mental: 0.85 },
     decline: { physical: 1, hitting: 1, mental: 1 },
     injuryRisk: 0.96, wearDelta: 0, chemistryDelta: 14,
@@ -69,12 +83,21 @@ export const DEVELOPMENT_PLANS = Object.freeze({
   recovery: freezePlan({
     id: "recovery", label: "Recovery & Rehab", icon: "REST",
     summary: "Give up most growth to shed wear, lower injury risk, and slow age-related decline.",
+    pitcherLabel: "Arm Care & Rehab",
+    pitcherSummary: "Give up most growth to shed arm wear, lower injury risk, and slow the velocity decline that ends pitching careers.",
     growth: { physical: 0.45, hitting: 0.45, mental: 0.45 },
     decline: { physical: 0.45, hitting: 0.55, mental: 0.65 },
     injuryRisk: 0.70, wearDelta: -12, chemistryDelta: -1,
     targetKeys: [],
   }),
 });
+// Returns { label, summary } for a plan, worded for the given path ("pitcher" | anything else).
+export function developmentPlanText(planId, path) {
+  const p = DEVELOPMENT_PLANS[planId] || DEVELOPMENT_PLANS.balanced;
+  return path === "pitcher"
+    ? { label: p.pitcherLabel || p.label, summary: p.pitcherSummary || p.summary }
+    : { label: p.label, summary: p.summary };
+}
 
 export const DEVELOPMENT_PLAN_LIST = Object.freeze(Object.values(DEVELOPMENT_PLANS));
 

@@ -15,7 +15,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      # Fast gate: the balance suite (pure sim math, no browser) + the production build.
+      - run: npm run test:balance
+      - run: npm run build
+      # Full browser regression suite -- the deploy is blocked on it.
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test tests/regression
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -51,7 +51,104 @@ test("a starting-pitcher career simulates era-realistic seasons and keeps the wh
     expect(s.k).toBeGreaterThan(s.bbAllowed); // this build misses bats
     // standings still whole
     expect(s.teamWins + s.teamLosses + (s.teamTies || 0)).toBeGreaterThan(150);
+
+    // --- accounting invariants (review) ---
+    const pg = (s.gameLog || []).filter(g => g.pitched);
+    expect(pg.length, `year ${s.year} has pitched games`).toBeGreaterThan(0);
+    let outs = 0, er = 0, k = 0, bb = 0, h = 0, hr = 0;
+    for (const g of pg) {
+      // outs are integral, and bounded by the innings actually played
+      expect(Number.isInteger(g.ipOuts), `year ${s.year} game outs integral`).toBe(true);
+      const inningsPlayed = Math.max(9, (g.innings?.my || []).length);
+      expect(g.ipOuts).toBeGreaterThanOrEqual(0);
+      expect(g.ipOuts, `year ${s.year}: ${g.ipOuts} outs > ${inningsPlayed} innings played`).toBeLessThanOrEqual(inningsPlayed * 3);
+      // a pitcher can never be charged more earned runs than his opponent actually scored
+      expect(g.er, `year ${s.year}: ${g.er} ER > ${g.oppScore} opp runs`).toBeLessThanOrEqual(g.oppScore);
+      expect(g.hrAllowed).toBeLessThanOrEqual(g.er + 1);
+      // display string is a valid baseball IP (.0 / .1 / .2)
+      expect(/^\d+\.[012]$/.test(String(g.ip)), `year ${s.year} ip "${g.ip}"`).toBe(true);
+      outs += g.ipOuts; er += g.er; k += g.k; bb += g.bbAllowed; h += g.hAllowed || 0; hr += g.hrAllowed;
+    }
+    // the season line IS the sum of the games
+    expect(Math.abs(s.ipOuts - outs), `year ${s.year} season outs vs game log`).toBeLessThanOrEqual(1);
+    expect(s.er, `year ${s.year} season ER vs game log`).toBe(er);
+    expect(s.k, `year ${s.year} season K vs game log`).toBe(k);
+    expect(s.bbAllowed, `year ${s.year} season BB vs game log`).toBe(bb);
+    // season ERA reconciles with earned runs and innings
+    const derivedEra = 9 * s.er / (s.ipOuts / 3);
+    expect(Math.abs(derivedEra - s.era), `year ${s.year} ERA ${s.era} vs derived ${derivedEra.toFixed(2)}`).toBeLessThan(0.06);
   }
+  // if he made a postseason, the games he started are pitching boxes (not batting), and no ER
+  // exceeds the opponent's runs (review finding 7)
+  let sawPlayoffStart = false;
+  for (const s of seasons) {
+    for (const rd of (s.playoffs?.rounds || [])) {
+      for (const g of (rd.games || [])) {
+        if (g.box && g.box.pitched) {
+          sawPlayoffStart = true;
+          expect(Number.isInteger(g.box.ipOuts)).toBe(true);
+          expect(g.box.er).toBeLessThanOrEqual(g.oppScore);
+        }
+        if (g.box && g.box.dnp) expect(g.box.pitched).toBeFalsy();
+      }
+    }
+  }
+  // (sawPlayoffStart may be false if this seed's team never made October -- that's fine)
+
+  // career IP-outs = sum of season IP-outs
+  const seasonOuts = seasons.reduce((a, s) => a + s.ipOuts, 0);
+  expect(Math.abs(fc.totals.pitching.ipOuts - seasonOuts)).toBeLessThanOrEqual(seasons.length);
+  // every credited no-hitter / perfect game shows up as a season gem
+  const noHitCredited = (fc.totals.pitching.noHitters || 0);
+  const noHitGems = seasons.reduce((a, s) => a + (s.gems || []).filter(g => /No-Hitter|Perfect Game/.test(g)).length, 0);
+  expect(noHitCredited, "no-hitter total matches gem count").toBe(noHitGems);
+
+  // review finding 12: every gem is anchored to a real game in the log with a matching line,
+  // and there's a Career Highlights record for each
+  const highlights = fc.pitcherHighlights || [];
+  expect(highlights.length, "highlights recorded == gem count").toBe(
+    seasons.reduce((a, s) => a + (s.gems || []).length, 0)
+  );
+  for (const s of seasons) {
+    for (const gemType of (s.gems || [])) {
+      const gemGame = (s.gameLog || []).find(g => g.gem === gemType);
+      expect(gemGame, `year ${s.year} ${gemType} has a game in the log`).toBeTruthy();
+      if (gemType === "Perfect Game") {
+        expect(gemGame.h).toBe(0);
+        expect(gemGame.bbAllowed).toBe(0);
+        expect(gemGame.ipOuts).toBe(27);
+      }
+      if (gemType === "No-Hitter") expect(gemGame.h).toBe(0);
+      if (/No-Hitter|Perfect Game/.test(gemType)) expect(gemGame.er).toBe(0);
+    }
+  }
+  // the analytics tab surfaces a Career Highlights section when there are any
+  if (highlights.length) {
+    await page.evaluate(() => document.querySelector('.dash-tab[data-tab="analytics"]')?.click());
+    await page.waitForTimeout(150);
+    const analytics = await page.textContent("#tabpanel-analytics");
+    expect(analytics).toMatch(/Career Highlights/);
+    expect(analytics).toMatch(new RegExp(highlights[0].type.replace(/[-]/g, "[-]")));
+  }
+
+  // the player-facing tabs are the PITCHER's, not a hitter's: Attributes shows the twelve mound
+  // tools (never batting labels or a NaN overall), Career Trends is a pitching table, and the
+  // Team tab lists the rotation with the player on it.
+  await page.evaluate(() => document.querySelector('.dash-tab[data-tab="attributes"]')?.click());
+  await page.waitForTimeout(120);
+  const attrs = await page.textContent("#tabpanel-attributes");
+  expect(attrs).toMatch(/Velocity|Command|Stamina/);
+  expect(attrs).not.toMatch(/Plate Discipline|Pitch Recognition/);
+  expect(attrs).not.toMatch(/NaN/);
+  await page.evaluate(() => document.querySelector('.dash-tab[data-tab="trends"]')?.click());
+  await page.waitForTimeout(120);
+  const trends = await page.textContent("#tabpanel-trends");
+  expect(trends).toMatch(/ERA\+?/);
+  expect(trends).not.toMatch(/Rush Yards/);
+  await page.evaluate(() => document.querySelector('.dash-tab[data-tab="team"]')?.click());
+  await page.waitForTimeout(120);
+  const teamTab = await page.textContent("#tabpanel-team");
+  expect(teamTab).toMatch(/Projected Rotation/);
 
   // a strong build in its prime should post at least one clearly above-average season
   const bestEraPlus = Math.max(...seasons.map(s => s.eraPlus));

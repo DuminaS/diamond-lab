@@ -1,11 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { scoreComponents, computeMatchScore, SCORE_WEIGHTS } from "../../src/sim/multiplayerScore.js";
+import { scoreComponents, computeMatchScore, SCORE_WEIGHTS, SCORE_PRESETS } from "../../src/sim/multiplayerScore.js";
 
-test("weights sum to 1.0", () => {
-  const total = Object.values(SCORE_WEIGHTS).reduce((s, w) => s + w, 0);
-  assert.ok(Math.abs(total - 1.0) < 1e-9, `weights summed to ${total}, expected 1.0`);
+test("every preset's weights sum to 1.0", () => {
+  for (const [name, w] of Object.entries(SCORE_PRESETS)) {
+    const total = Object.values(w).reduce((s, x) => s + x, 0);
+    assert.ok(Math.abs(total - 1.0) < 1e-9, `${name} weights summed to ${total}`);
+  }
+  assert.equal(SCORE_WEIGHTS, SCORE_PRESETS.greatness);
+});
+
+// Review finding 13: the individual preset must not let a team-luck ring swing a match a stronger
+// individual career loses under the default weights.
+test("the individual preset rewards the better personal career over the ringed one", () => {
+  const ringed = { rings: 3, mvps: 0, allPros: 1, proBowls: 3, peakOverall: 78, rating: 108, yards: 3800, games: 1900, achievementCount: 10, earnings: 120e6 };
+  const star   = { rings: 0, mvps: 2, allPros: 5, proBowls: 8, peakOverall: 93, rating: 148, yards: 5600, games: 2500, achievementCount: 22, earnings: 260e6 };
+  const great = computeMatchScore(ringed, star, "greatness");
+  const indiv = computeMatchScore(ringed, star, "individual");
+  // under "individual", the star (B) wins clearly
+  assert.equal(indiv.winner, "B", `individual winner was ${indiv.winner}`);
+  assert.ok(indiv.componentsB.total - indiv.componentsA.total > great.componentsB.total - great.componentsA.total,
+    "the star's margin should be wider under the individual preset");
 });
 
 test("an empty/missing summary never throws and scores at the floor", () => {

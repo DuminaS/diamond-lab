@@ -107,20 +107,36 @@ Everything is `diamondlab.*`: `diamondlab.activeCareer` (the single-slot in-prog
 - **Debug hooks live in disposable copies of `src/main.js`, never the real one.**
 - **Brainstorm before big redesigns** — sketch a few concrete options and let the user pick.
 
-## Current status — Phase 12 (final)
+## Current status — Phase 16 (pitchers) + review-fixes
 
-The 12-phase conversion (see `CONVERSION.md`) is essentially done: identity, data, attribute/rating
-core, season sim, game-score engine (9-inning run scoring), roster/entity framing, contracts/
-injuries/events, the Key Moment clutch at-bat, awards/records/Cooperstown, ~90 baseball
-achievements, multiplayer, the UI/copy pass, and the test suite (**58 balance + 57 regression
-green**). Phase 11 also fixed a real bug: a pre-1969 pennant winner (a 1-team league bracket, no
-LCS) now advances straight to the World Series instead of being stranded.
+The 12-phase football→baseball conversion is done. Since then, on `main`:
+- **Phases 13–15** (see `CONVERSION.md`): best-of-N playoff series; a broad baseball-faithfulness
+  pass; the steroid era + dark-humor events + an analytics tab; and **full 9-man rosters** — every
+  batting-order slot on every team is a real tracked, simulated character with by-position awards.
+- **Phase 16**: **pitchers**. Every staff is a roster of tracked arms (SP1–5, a closer from 1975,
+  two setup men), and there's a **Pitcher career path** — chosen on the Showcase setup screen via a
+  Hitter / Pitcher fork. Pitcher Showcase (12 pitching tools, its own historical pool), a mound
+  season model (`generatePitcherSeason`), Cy Young + the pitching awards, a pitcher Cooperstown
+  formula, analytics/rival-profile/card pitcher views. Deferred: multiplayer on the Pitcher path
+  (match code at capacity); two-way (Ohtani) careers.
+- **review-fixes** branch (all 13 findings done; see `CONVERSION.md`'s three review passes):
+  stat/scoring consistency — the bottom-of-the-9th walk-off bug (wrong-winner), pitcher lines
+  derived FROM the game (ER ≤ opponent runs, integer outs bounded by innings played), hitter
+  season line = the exact sum of the game logs, opponent-aware missed games; the **pitcher
+  postseason** is now a pitcher's (his real start lines, series fatigue, October arm wear);
+  visible + recoverable save failures; pitcher build identities + pitcher-worded dev plans;
+  rare feats are real inspectable games; analytics consistency; multiplayer scoring presets.
+  Third pass (screenshot bug report): the player-pitcher is **never a lineup entity** (was being
+  slotted into his own batting order → NaN overall + "(you)" batting boxes); pitcher playoff run
+  support no longer goes NaN (every game was 1-0); the Attributes / Career Trends / Approach / Team
+  tabs are the pitcher's, not a hitter's; a couple of era-theme contrast fixes.
 
-Remaining Phase 12 items are documentation and release plumbing — see `CONVERSION.md`'s Phase 12
-checklist. Known deferred (all tracked in `CONVERSION.md`): deep opaque-identifier renames (no
-functional gain), the admin Stat Calculator tab's football-ish labels (admin-only), PNG icon
-regeneration, a full seeded tuning sweep of the first-pass stat coefficients, and best-of-5/7
-playoff series (rounds are currently single games).
+Test suite: **80 regression + 72 balance green**. `npm test` runs balance → build → regression.
+The deploy workflow (`.github/workflows/deploy-pages.yml`) now gates on the full suite.
+
+Known deferred (tracked in `CONVERSION.md` / `PHASE16_PLAN.md`): deep opaque-identifier renames,
+the admin Stat Calculator tab's football-ish labels, PNG icon regeneration, a full seeded tuning
+sweep of the first-pass stat coefficients.
 
 Do not restore: the old QB-to-all-five-team-grades feedback loop, the self-amplifying
 breakout/devSpeed loop, or a fixed tendency-to-play-call answer key in the Key Moment mini-game.

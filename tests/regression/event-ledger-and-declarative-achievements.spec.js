@@ -83,10 +83,14 @@ test("signing a free-agent offer appends a real, correctly-shaped contract_signe
   expect(afterSign.career.teamId).toBe(offerInfo.teamId);
   const ledger = afterSign.career.eventLedger || [];
   expect(ledger.length, "signing must append at least one new ledger entry").toBeGreaterThan(ledgerCountBefore);
-  const signEntry = ledger.find(e => e.eventId === "contract_signed" && e.choiceId === "recordSetting");
+  // the LAST recordSetting contract_signed entry -- an earlier season's re-sign can also be in the
+  // ledger, and the one this test just triggered is always the most recent.
+  const signEntry = [...ledger].reverse().find(e => e.eventId === "contract_signed" && e.choiceId === "recordSetting");
   expect(signEntry, `expected a contract_signed/recordSetting entry, got: ${JSON.stringify(ledger.slice(-3))}`).toBeTruthy();
   expect(signEntry.teamId).toBe(offerInfo.teamId);
-  expect(signEntry.outcomeId).toBe("signed");
+  // a move to a genuinely new team is "signed"; the offseason chain occasionally routes the
+  // accepted card back to the incumbent, which is "re-signed" -- both are valid contract_signed shapes.
+  expect(["signed", "re-signed"]).toContain(signEntry.outcomeId);
   expect(typeof signEntry.sequenceIndex).toBe("number");
   expect(typeof signEntry.year).toBe("number");
 });
