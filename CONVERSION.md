@@ -575,7 +575,28 @@ described different realities. Addressed on branch `review-fixes` (each a commit
 Docs + CI: `package.json` renamed to `diamond-lab`; `CLAUDE.md` status refreshed; the Pages
 deploy workflow now gates on the full test suite.
 
-Still open from the review: an import path for a downloaded save backup; a long-career storage
-stress test; rare pitching feats (no-hitter / perfect game) as inspectable game highlights
-rather than season-level rolls (finding 12); separate career-greatness vs individual-performance
-multiplayer scoring presets (finding 13).
+**Second pass — finished the partials + the improvement findings:**
+- **7 (pitcher postseason) — completed.** The box-score modal shows the pitcher's real line as a
+  note ("You started: 6.1 IP, 2 ER, 7 K — the win (a quality start).") instead of a batting box;
+  a 2nd/3rd start in a series is a shorter, fatigued outing; a deep October run adds real arm wear.
+  Still a follow-up: an interactive short-rest choice, starter↔reliever career usage.
+- **8 (saves) — completed.** "Restore a career from a backup file" on the menu and in the warning
+  banner; a `long-career-save-stays-bounded` stress spec (15 seasons, full ~490-entity league,
+  stays under ~4.5 MB and round-trips through a reload).
+- **9 (build identities) — completed.** All five tool groups have direct roles: stuff→K + contact,
+  command→BB, stamina→depth, durability→availability, Pickoff & Hold→a small run-prevention edge.
+- **10 (dev plans) — completed.** The programs are worded for a pitcher on the Pitcher path
+  (Command Lab / Velocity Program / Sequencing Room / Arm Care & Rehab), via
+  `developmentPlanText(planId, path)`, and `developPitcherAttributes` applies the plan multipliers.
+- **12 (rare feats) — done.** A no-hitter / perfect game / immaculate inning is rolled before the
+  schedule walk and anchored to the player's best real start — that game's line is rewritten to
+  the feat, the season totals stay the exact sum of the games, and each is recorded on
+  `career.pitcherHighlights` and listed in a Career Highlights section on the analytics tab.
+- **13 (multiplayer scoring) — done.** Two presets in `multiplayerScore.js` — `greatness` (the
+  existing weights) and `individual` (rings 0.08, earnings 0, weight moved to accolades / peak /
+  totals) — with a live toggle on the Compare screen.
+
+Still open: an interactive short-rest / pitch-count choice and starter↔reliever usage (finding 7);
+the larger structural items the review raised (extracting game resolution and stat aggregation out
+of the 15k-line `src/main.js`; retiring the football-shaped legacy aliases behind canonical
+fields).
