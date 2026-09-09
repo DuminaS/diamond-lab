@@ -131,6 +131,25 @@ test("a starting-pitcher career simulates era-realistic seasons and keeps the wh
     expect(analytics).toMatch(new RegExp(highlights[0].type.replace(/[-]/g, "[-]")));
   }
 
+  // the player-facing tabs are the PITCHER's, not a hitter's: Attributes shows the twelve mound
+  // tools (never batting labels or a NaN overall), Career Trends is a pitching table, and the
+  // Team tab lists the rotation with the player on it.
+  await page.evaluate(() => document.querySelector('.dash-tab[data-tab="attributes"]')?.click());
+  await page.waitForTimeout(120);
+  const attrs = await page.textContent("#tabpanel-attributes");
+  expect(attrs).toMatch(/Velocity|Command|Stamina/);
+  expect(attrs).not.toMatch(/Plate Discipline|Pitch Recognition/);
+  expect(attrs).not.toMatch(/NaN/);
+  await page.evaluate(() => document.querySelector('.dash-tab[data-tab="trends"]')?.click());
+  await page.waitForTimeout(120);
+  const trends = await page.textContent("#tabpanel-trends");
+  expect(trends).toMatch(/ERA\+?/);
+  expect(trends).not.toMatch(/Rush Yards/);
+  await page.evaluate(() => document.querySelector('.dash-tab[data-tab="team"]')?.click());
+  await page.waitForTimeout(120);
+  const teamTab = await page.textContent("#tabpanel-team");
+  expect(teamTab).toMatch(/Projected Rotation/);
+
   // a strong build in its prime should post at least one clearly above-average season
   const bestEraPlus = Math.max(...seasons.map(s => s.eraPlus));
   expect(bestEraPlus, "a peak season clears an above-average ERA+").toBeGreaterThan(112);

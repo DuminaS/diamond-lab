@@ -12298,6 +12298,22 @@ import {
         <tbody>${rows}</tbody>
       </table></div>${lineup.pitcherBats?`<div class="calc-refnote" style="margin-top:0.4rem;">Pre-DH era — the pitcher bats ninth.</div>`:""}`;
   }
+  // The starting-rotation sibling of buildLineupTableHTML -- the player's own row is highlighted on
+  // the Pitcher path (buildTeamRotation slots USER_QB_ID in when it's his club).
+  function buildRotationTableHTML(teamId, year){
+    const staff = buildTeamRotation(teamId, year);
+    const rows = staff.map(p=>{
+      const nameHtml = p.isUser ? svgEscape(p.name)
+        : p.rivalId ? `<button type="button" class="rival-link" data-rival-id="${p.rivalId}">${svgEscape(p.name)}</button>`
+        : svgEscape(p.name);
+      const ovr = clamp(Math.round(p.ovr||0), 0, 99);
+      return `<tr${p.isUser?' class="me"':""}><td class="tabular">${p.slot===1?"SP1":"SP"+p.slot}</td><td>${nameHtml}</td><td class="tabular">${ovr}</td><td class="tabular">${gradeFor(clamp(ovr,0,98)).grade}</td></tr>`;
+    }).join("");
+    return `<div class="table-wrap"><table class="career-table">
+        <thead><tr><th class="tabular">#</th><th>Pitcher</th><th class="tabular">Ovr</th><th class="tabular">Grade</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  }
   // A team's starting rotation for a season -- DETERMINISTIC and display-only, the pitching sibling
   // of buildTeamLineup. The sim never models an individual pitcher (opposing run scoring is a team
   // grade), so this is pure flavor: a named 4/5-man staff so a box score can say who started. Ace
@@ -13379,6 +13395,9 @@ import {
   function buildSchemeTabHTML(){
     const schemeId = career.teamScheme ? career.teamScheme[career.teamId] : null;
     const scheme = SCHEMES.find(s=>s.id===schemeId);
+    if(career.path===PATH_PITCHER){
+      return `<div class="calc-refnote">The club's hitting approach${scheme?` (<b>${svgEscape(scheme.name)}</b>)`:""} shapes the lineup around you, not your work on the mound. Your development is directed by the offseason program (see the Season tab) and your results come straight from your twelve pitching tools — see the Attributes tab for the full breakdown.</div>`;
+    }
     if(!scheme) return `<p style="color:var(--ink-muted);">No approach data for this team.</p>`;
     return `
       <div class="scheme-head">
@@ -13417,9 +13436,16 @@ import {
     const teamRankHtml = ranks.overall[career.teamId] ? ` — #${ranks.overall[career.teamId]} of ${ranks.total}` : "";
     return `<div class="calc-refnote">${svgEscape(teamNameAt(career.teamId, career.year))} — Team Grade <b>${teamGrade}</b> (${svgEscape(gradeFor(clamp(teamGrade,0,98)).flavor)})${teamRankHtml}. Team Grade is a weighted read of the five grades below it (Rotation/Lineup 20% each, Defense &amp; Bullpen 30%, Coaching 20%, Front Office 10%) — each moves for its own legible reasons (roster churn, a new manager, front-office moves), and each has a real, direct effect on your own numbers, not just flavor.</div>
       <div class="team-grade-grid">${gradeCards}</div>
+      ${career.path===PATH_PITCHER ? `
+      <div class="section-label" style="margin-top:1.4rem;">Projected Rotation</div>
+      ${buildRotationTableHTML(career.teamId, career.year)}
       <div class="section-label" style="margin-top:1.4rem;">Projected Lineup</div>
       ${buildLineupTableHTML(career.teamId, career.year)}
-      ${career.isBackup ? `<div class="calc-refnote" style="margin-top:0.6rem;">You're a bench bat competing for an everyday job — see the Season tab's front-office widget for how that's going.</div>` : ""}
+      ` : `
+      <div class="section-label" style="margin-top:1.4rem;">Projected Lineup</div>
+      ${buildLineupTableHTML(career.teamId, career.year)}
+      `}
+      ${career.isBackup && career.path!==PATH_PITCHER ? `<div class="calc-refnote" style="margin-top:0.6rem;">You're a bench bat competing for an everyday job — see the Season tab's front-office widget for how that's going.</div>` : ""}
       ${scheme ? `<div class="calc-refnote" style="margin-top:0.6rem;">Running <b>${svgEscape(scheme.name)}</b> — see the Scheme tab for the full attribute breakdown.</div>` : ""}
     `;
   }
@@ -13472,7 +13498,7 @@ import {
     }
     changes.sort((a,b)=> Math.abs(b.delta)-Math.abs(a.delta));
     const items = changes.map(c=>{
-      const label = (ATTR_BY_KEY[c.key]||{}).label || c.key;
+      const label = (ATTR_BY_KEY[c.key]||PITCH_ATTR_BY_KEY[c.key]||{}).label || c.key;
       const cls = c.delta>0 ? "up" : "down";
       const tag = c.earnedBreakthrough ? " · earned breakthrough" : c.breakout ? " · breakout" : c.regression ? " · regression" : "";
       return `<div class="season-progress-item ${cls}${c.breakout||c.earnedBreakthrough?" notable":""}${c.regression?" notable":""}">
@@ -13487,7 +13513,43 @@ import {
         <div class="season-progress-list">${items}</div>
       </div>`;
   }
+  const PITCH_ATTR_GROUP_LABEL = { stuff:"Stuff", command:"Command & Control", makeup:"Makeup & Durability" };
+  const PITCH_ATTR_GROUP_ORDER = ["stuff","command","makeup"];
+  function buildPitcherAttributesTabHTML(season){
+    const original = career.originalBuild || build;
+    const devSpeed = career.devSpeed || 1;
+    const eff = pitcherEffectiveBuild(career.age);
+    const overallNow = Math.round(clamp(pitcherOverall(eff), 15, 99));
+    const totalDelta = PITCH_ATTR_KEYS.filter(k=>k!=="DUR").reduce((s,k)=> s+((build[k]||0)-((original[k] ?? build[k])||0)), 0);
+    const blocks = PITCH_ATTR_GROUP_ORDER.map(g=>{
+      const keys = PITCH_ATTR_KEYS.filter(k=> PITCH_ATTR_BY_KEY[k].group===g);
+      const rows = keys.map(k=>{
+        const draftVal = original[k] ?? build[k];
+        const nowVal = build[k];
+        const delta = nowVal-draftVal;
+        const cls = delta>0 ? "good" : delta<0 ? "bad" : "";
+        const deltaText = delta!==0 ? ` <span class="${cls}">(${delta>0?"+":""}${delta})</span>` : "";
+        return `<tr><td>${svgEscape(PITCH_ATTR_BY_KEY[k].label)}</td><td class="tabular">${draftVal}</td><td class="tabular">${nowVal}${deltaText}</td><td class="tabular">${eff[k]}</td></tr>`;
+      }).join("");
+      return `<div class="calc-group">
+          <div class="calc-group-head">${PITCH_ATTR_GROUP_LABEL[g]}</div>
+          <div class="admin-table-wrap"><table class="calc-ref-table">
+            <thead><tr><th>Tool</th><th>Draft Day</th><th>Now</th><th>Effective</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table></div>
+        </div>`;
+    }).join("");
+    return `
+      ${buildSeasonProgressHTML(season)}
+      <div class="calc-metric">
+        <div class="calc-metric-head"><span class="calc-metric-name">Overall (right now)</span><span class="calc-metric-result">${overallNow}</span></div>
+        <div class="calc-refnote">Development trait: <b>${svgEscape(devSpeedTag(devSpeed))}</b>. The offseason program redirects growth across the three tool groups; "Effective" is the raw rating after age and era are applied. Net change since draft day: <b>${totalDelta>0?"+":""}${totalDelta}</b> across all developable tools.</div>
+      </div>
+      ${blocks}
+    `;
+  }
   function buildAttributesTabHTML(season){
+    if(career.path===PATH_PITCHER) return buildPitcherAttributesTabHTML(season);
     const decade = decadeForYear(career.year);
     const schemeId = career.teamScheme ? career.teamScheme[career.teamId] : null;
     const scheme = SCHEMES.find(s=>s.id===schemeId);
