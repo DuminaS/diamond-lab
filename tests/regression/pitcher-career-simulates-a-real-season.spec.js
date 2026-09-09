@@ -99,10 +99,29 @@ test("a starting-pitcher career simulates era-realistic seasons and keeps the wh
   const seasonOuts = seasons.reduce((a, s) => a + s.ipOuts, 0);
   expect(Math.abs(fc.totals.pitching.ipOuts - seasonOuts)).toBeLessThanOrEqual(seasons.length);
   // every credited no-hitter / perfect game shows up as a season gem
-  const gemSeasons = seasons.filter(s => (s.gems || []).length);
   const noHitCredited = (fc.totals.pitching.noHitters || 0);
   const noHitGems = seasons.reduce((a, s) => a + (s.gems || []).filter(g => /No-Hitter|Perfect Game/.test(g)).length, 0);
   expect(noHitCredited, "no-hitter total matches gem count").toBe(noHitGems);
+
+  // review finding 12: every gem is anchored to a real game in the log with a matching line,
+  // and there's a Career Highlights record for each
+  const highlights = fc.pitcherHighlights || [];
+  expect(highlights.length, "highlights recorded == gem count").toBe(
+    seasons.reduce((a, s) => a + (s.gems || []).length, 0)
+  );
+  for (const s of seasons) {
+    for (const gemType of (s.gems || [])) {
+      const gemGame = (s.gameLog || []).find(g => g.gem === gemType);
+      expect(gemGame, `year ${s.year} ${gemType} has a game in the log`).toBeTruthy();
+      if (gemType === "Perfect Game") {
+        expect(gemGame.h).toBe(0);
+        expect(gemGame.bbAllowed).toBe(0);
+        expect(gemGame.ipOuts).toBe(27);
+      }
+      if (gemType === "No-Hitter") expect(gemGame.h).toBe(0);
+      if (/No-Hitter|Perfect Game/.test(gemType)) expect(gemGame.er).toBe(0);
+    }
+  }
 
   // a strong build in its prime should post at least one clearly above-average season
   const bestEraPlus = Math.max(...seasons.map(s => s.eraPlus));

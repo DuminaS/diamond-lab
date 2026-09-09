@@ -8322,7 +8322,7 @@ import {
   // only a rate/workload PROFILE (k9/bb9/hr9/whip, target starts, target IP-per-start); the season
   // totals returned here are the SUM of the per-game lines, so season ERA/WHIP/K exactly match the
   // logs.
-  function simulatePitcherScheduleGames({ schedule, line, role, decade }){
+  function simulatePitcherScheduleGames({ schedule, line, role, decade, gemType }){
     const lg = PITCH_LEAGUE[decade] || PITCH_LEAGUE["2000s"];
     const mySlots = schedule.weeks.map((pairs, wIdx)=>{
       const pair = pairs.find(g=>g.a===career.teamId || g.b===career.teamId);
@@ -8433,10 +8433,40 @@ import {
         pitched:true, decision, ipOuts: outs, ip: fmtOutsToIp(outs), h: gH, er: gER, k: gK, bbAllowed: gBB, hrAllowed: gHR });
     });
 
+    // Review finding 12: a no-hitter / perfect game / immaculate inning is a REAL game in the log,
+    // not a season-level counter. Anchor it to the player's best start (a win he went deep in) and
+    // rewrite that game's line to the feat, keeping the season sums as the exact sum of the games.
+    let highlight = null;
+    if(gemType){
+      const cand = games
+        .filter(g=> g.pitched && g.won && (g.ipOuts||0) >= (gemType==="Immaculate Inning" ? 12 : 24))
+        .sort((a,b)=> (a.er-b.er) || (b.ipOuts-a.ipOuts))[0];
+      if(cand){
+        const before = { h: cand.h, er: cand.er, bb: cand.bbAllowed, hr: cand.hrAllowed, k: cand.k, outs: cand.ipOuts };
+        if(gemType==="Perfect Game"){
+          cand.ipOuts = 27; cand.ip = "9.0"; cand.h = 0; cand.bbAllowed = 0; cand.er = 0; cand.hrAllowed = 0;
+          cand.k = clamp(cand.k, 6, 15); cand.decision = "W"; cand.gem = "Perfect Game";
+        } else if(gemType==="No-Hitter"){
+          cand.ipOuts = Math.max(cand.ipOuts, 27); cand.ip = fmtOutsToIp(cand.ipOuts); cand.h = 0; cand.er = 0; cand.hrAllowed = 0;
+          cand.bbAllowed = clamp(cand.bbAllowed, 0, 4); cand.k = clamp(cand.k, 4, 15); cand.decision = "W"; cand.gem = "No-Hitter";
+        } else { // Immaculate Inning -- a 9-pitch, 3-K frame inside an otherwise ordinary start
+          cand.k = Math.max(cand.k, 3); cand.gem = "Immaculate Inning";
+        }
+        outsTot += (cand.ipOuts - before.outs);
+        hTot   += (cand.h - before.h);
+        erTot  += (cand.er - before.er);
+        bbTot  += (cand.bbAllowed - before.bb);
+        hrTot  += (cand.hrAllowed - before.hr);
+        kTot   += (cand.k - before.k);
+        highlight = { type: gemType, year: career.year, opponent: cand.opponentName, opponentId: cand.opponentId,
+          week: cand.week, line: `${fmtOutsToIp(cand.ipOuts)} IP, ${cand.h} H, ${cand.bbAllowed} BB, ${cand.k} K` };
+      }
+    }
+
     const ipReal = outsTot/3;
     const era = ipReal>0 ? Math.round(9*erTot/ipReal*100)/100 : (line.era||4.2);
     return {
-      games, teamWins, teamLosses, teamTies, pw, pl, nd, sv, hld, qs, cg, sho, started: myApp.size,
+      games, teamWins, teamLosses, teamTies, pw, pl, nd, sv, hld, qs, cg, sho, started: myApp.size, highlight,
       // the SUM of the per-game lines -- what the season object and career totals store
       ipOuts: outsTot, ip: Math.round(ipReal*1000)/1000, er: erTot, k: kTot, bb: bbTot, h: hTot, hr: hrTot,
       era, whip: ipReal>0 ? Math.round((bbTot+hTot)/ipReal*1000)/1000 : (line.whip||1.25),
@@ -8487,7 +8517,25 @@ import {
     const perfPenalty = injuryPerfPenalty;
     if(perfPenalty){ line.era = Math.round(line.era * (1 + perfPenalty*0.012) * 100)/100; line.eraPlus = Math.round((PITCH_LEAGUE[decade]||PITCH_LEAGUE["2000s"]).era * 100 / Math.max(0.5, line.era)); }
 
-    const reg = simulatePitcherScheduleGames({ schedule, line, role, decade });
+    // Rare gems -- a no-hitter, a perfect game, an immaculate inning. Rolled BEFORE the schedule
+    // walk (review finding 12) so the feat is anchored to a REAL game in the log, with a matching
+    // box line, not just a season counter. Seeded off the career so it can't shift the main RNG
+    // stream every other seeded test depends on. Chance scales with the season's dominance.
+    const gems = [];
+    let gemType = null;
+    const provDominance = clamp((line.eraPlus - 100)/60 + (line.k9 - 7)/6, -0.5, 2.2);
+    if(role === "SP" && (line.gs||0) >= 8){
+      const gRand = createSeededRandom(hashSeed("gems:" + (career.name||"") + ":" + career.draftYear + ":" + career.year));
+      const starts = line.gs;
+      const noHitP  = clamp(0.010 * starts/32 * (1 + provDominance), 0, 0.16);
+      const perfectP = noHitP * 0.14;
+      const immacP  = clamp(0.05 * starts/32 * (1 + Math.max(0, provDominance)), 0, 0.35);
+      if(gRand() < perfectP) gemType = "Perfect Game";
+      else if(gRand() < noHitP) gemType = "No-Hitter";
+      else if(gRand() < immacP) gemType = "Immaculate Inning";
+    }
+
+    const reg = simulatePitcherScheduleGames({ schedule, line, role, decade, gemType });
     const gpTotal = reg.started;
     const pw = reg.pw, pl = reg.pl, sv = reg.sv, hld = reg.hld, qs = reg.qs;
     const winPct = (pw + pl) > 0 ? pw/(pw+pl) : 0.5;
@@ -8495,31 +8543,18 @@ import {
     // so ERA / WHIP / K / ERA+ on the season card exactly reconcile with the box scores.
     const rating = reg.eraPlus;
 
-    // Rare gems -- a no-hitter, a perfect game, an immaculate inning. Chance scales with the
-    // season's dominance (ERA+) and swing-and-miss (K/9) and how many starts he made. Seeded off
-    // the career so it can't shift the main RNG stream every other seeded test depends on.
-    const gems = [];
-    if(role === "SP" && (reg.started||0) >= 8){
-      const gRand = createSeededRandom(hashSeed("gems:" + (career.name||"") + ":" + career.draftYear + ":" + career.year));
-      const dominance = clamp((reg.eraPlus - 100)/60 + (reg.k9 - 7)/6, -0.5, 2.2);
-      const starts = reg.started;
-      const noHitP  = clamp(0.010 * starts/32 * (1 + dominance), 0, 0.16);
-      const perfectP = noHitP * 0.14;
-      const immacP  = clamp(0.05 * starts/32 * (1 + Math.max(0, dominance)), 0, 0.35);
-      if(gRand() < perfectP){
-        gems.push("Perfect Game");
-        career.totals.pitching.perfectGames = (career.totals.pitching.perfectGames||0) + 1;
-        career.totals.pitching.noHitters = (career.totals.pitching.noHitters||0) + 1;
-        career.transactions.push(`${career.year}: 27 up, 27 down — a perfect game.`);
-      } else if(gRand() < noHitP){
-        gems.push("No-Hitter");
-        career.totals.pitching.noHitters = (career.totals.pitching.noHitters||0) + 1;
-        career.transactions.push(`${career.year}: Threw a no-hitter.`);
-      }
-      if(gRand() < immacP){
-        gems.push("Immaculate Inning");
-        career.totals.pitching.immaculate = (career.totals.pitching.immaculate||0) + 1;
-      }
+    // A gem only counts if the schedule walk actually placed it (there was a suitable start).
+    if(reg.highlight){
+      const h = reg.highlight;
+      gems.push(h.type);
+      const pt = career.totals.pitching || (career.totals.pitching = { noHitters:0, perfectGames:0, immaculate:0 });
+      if(h.type==="Perfect Game"){ pt.perfectGames = (pt.perfectGames||0)+1; pt.noHitters = (pt.noHitters||0)+1; }
+      else if(h.type==="No-Hitter"){ pt.noHitters = (pt.noHitters||0)+1; }
+      else if(h.type==="Immaculate Inning"){ pt.immaculate = (pt.immaculate||0)+1; }
+      (career.pitcherHighlights = career.pitcherHighlights || []).push(h);
+      const verb = h.type==="Perfect Game" ? "27 up, 27 down — a perfect game"
+        : h.type==="No-Hitter" ? "threw a no-hitter" : "threw an immaculate inning";
+      career.transactions.push(`${career.year}: ${career.name} ${verb} vs. ${h.opponent} (${h.line}).`);
     }
 
     const season = {
@@ -13113,12 +13148,19 @@ import {
         <td class="tabular">${fmt3(a.babip)}</td>
         <td class="tabular"><b>${a.pWAR.toFixed(1)}</b></td>
       </tr>`).join("");
+    const highlights = (career.pitcherHighlights || []).slice().reverse();
+    const highlightsHtml = highlights.length ? `
+      <div class="section-label" style="margin-top:1.2rem;">Career Highlights</div>
+      <ul class="career-highlight-list">${highlights.map(h=>`
+        <li><b>${svgEscape(h.type)}</b> — ${h.year} vs. ${svgEscape(h.opponent||"—")} <span style="color:var(--ink-muted);">(${svgEscape(h.line||"")})</span></li>`).join("")}</ul>` : "";
+
     return `
       <div class="an-cards">${cards}</div>
       <div class="an-field-line">
         <b>Role:</b> ${positionLabel(career.pitcherRole||"SP")}
         <span class="an-field-note">— the sim scores each game at the team-grade level, so pWAR here is a FIP-based run-prevention estimate, not a full defense-independent WAR.</span>
       </div>
+      ${highlightsHtml}
       <div class="table-wrap" style="margin-top:0.9rem;">
         <table class="career-table an-table">
           <thead><tr>

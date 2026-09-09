@@ -1194,3 +1194,6 @@
 
   .restore-strip{ margin-top: 0.6rem; font-size: 0.8rem; }
   .restore-strip .btn-ghost-inline{ color: var(--ink-muted); }
+
+  .career-highlight-list{ margin: 0.4rem 0 0; padding-left: 1.1rem; font-size: 0.88rem; line-height: 1.6; }
+  .career-highlight-list b{ color: var(--leather); }
