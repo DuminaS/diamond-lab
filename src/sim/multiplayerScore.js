@@ -15,17 +15,20 @@
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
-// Every weight and cap below is a first PROPOSAL (see MULTIPLAYER_MODE_SPEC.md section 11), not a
-// locked answer -- expected to be tuned from real sweep output before this ships, same as every
-// other numeric dial in this codebase.
-export const SCORE_WEIGHTS = Object.freeze({
-  rings: 0.30,
-  accolades: 0.25,
-  peakAndRate: 0.20,
-  careerTotals: 0.10,
-  achievements: 0.10,
-  earnings: 0.05,
+// Two scoring PRESETS (review finding 13: the default leans hard on team success -- rings are 30%,
+// and one ring is worth more than maxing the earnings component). `greatness` keeps that "how big
+// was the career, rings and all" framing; `individual` strips out the parts a player doesn't
+// control alone (rings, earnings) and weighs personal production and accolades instead.
+export const SCORE_PRESETS = Object.freeze({
+  greatness: Object.freeze({
+    rings: 0.30, accolades: 0.25, peakAndRate: 0.20, careerTotals: 0.10, achievements: 0.10, earnings: 0.05,
+  }),
+  individual: Object.freeze({
+    rings: 0.08, accolades: 0.34, peakAndRate: 0.34, careerTotals: 0.18, achievements: 0.06, earnings: 0.00,
+  }),
 });
+// Back-compat: the old export name is the greatness preset.
+export const SCORE_WEIGHTS = SCORE_PRESETS.greatness;
 
 // Caps below which a component is scaled linearly to a 0-100 "how close to legendary" reading, and
 // above which more of the same raw stat stops buying additional credit -- a hitter with 6 World
@@ -48,7 +51,8 @@ function pct(value, cap) { return clamp((value || 0) / cap, 0, 1) * 100; }
 //   allPros = Silver Sluggers, proBowls = All-Star nods, rating = career OPS+, yards = total
 //   bases, td = home runs.
 // Every field defaults to 0 if missing so a partial/legacy summary never throws.
-export function scoreComponents(summary) {
+export function scoreComponents(summary, preset = "greatness") {
+  const w = SCORE_PRESETS[preset] || SCORE_PRESETS.greatness;
   const s = summary || {};
   const ringsComponent = pct(s.rings, CAPS.rings);
 
@@ -68,12 +72,12 @@ export function scoreComponents(summary) {
   const earningsComponent = pct(s.earnings, CAPS.earnings);
 
   const total =
-    ringsComponent * SCORE_WEIGHTS.rings +
-    accoladesComponent * SCORE_WEIGHTS.accolades +
-    peakAndRateComponent * SCORE_WEIGHTS.peakAndRate +
-    careerTotalsComponent * SCORE_WEIGHTS.careerTotals +
-    achievementsComponent * SCORE_WEIGHTS.achievements +
-    earningsComponent * SCORE_WEIGHTS.earnings;
+    ringsComponent * w.rings +
+    accoladesComponent * w.accolades +
+    peakAndRateComponent * w.peakAndRate +
+    careerTotalsComponent * w.careerTotals +
+    achievementsComponent * w.achievements +
+    earningsComponent * w.earnings;
 
   return {
     rings: ringsComponent, accolades: accoladesComponent, peakAndRate: peakAndRateComponent,
@@ -86,11 +90,11 @@ export function scoreComponents(summary) {
 // literally identical, e.g. comparing a match against itself) reads as "tie" rather than an
 // arbitrary tiebreak -- callers can layer a head-to-head-record tiebreak on top for Same League Mode
 // (MULTIPLAYER_MODE_SPEC.md section 13.5); Parallel Mode has no such record to break a tie with.
-export function computeMatchScore(summaryA, summaryB) {
-  const componentsA = scoreComponents(summaryA);
-  const componentsB = scoreComponents(summaryB);
+export function computeMatchScore(summaryA, summaryB, preset = "greatness") {
+  const componentsA = scoreComponents(summaryA, preset);
+  const componentsB = scoreComponents(summaryB, preset);
   let winner = "tie";
   if (componentsA.total > componentsB.total) winner = "A";
   else if (componentsB.total > componentsA.total) winner = "B";
-  return { componentsA, componentsB, winner };
+  return { componentsA, componentsB, winner, preset };
 }

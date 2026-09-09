@@ -25,7 +25,7 @@ import {
 } from "./sim/achievementRules.js";
 import { installSeededRandom, restoreRandom, createSeededRandom } from "./sim/prng.js";
 import { encodeMatchCode, decodeMatchCode, encodeResultCode, decodeResultCode, DECADE_COUNT as MP_DECADE_COUNT } from "./sim/matchCode.js";
-import { computeMatchScore } from "./sim/multiplayerScore.js";
+import { computeMatchScore, SCORE_PRESETS } from "./sim/multiplayerScore.js";
 import {
   DEVELOPMENT_PLAN_LIST,
   advanceDevelopmentSeason,
@@ -3034,11 +3034,27 @@ import {
       errEl.style.display = "block";
       return;
     }
-    resultEl.innerHTML = buildMultiplayerScoreboardHTML(payloadA, payloadB);
+    _mpComparePayloads = { a: payloadA, b: payloadB };
+    resultEl.innerHTML = buildMultiplayerScoreboardHTML(payloadA, payloadB, _mpComparePreset);
+    wireMultiplayerPresetToggle(resultEl);
   });
 
-  function buildMultiplayerScoreboardHTML(payloadA, payloadB){
-    const { componentsA, componentsB, winner } = computeMatchScore(payloadA.summary, payloadB.summary);
+  let _mpComparePayloads = null;
+  let _mpComparePreset = "greatness";
+  function wireMultiplayerPresetToggle(resultEl){
+    resultEl.querySelectorAll("[data-mp-preset]").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        _mpComparePreset = btn.dataset.mpPreset;
+        if(_mpComparePayloads){
+          resultEl.innerHTML = buildMultiplayerScoreboardHTML(_mpComparePayloads.a, _mpComparePayloads.b, _mpComparePreset);
+          wireMultiplayerPresetToggle(resultEl);
+        }
+      });
+    });
+  }
+
+  function buildMultiplayerScoreboardHTML(payloadA, payloadB, preset="greatness"){
+    const { componentsA, componentsB, winner } = computeMatchScore(payloadA.summary, payloadB.summary, preset);
     const round = v => Math.round(v);
     const rowsFor = c => `
       <div class="mp-score-row"><span>Rings</span><span>${round(c.rings)}</span></div>
@@ -3049,7 +3065,16 @@ import {
       <div class="mp-score-row"><span>Earnings</span><span>${round(c.earnings)}</span></div>
       <div class="mp-score-row mp-score-total"><span>TOTAL</span><span>${round(c.total)}</span></div>`;
     const winnerLabel = winner==="A" ? svgEscape(payloadA.name) : winner==="B" ? svgEscape(payloadB.name) : null;
+    const presetToggle = `
+      <div class="mode-toggle" role="radiogroup" aria-label="Scoring preset" style="margin:0.4rem auto 0.2rem; display:flex; justify-content:center;">
+        <button type="button" data-mp-preset="greatness" class="${preset==="greatness"?"active":""}" aria-checked="${preset==="greatness"}">Career Greatness</button>
+        <button type="button" data-mp-preset="individual" class="${preset==="individual"?"active":""}" aria-checked="${preset==="individual"}">Individual Play</button>
+      </div>
+      <p class="mode-help" style="text-align:center; margin:0 auto 0.6rem;">${preset==="individual"
+        ? "Strips out rings and money — weighs personal production, peak, and accolades."
+        : "The full picture: rings and team success carry real weight alongside individual play."}</p>`;
     return `
+      ${presetToggle}
       <div class="calc-refnote" style="text-align:center; font-size:1.1rem;">${winnerLabel ? `<b>${winnerLabel}</b> wins the match` : "It's a tie!"}</div>
       <div class="mp-scoreboard">
         <div class="mp-score-col${winner==="A"?" winner":""}">
