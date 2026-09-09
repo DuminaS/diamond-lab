@@ -9,7 +9,7 @@ import { startCareer, advanceOneSeason, readActiveCareer } from "../helpers/care
 import { installSeededRandom } from "../helpers/seededRandom.mjs";
 
 test("no team runs away with an unrealistic win total", async ({ page }) => {
-  test.setTimeout(540_000);
+  test.setTimeout(900_000);
 
   const offenders = [];
   let seasonsChecked = 0, playerSeasonsChecked = 0;

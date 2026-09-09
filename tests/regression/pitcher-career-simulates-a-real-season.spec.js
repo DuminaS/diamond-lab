@@ -122,6 +122,14 @@ test("a starting-pitcher career simulates era-realistic seasons and keeps the wh
       if (/No-Hitter|Perfect Game/.test(gemType)) expect(gemGame.er).toBe(0);
     }
   }
+  // the analytics tab surfaces a Career Highlights section when there are any
+  if (highlights.length) {
+    await page.evaluate(() => document.querySelector('.dash-tab[data-tab="analytics"]')?.click());
+    await page.waitForTimeout(150);
+    const analytics = await page.textContent("#tabpanel-analytics");
+    expect(analytics).toMatch(/Career Highlights/);
+    expect(analytics).toMatch(new RegExp(highlights[0].type.replace(/[-]/g, "[-]")));
+  }
 
   // a strong build in its prime should post at least one clearly above-average season
   const bestEraPlus = Math.max(...seasons.map(s => s.eraPlus));

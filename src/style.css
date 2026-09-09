@@ -1197,3 +1197,9 @@
 
   .career-highlight-list{ margin: 0.4rem 0 0; padding-left: 1.1rem; font-size: 0.88rem; line-height: 1.6; }
   .career-highlight-list b{ color: var(--leather); }
+
+  .gem-badge{ display:inline-block; font-size:0.7rem; font-weight:800; color:var(--leather);
+    background:rgba(184,115,51,0.14); border:1px solid var(--leather); border-radius:999px;
+    padding:0.05rem 0.4rem; margin-left:0.35rem; }
+  .week-matchup-card.has-gem{ border-color: var(--leather); }
+  .week-matchup-sub{ display:block; font-size:0.72rem; color:var(--ink-muted); padding:0 0.7rem 0.5rem; }

@@ -3040,11 +3040,12 @@ import {
   });
 
   let _mpComparePayloads = null;
-  let _mpComparePreset = "greatness";
+  let _mpComparePreset = (()=>{ try{ return store && store.getItem("diamondlab.mpScorePreset") || "greatness"; }catch(e){ return "greatness"; } })();
   function wireMultiplayerPresetToggle(resultEl){
     resultEl.querySelectorAll("[data-mp-preset]").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         _mpComparePreset = btn.dataset.mpPreset;
+        try{ store && store.setItem("diamondlab.mpScorePreset", _mpComparePreset); }catch(e){}
         if(_mpComparePayloads){
           resultEl.innerHTML = buildMultiplayerScoreboardHTML(_mpComparePayloads.a, _mpComparePayloads.b, _mpComparePreset);
           wireMultiplayerPresetToggle(resultEl);
@@ -11758,8 +11759,13 @@ import {
     if(m.aId===career.teamId || m.bId===career.teamId){
       const myWeekEntry = (season.gameLog||[]).find(g=>g.week===week);
       if(myWeekEntry){
-        realRound = { box: { comp: myWeekEntry.comp, att: myWeekEntry.att, yards: myWeekEntry.yards, td: myWeekEntry.td, int: myWeekEntry.int,
-          hr: myWeekEntry.td, bb: myWeekEntry.bb, k: myWeekEntry.int, sb: myWeekEntry.rushYards } };
+        realRound = { box: (season.isPitching
+          ? (myWeekEntry.pitched
+              ? { pitched:true, ipOuts: myWeekEntry.ipOuts, ip: myWeekEntry.ip, h: myWeekEntry.h, er: myWeekEntry.er,
+                  k: myWeekEntry.k, bb: myWeekEntry.bbAllowed, hr: myWeekEntry.hrAllowed, decision: myWeekEntry.decision, gem: myWeekEntry.gem }
+              : { pitched:false, dnp:true })
+          : { comp: myWeekEntry.comp, att: myWeekEntry.att, yards: myWeekEntry.yards, td: myWeekEntry.td, int: myWeekEntry.int,
+              hr: myWeekEntry.td, bb: myWeekEntry.bb, k: myWeekEntry.int, sb: myWeekEntry.rushYards }) };
         // Wave 2B: a week the named incumbent started (career.isBackup) carries his qbId/qbName --
         // the box-score modal's "mine" QB line must show HIM, not silently assume the player played.
         if(myWeekEntry.qbId){ realRound.qbId = myWeekEntry.qbId; realRound.qbName = myWeekEntry.qbName; }
@@ -11807,14 +11813,19 @@ import {
     }).join("");
     const series = list[scheduleTabWeek];
     const rec = series.games.reduce((r,g)=>{ if(g.tie) r.t++; else if(g.won) r.w++; else r.l++; return r; }, {w:0,l:0,t:0});
+    const isPitcher = season.isPitching;
     const cards = series.games.map(g=>{
-      const badge = g.startedByBackup ? ` <span style="opacity:0.6;">(rest day)</span>` : "";
+      const badge = g.startedByBackup ? ` <span style="opacity:0.6;">(${isPitcher?"did not pitch":"rest day"})</span>` : "";
+      const gemBadge = g.gem ? ` <span class="gem-badge" title="${svgEscape(g.gem)}">💎 ${svgEscape(g.gem)}</span>` : "";
       const res = g.tie ? "T" : g.won ? "W" : "L";
-      return `<div class="week-matchup-card clickable" data-schedule-week="${g.week}" data-schedule-a="${series.aId(g)}" data-schedule-b="${series.bId(g)}">
+      const pLine = (isPitcher && g.pitched)
+        ? `<span class="week-matchup-sub tabular">${fmtOutsToIp(g.ipOuts)} IP · ${g.h||0} H · ${g.er||0} ER · ${g.k||0} K${g.decision&&g.decision!=="ND"?` · ${g.decision}`:""}</span>` : "";
+      return `<div class="week-matchup-card clickable${g.gem?" has-gem":""}" data-schedule-week="${g.week}" data-schedule-a="${series.aId(g)}" data-schedule-b="${series.bId(g)}">
         <div class="week-matchup-team${g.won?" good":""}${" me"}">
-          <span class="week-matchup-name">Game ${g.gameInSeries||"?"} — <b>${res}</b>${badge}</span>
+          <span class="week-matchup-name">Game ${g.gameInSeries||"?"} — <b>${res}</b>${badge}${gemBadge}</span>
           <span class="tabular week-matchup-score">${g.myScore}-${g.oppScore}</span>
         </div>
+        ${pLine}
       </div>`;
     }).join("");
     const oppName = svgEscape(teamNameAt(series.oppId, season.year));
@@ -12481,7 +12492,8 @@ import {
     if(career.path===PATH_PITCHER && myBox && (myBox.pitched || myBox.dnp)){
       if(myBox.pitched){
         const qs = (myBox.ipOuts||0) >= 18 && (myBox.er||0) <= 3;
-        pitcherLineNote = `<div class="calc-refnote" style="margin-top:0.4rem;"><b>You started:</b> ${fmtOutsToIp(myBox.ipOuts)} IP, ${myBox.h||0} H, ${myBox.er||0} ER, ${myBox.k||0} K, ${myBox.bb||0} BB${myBox.decision&&myBox.decision!=="ND"?` — the ${myBox.decision==="W"?"win":"loss"}`:""}${qs?" (a quality start)":""}.</div>`;
+        const gemLine = myBox.gem ? `<div style="font-size:1rem;color:var(--leather);"><b>💎 ${svgEscape(myBox.gem)}</b></div>` : "";
+        pitcherLineNote = `<div class="calc-refnote" style="margin-top:0.4rem;">${gemLine}<b>You started:</b> ${fmtOutsToIp(myBox.ipOuts)} IP, ${myBox.h||0} H, ${myBox.er||0} ER, ${myBox.k||0} K, ${myBox.bb||0} BB${myBox.decision&&myBox.decision!=="ND"?` — the ${myBox.decision==="W"?"win":"loss"}`:""}${qs&&!myBox.gem?" (a quality start)":""}.</div>`;
       } else {
         pitcherLineNote = `<div class="calc-refnote" style="margin-top:0.4rem;">You did not pitch in this game.</div>`;
       }
@@ -13083,7 +13095,9 @@ import {
     const babip = babipDen>0 ? (h - hr)/babipDen : 0;
     const bbPct = pa>0 ? bb/pa : 0, kPct = pa>0 ? k/pa : 0;
     const bsr = 0.2*sb - 0.42*cs;                                     // baserunning runs (wSB-ish)
-    const posVal = WAR_POS_ADJ[s.position ?? career.position] ?? 0;
+    // s.posAdjOverride: a games-weighted positional value passed by the career aggregate, so a
+    // SS-then-1B career isn't scored entirely at 1B (review finding 11).
+    const posVal = Number.isFinite(s.posAdjOverride) ? s.posAdjOverride : (WAR_POS_ADJ[s.position ?? career.position] ?? 0);
     const posAdj = posVal * pa/600;
     const repl = 20 * pa/600;
     const bWAR = (wRAA + bsr + posAdj + repl) / runsPerWin;
@@ -13214,8 +13228,12 @@ import {
     // Career aggregates: re-run the same math on the summed line so rate stats are PA-weighted, not
     // an average-of-averages.
     const T = career.totals;
+    // games-weighted positional adjustment across the seasons actually played
+    let posW = 0, gW = 0;
+    log.forEach(x=>{ const g = x.games || 0; posW += (WAR_POS_ADJ[x.position] ?? 0) * g; gW += g; });
     const careerLine = {
       year: career.year, decade: decadeForYear(career.year), position: career.position,
+      posAdjOverride: gW > 0 ? posW/gW : (WAR_POS_ADJ[career.position] ?? 0),
       pa: T.att||0, ab: T.ab||0, hits: T.comp||0, hr: T.td||0, k: T.int||0, bb: T.bb||0,
       hbp: T.hbp||0, sf: T.sf||0, doubles: T.doubles||0, triples: T.triples||0, sb: T.sb||0, cs: T.cs||0,
       opsPlus: passerRating(T.comp, T.att, T.yards, T.td, T.int, T.bb),
