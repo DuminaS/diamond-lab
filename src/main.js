@@ -5766,11 +5766,15 @@ import {
     const myDef = myStart
       ? Math.round(clamp(safeNum(career.defense,60)*0.4 + pitcherPlayoffRunPrevention(season)*0.6, 20, 99))
       : career.defense;
+    // Fatigue: a 2nd (or 3rd) start in the same series -- often on short rest in October -- is a
+    // shorter, less sharp outing.
+    const priorStarts = (round.games||[]).filter(x=> x && x.box && x.box.pitched).length;
+    const fatigue = myStart && priorStarts>0 ? clamp(1 - priorStarts*0.12, 0.7, 1) : 1;
     const g = simulateGameScore(myOff, oppOffense, myDef, null, season.year, true, opponentDefenseGrade(round.oppId));
     const game = {
       myScore: g.myTotal, oppScore: g.oppTotal, won: g.won, quarters: g.quarters,
       box: (isPitcher
-        ? (myStart ? generatePitcherGameBox(g, season) : { pitched:false, dnp:true })
+        ? (myStart ? generatePitcherGameBox(g, season, fatigue) : { pitched:false, dnp:true })
         : generateGameBoxScore(season, g.myTotal, g.myTds)),
       _revealedCount: 0, _keyMomentChecked: false, _pitcherStart: myStart,
       round: round.round, opponent: round.opponent, oppId: round.oppId, oppTendency: round.oppTendency,
@@ -5782,16 +5786,16 @@ import {
   // A pitching box line for one playoff start, derived FROM the game (ER never exceeds the runs
   // the opponent actually scored; outs bounded by innings played), same contract as the regular
   // season's game-authoritative model.
-  function generatePitcherGameBox(g, season){
+  function generatePitcherGameBox(g, season, fatigue=1){
     const inningsPlayed = Math.max(9, (g.quarters||[]).length);
     const oppRuns = g.oppTotal;
     const eraPlus = (season && season.eraPlus) || 110;
-    let inn = 6.4 + (eraPlus-100)*0.02 + (Math.random()*1.8 - 0.9);
+    let inn = (6.4 + (eraPlus-100)*0.02) * fatigue + (Math.random()*1.8 - 0.9);
     if(Math.abs(g.myTotal - g.oppTotal) >= 8) inn -= 1.3;
     if(oppRuns <= 1) inn += Math.random()*1.6;
     const outs = Math.round(clamp(inn, 2, Math.min(inningsPlayed, 9)) * 3);
     const frac = outs/(inningsPlayed*3);
-    const er = Math.round(clamp(oppRuns*frac*(0.7+Math.random()*0.95), 0, oppRuns));
+    const er = Math.round(clamp(oppRuns*frac*(0.7+Math.random()*0.95)*(2-fatigue), 0, oppRuns));
     const k9 = (season && season.k9) || 8, bb9 = (season && season.bb9) || 3;
     const k = Math.round(k9 * outs/27 * (0.6+Math.random()*0.9));
     const bb = Math.round(bb9 * outs/27 * (0.4+Math.random()*1.3));
@@ -12410,7 +12414,19 @@ import {
 
     // Batting boxes -- the tracked hitter's real line goes onto his row where we have one.
     const meIsA = match.aId===career.teamId, meIsB = match.bId===career.teamId;
-    const myBox = match.realRound && match.realRound.box;
+    let myBox = match.realRound && match.realRound.box;
+    // Pitcher path: his real line is a PITCHING line, not a batting one -- pull it out here and
+    // render it as its own note; his team's batting box is then generated like any other.
+    let pitcherLineNote = "";
+    if(career.path===PATH_PITCHER && myBox && (myBox.pitched || myBox.dnp)){
+      if(myBox.pitched){
+        const qs = (myBox.ipOuts||0) >= 18 && (myBox.er||0) <= 3;
+        pitcherLineNote = `<div class="calc-refnote" style="margin-top:0.4rem;"><b>You started:</b> ${fmtOutsToIp(myBox.ipOuts)} IP, ${myBox.h||0} H, ${myBox.er||0} ER, ${myBox.k||0} K, ${myBox.bb||0} BB${myBox.decision&&myBox.decision!=="ND"?` — the ${myBox.decision==="W"?"win":"loss"}`:""}${qs?" (a quality start)":""}.</div>`;
+      } else {
+        pitcherLineNote = `<div class="calc-refnote" style="margin-top:0.4rem;">You did not pitch in this game.</div>`;
+      }
+      myBox = null; // don't feed a pitching line into the batting-box builder
+    }
     const PLAYOFF_LABELS = new Set(["Wild Card","Divisional","Conference Championship","Super Bowl"]);
     const isPlayoff = match.playoff!=null ? match.playoff : PLAYOFF_LABELS.has(roundLabel);
     const gameNo = match.gameNo!=null ? match.gameNo
@@ -12433,6 +12449,7 @@ import {
             <tr class="${match.winnerId===match.bId?"me":""}"><td>${bName}</td>${innRow(bInn)}<td class="tabular"><b>${match.bScore}</b></td></tr>
           </tbody></table></div>
         ${spNote}
+        ${pitcherLineNote}
         ${fillInNote}
         ${battingBoxTableHTML(match.aId, year, aRows)}
         ${battingBoxTableHTML(match.bId, year, bRows)}
@@ -14522,6 +14539,16 @@ import {
     } else if(reachedTitleGameAndLost(season)){
       const lastRound = playoffs.rounds[playoffs.rounds.length-1];
       recordLedgerEvent("championship_lost", { teamId: season.teamId, opponentId: lastRound ? lastRound.oppId : null, metadata:{year: season.year} });
+    }
+    // A deep October run is real innings on the arm (review finding 7): a pitcher's wear ticks up
+    // per playoff start, more for the short-rest ones.
+    if(career.path === PATH_PITCHER){
+      let playoffStarts = 0;
+      (playoffs.rounds||[]).forEach(rd=> (rd.games||[]).forEach(gm=>{ if(gm && gm.box && gm.box.pitched) playoffStarts++; }));
+      if(playoffStarts > 0){
+        career.wearAndTear = clamp((career.wearAndTear||0) + playoffStarts*1.6 + (playoffStarts>=3 ? 2 : 0), 0, 100);
+        season.playoffPitcherStarts = playoffStarts;
+      }
     }
     checkAchievements();
     const badgesPanel = document.getElementById("tabpanel-badges");
