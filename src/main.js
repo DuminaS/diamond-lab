@@ -2204,6 +2204,17 @@ import {
     if(!careerObj) return;
     if(careerObj.path==null) careerObj.path = "batter";
     if(careerObj.pitcherRole===undefined) careerObj.pitcherRole = null;
+    // An early Phase 16 pitcher save wrongly stored USER_QB_ID in the batting lineup (it showed up
+    // as a "(you)" row at 1B with a NaN overall). A pitcher is never a lineup entity -- strip it;
+    // reconcileTeamLineups fills the vacated slot with an ordinary hitter next season.
+    if(careerObj.path==="pitcher" && careerObj.teamLineups){
+      Object.keys(careerObj.teamLineups).forEach(tid=>{
+        const arr = careerObj.teamLineups[tid];
+        if(Array.isArray(arr)){
+          for(let i=arr.length-1; i>=0; i--) if(arr[i]===USER_QB_ID) arr.splice(i,1);
+        }
+      });
+    }
     if(careerObj.totals && !careerObj.totals.pitching){
       careerObj.totals.pitching = { gs:0, gp:0, ip:0, w:0, l:0, sv:0, hld:0, k:0, bb:0, h:0, hr:0, er:0, qs:0, cg:0, sho:0, cyYoungs:0, noHitters:0, perfectGames:0, immaculate:0 };
     } else if(careerObj.totals && careerObj.totals.pitching){
@@ -4588,7 +4599,9 @@ import {
   }
   function regularSeasonOffenseGrade(effOverall, age, decade){
     const clu = eraEffective(age, decade).CLU;
-    const clutchEdge = (clu-65)*0.03;
+    // CLU is a hitter tool -- a pitcher build has no CLU, so guard the clutch term (otherwise the
+    // whole grade goes NaN and every inning scores zero).
+    const clutchEdge = Number.isFinite(clu) ? (clu-65)*0.03 : 0;
     const chemistryBonus = teamChemistryEdge()*0.04;
     return blendOffenseWithTeam(effOverall, career.teamStrength, QB_INFLUENCE_REGULAR) + clutchEdge + chemistryBonus;
   }
@@ -4596,7 +4609,7 @@ import {
     const age = season ? season.age : career.age;
     const decade = season ? season.decade : decadeForYear(career.year);
     const clu = eraEffective(age, decade).CLU;
-    const clutchEdge = (clu-65)*0.09;
+    const clutchEdge = Number.isFinite(clu) ? (clu-65)*0.09 : 0;
     const chemistryBonus = teamChemistryEdge()*0.04;
     return blendOffenseWithTeam(effOverall, career.teamStrength, QB_INFLUENCE_PLAYOFF) + clutchEdge + chemistryBonus;
   }
@@ -5786,8 +5799,11 @@ import {
     const myStart = isPitcher && pitcherStartsPlayoffGame(gameIdx, round.seriesTarget);
     // Pitcher path: his ability feeds RUN PREVENTION on the games he starts, not the offense of
     // every game in the series. Non-start games are ordinary team-quality games.
+    // Pitcher path: his own bat is irrelevant -- run SUPPORT is his real lineup's offense (the same
+    // grade the regular-season pitcher sim uses), NOT playoffOffenseGrade (which is built around the
+    // player's own hitting overall and needs the hitter CLU tool a pitcher build doesn't have).
     const myOff = isPitcher
-      ? playoffOffenseGrade(clamp(56 + (safeNum(career.teamStrength,62)-65), 30, 96), season)
+      ? clamp(safeNum(lineupOffenseGrade(career.teamId, season.year), 58 + (safeNum(career.teamStrength,62)-65)), 30, 96)
       : playoffOffenseGrade(round._rawEffOverall, season);
     const myDef = myStart
       ? Math.round(clamp(safeNum(career.defense,60)*0.4 + pitcherPlayoffRunPrevention(season)*0.6, 20, 99))
@@ -6709,14 +6725,19 @@ import {
     const { positions } = lineupPositionsFor(teamId, year);
     // A backup player is not in his own team's starting lineup yet -- treat it like any other team
     // (the incumbent QB1 fills the slot) until he wins the job (promotePlayerIntoLineup).
-    const isMine = teamId===career.teamId && !career.isBackup;
+    // A pitcher's "team" is his rotation, not the batting order -- he is never a lineup entity
+    // (career.teamRotations holds USER_QB_ID instead). Build his club's lineup like any other team's.
+    const isMine = teamId===career.teamId && !career.isBackup && career.path!==PATH_PITCHER;
     const ids = [];
     const taken = new Set();
     if(isMine){
       const myPos = POSITIONS.some(p=>p.key===career.position) ? career.position : "1B";
       ids.push(USER_QB_ID); taken.add(positions.includes(myPos) ? myPos : "1B");
     } else {
-      const qb1 = rivalForTeam(teamId);
+      // On the pitcher path the player's own club has no batting "franchise face" in the registry
+      // (generateLeagueRivals skips career.teamId) -- and any pitcher incumbent sitting in that QB1
+      // slot must never be dropped into the batting order. Fabricate every slot instead.
+      const qb1 = (teamId===career.teamId && career.path===PATH_PITCHER) ? null : rivalForTeam(teamId);
       if(qb1){
         if(!qb1.position || !positions.includes(qb1.position)){
           qb1.position = positions.find(p=>!taken.has(p)) || "1B";
@@ -7228,7 +7249,7 @@ import {
       // one live entity per fielding position, in canonical order
       const byPos = {};
       arr.forEach(id=>{
-        if(id===USER_QB_ID){ byPos[POSITIONS.some(p=>p.key===career.position)?career.position:"1B"] = USER_QB_ID; return; }
+        if(id===USER_QB_ID){ if(career.path!==PATH_PITCHER) byPos[POSITIONS.some(p=>p.key===career.position)?career.position:"1B"] = USER_QB_ID; return; }
         if(claimed.has(id)) return;
         const e = career.qbsById[id];
         if(e && !e.retired && e.position && positions.includes(e.position) && !byPos[e.position]){ byPos[e.position] = id; claimed.add(id); }
@@ -7260,7 +7281,7 @@ import {
       // array past positions.length.
       const byPos = {};
       arr.forEach(id=>{
-        if(id===USER_QB_ID){ byPos[POSITIONS.some(p=>p.key===career.position)?career.position:"1B"] = USER_QB_ID; return; }
+        if(id===USER_QB_ID){ if(career.path!==PATH_PITCHER) byPos[POSITIONS.some(p=>p.key===career.position)?career.position:"1B"] = USER_QB_ID; return; }
         const e = career.qbsById[id];
         if(e && !e.retired && e.age<=e.retireAge && e.position && !byPos[e.position]) byPos[e.position] = id;
       });
@@ -8207,6 +8228,7 @@ import {
   // incumbent was (or at an open spot matching his position).
   function promotePlayerIntoLineup(incumbentId){
     if(!career.teamLineups) return;
+    if(career.path===PATH_PITCHER) return; // a pitcher joins the rotation, not the batting order
     withIsolatedRandom(hashSeed("lineuppromo:" + (career.name||"") + ":" + career.year), ()=>{
     const arr = career.teamLineups[career.teamId] || (career.teamLineups[career.teamId] = buildTeamLineupRoster(career.teamId, decadeForYear(career.year), career.year));
     if(arr.includes(USER_QB_ID)) return;
@@ -12146,6 +12168,9 @@ import {
     const isMineActive = teamId===career.teamId && !career.isBackup;
     const filled = roster.map(id=>{
       if(id===USER_QB_ID){
+        // A pitcher is never a batter -- a stray USER_QB_ID here (legacy save) is dropped; the
+        // wantPos backfill below fills the empty slot with an ordinary hitter.
+        if(career.path===PATH_PITCHER) return null;
         return { pos: POSITIONS.some(p=>p.key===career.position)?career.position:"1B",
           name: career.name + " (you)", ovr: Math.round(computeEffOverall(career.age, decadeForYear(year))),
           isTracked:true, isUser:true, rivalId:null };
@@ -12190,8 +12215,9 @@ import {
       usedNames.add(name);
       return name;
     };
-    const isMineActive = teamId===career.teamId && !career.isBackup;
-    const rv = isMineActive ? null : rivalForTeam(teamId);
+    // The pitcher path player is never a batter -- his own club's lineup is entirely fabricated.
+    const isMineActive = teamId===career.teamId && !career.isBackup && career.path!==PATH_PITCHER;
+    const rv = isMineActive ? null : ((teamId===career.teamId && career.path===PATH_PITCHER) ? null : rivalForTeam(teamId));
     const trackedPos = isMineActive ? career.position : (rv ? rivalPosition(rv) : null);
     const trackedOvr = isMineActive ? Math.round(computeEffOverall(career.age, decadeForYear(year)))
       : (rv ? rivalEffTalent(rv) : null);
@@ -13010,20 +13036,32 @@ import {
       </div>`;
   }
 
-  const TREND_STATS = [
+  const BATTER_TREND_STATS = [
     { key:"rating", label:"OPS+", get:s=>s.rating },
     { key:"hr", label:"Home Runs", get:s=>s.hr },
     { key:"rbi", label:"RBI", get:s=>s.rbi },
     { key:"avg", label:"Batting Avg", get:s=>Math.round((s.avg||0)*1000) },
     { key:"wins", label:"Team Wins", get:s=>s.wins },
     { key:"teamOverall", label:"Team Grade", get:s=>s.teamOverall },
-    { key:"rushYards", label:"Rush Yards", get:s=>s.rushYards },
+    { key:"sb", label:"Stolen Bases", get:s=>s.sb||s.rushYards||0 },
   ];
+  const PITCHER_TREND_STATS = [
+    { key:"eraPlus", label:"ERA+", get:s=>s.eraPlus||s.rating||0 },
+    { key:"era", label:"ERA", get:s=>Math.round((s.era||0)*100) },
+    { key:"k", label:"Strikeouts", get:s=>s.k||0 },
+    { key:"whip", label:"WHIP", get:s=>Math.round((s.whip||0)*1000) },
+    { key:"ip", label:"Innings", get:s=>Math.round(s.ip||0) },
+    { key:"w", label:"Wins", get:s=>s.w||0 },
+    { key:"teamOverall", label:"Team Grade", get:s=>s.teamOverall },
+  ];
+  const trendStatsForPath = ()=> career.path===PATH_PITCHER ? PITCHER_TREND_STATS : BATTER_TREND_STATS;
   let trendsStatKey = "rating";
 
   function renderTrendsSparkline(){
     const holder = document.getElementById("trendsSparklineHolder");
     if(!holder) return;
+    const TREND_STATS = trendStatsForPath();
+    if(!TREND_STATS.some(t=>t.key===trendsStatKey)) trendsStatKey = TREND_STATS[0].key;
     const stat = TREND_STATS.find(t=>t.key===trendsStatKey) || TREND_STATS[0];
     const values = career.seasonLog.map(stat.get);
     const current = values[values.length-1] ?? 0;
@@ -13041,6 +13079,21 @@ import {
 
   function buildTrendsTabHTML(){
     const log = career.seasonLog;
+    if(career.path===PATH_PITCHER){
+      const prows = log.slice().reverse().map(s=>`
+        <tr><td>${s.year}</td><td class="team-cell">${s.teamName}</td><td class="tabular">${s.w||0}-${s.l||0}</td><td class="tabular">${(s.era||0).toFixed(2)}</td>
+        <td class="tabular">${(s.whip||0).toFixed(2)}</td><td class="tabular">${s.k||0}</td><td class="tabular">${s.eraPlus||s.rating||0}</td><td>${decorateAwards(s.awards, s).join(", ")||"—"}</td></tr>`).join("");
+      return `
+      <div class="sparkline-wrap">
+        <div id="trendsSparklineHolder"></div>
+      </div>
+      <div class="trend-table-wrap table-wrap">
+        <table class="career-table">
+          <thead><tr><th>Year</th><th>Team</th><th>W-L</th><th>ERA</th><th>WHIP</th><th>K</th><th>ERA+</th><th>Awards</th></tr></thead>
+          <tbody>${prows}</tbody>
+        </table>
+      </div>`;
+    }
     const rows = log.slice().reverse().map(s=>`
         <tr><td>${s.year}</td><td class="team-cell">${s.teamName}</td><td>${(s.avg||0).toFixed(3).replace(/^0/,"")}</td><td>${s.hr||s.td||0}</td>
         <td>${s.rbi||0}</td><td>${s.opsPlus||s.rating||0}</td><td>${decorateAwards(s.awards, s).join(", ")||"—"}</td></tr>`).join("");

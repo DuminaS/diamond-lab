@@ -596,6 +596,23 @@ deploy workflow now gates on the full test suite.
   existing weights) and `individual` (rings 0.08, earnings 0, weight moved to accolades / peak /
   totals) — with a live toggle on the Compare screen.
 
+**Third pass — pitcher-path bug report (screenshots):**
+- **Pitcher was a batter.** `buildLeagueLineups` slotted `USER_QB_ID` into the pitcher's own team
+  batting order, so the Projected Lineup showed him at 1B with a `NaN` overall and every playoff
+  box score rendered a "(you)" batting line. A pitcher is now never a lineup entity: he lives only
+  in `career.teamRotations`; `buildTeamLineupRoster` / `buildTeamLineup` / `buildTeamLineupFabricated`
+  / `promotePlayerIntoLineup` / the two reconcile passes all skip him, and `migratePitcherPathDefaults`
+  strips a stray id from an early-16 save.
+- **1-0 every playoff game.** `playoffOffenseGrade` adds `(CLU-65)*k`, and a pitcher build has no
+  CLU tool → the grade was `NaN` → `scoreForInning` never scored → the pitcher's team was shut out
+  every October game. `regularSeasonOffenseGrade` / `playoffOffenseGrade` now guard the clutch term,
+  and `ensurePlayoffGame` gives the pitcher his real lineup's offense grade for run support.
+- **Career Trends showed hitter stats.** The tab now has a pitcher variant (W-L / ERA / WHIP / K /
+  ERA+ table + ERA+/K/WHIP/IP/Wins sparkline); the batter list's leftover "Rush Yards" is now
+  "Stolen Bases".
+- **Contrast.** The offseason-program status boxes (dark-on-dark inside the light era themes) use a
+  theme-neutral panel and inherit text colour; "Simulate Next Round" is a solid high-contrast button.
+
 Still open: an interactive short-rest / pitch-count choice and starter↔reliever usage (finding 7);
 the larger structural items the review raised (extracting game resolution and stat aggregation out
 of the 15k-line `src/main.js`; retiring the football-shaped legacy aliases behind canonical
